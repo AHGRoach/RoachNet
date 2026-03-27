@@ -53,6 +53,11 @@ export class UpstreamSyncService {
   }
 
   private getRepoRoot(): string | null {
+    const configuredRepoRoot = process.env.ROACHNET_REPO_ROOT
+    if (configuredRepoRoot && existsSync(join(configuredRepoRoot, '.git'))) {
+      return resolve(configuredRepoRoot)
+    }
+
     let current = resolve(this.getAdminRoot())
 
     while (true) {

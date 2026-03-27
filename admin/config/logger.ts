@@ -11,14 +11,14 @@ const loggerConfig = defineConfig({
    */
   loggers: {
     app: {
-      enabled: true,
-      name: env.get('APP_NAME'),
-      level: env.get('NODE_ENV') === 'production' ? env.get('LOG_LEVEL') : 'debug', // default to 'debug' in non-production envs
-      transport: {
+            enabled: true,
+            name: env.get('APP_NAME'),
+            level: env.get('NODE_ENV') === 'production' ? env.get('LOG_LEVEL') : 'debug', // default to 'debug' in non-production envs
+            transport: {
         targets:
           targets()
             .pushIf(!app.inProduction, targets.pretty())
-            .pushIf(app.inProduction, targets.file({ destination: "/app/storage/logs/admin.log", mkdir: true }))
+            .pushIf(app.inProduction, targets.file({ destination: app.makePath('storage', 'logs', 'admin.log'), mkdir: true }))
             .toArray(),
       },
     },
