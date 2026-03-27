@@ -89,7 +89,7 @@ export default function CircularGauge({
             fill="none"
             stroke="currentColor"
             strokeWidth={config.strokeWidth}
-            className="text-desert-green-lighter opacity-30"
+            className="text-desert-stone-light opacity-35"
           />
 
           {/* Progress circle */}
@@ -134,24 +134,24 @@ export default function CircularGauge({
                 y2={y2}
                 stroke="currentColor"
                 strokeWidth="2"
-                className="text-desert-stone opacity-30"
+                className="text-desert-stone-light opacity-30"
               />
             )
           })}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          {icon && <div className="text-desert-green opacity-60 mb-1">{icon}</div>}
-          <div className={classNames('font-bold text-desert-green', config.fontSize)}>
+          {icon && <div className="mb-1 text-desert-green-light opacity-70">{icon}</div>}
+          <div className={classNames('font-bold text-text-primary', config.fontSize)}>
             {Math.round(displayValue)}%
           </div>
           {subtext && (
-            <div className="text-xs text-desert-stone-dark opacity-70 font-mono mt-0.5">
+            <div className="mt-0.5 font-mono text-xs text-text-secondary">
               {subtext}
             </div>
           )}
         </div>
       </div>
-      <div className={classNames('font-semibold text-desert-green text-center', config.labelSize)}>
+      <div className={classNames('text-center font-semibold text-desert-green-light', config.labelSize)}>
         {label}
       </div>
     </div>

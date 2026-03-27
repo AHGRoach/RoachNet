@@ -1,6 +1,7 @@
 import {
   IconArrowBigUpLines,
   IconChartBar,
+  IconCpu2,
   IconDashboard,
   IconFolder,
   IconGavel,
@@ -14,15 +15,15 @@ import {
 import { usePage } from '@inertiajs/react'
 import StyledSidebar from '~/components/StyledSidebar'
 import { getServiceLink } from '~/lib/navigation'
-import useServiceInstalledStatus from '~/hooks/useServiceInstalledStatus'
-import { SERVICE_NAMES } from '../../constants/service_names'
+import useAIRuntimeStatus from '~/hooks/useAIRuntimeStatus'
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
-  const aiAssistantInstallStatus = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
+  const aiAssistantRuntimeStatus = useAIRuntimeStatus('ollama')
 
   const navigation = [
-    ...(aiAssistantInstallStatus.isInstalled ? [{ name: aiAssistantName, href: '/settings/models', icon: IconWand, current: false }] : []),
+    { name: 'AI Control', href: '/settings/ai', icon: IconCpu2, current: false },
+    ...(aiAssistantRuntimeStatus.available ? [{ name: aiAssistantName, href: '/settings/models', icon: IconWand, current: false }] : []),
     { name: 'Apps', href: '/settings/apps', icon: IconTerminal2, current: false },
     { name: 'Benchmark', href: '/settings/benchmark', icon: IconChartBar, current: false },
     { name: 'Content Explorer', href: '/settings/zim/remote-explorer', icon: IconZoom, current: false },
@@ -42,7 +43,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
       current: false,
     },
     { name: 'System', href: '/settings/system', icon: IconSettings, current: false },
-    { name: 'Support the Project', href: '/settings/support', icon: IconHeart, current: false },
+    { name: 'Support RoachNet', href: '/settings/support', icon: IconHeart, current: false },
     { name: 'Legal Notices', href: '/settings/legal', icon: IconGavel, current: false },
   ]
 

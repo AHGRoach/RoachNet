@@ -1,6 +1,8 @@
+import { AIRuntimeService } from '#services/ai_runtime_service';
 import { DockerService } from '#services/docker_service';
 import { SystemService } from '#services/system_service'
 import { SystemUpdateService } from '#services/system_update_service'
+import { UpstreamSyncService } from '#services/upstream_sync_service'
 import { ContainerRegistryService } from '#services/container_registry_service'
 import { CheckServiceUpdatesJob } from '#jobs/check_service_updates_job'
 import { affectServiceValidator, checkLatestVersionValidator, installServiceValidator, subscribeToReleaseNotesValidator, updateServiceValidator } from '#validators/system';
@@ -11,8 +13,10 @@ import type { HttpContext } from '@adonisjs/core/http'
 export default class SystemController {
     constructor(
         private systemService: SystemService,
+        private aiRuntimeService: AIRuntimeService,
         private dockerService: DockerService,
         private systemUpdateService: SystemUpdateService,
+        private upstreamSyncService: UpstreamSyncService,
         private containerRegistryService: ContainerRegistryService
     ) { }
 
@@ -26,6 +30,10 @@ export default class SystemController {
 
     async getServices({ }: HttpContext) {
         return await this.systemService.getServices({ installedOnly: true });
+    }
+
+    async getAIRuntimeProviders({ }: HttpContext) {
+        return await this.aiRuntimeService.getProviders();
     }
 
     async installService({ request, response }: HttpContext) {
@@ -105,6 +113,30 @@ export default class SystemController {
     async getSystemUpdateLogs({ response }: HttpContext) {
         const logs = this.systemUpdateService.getUpdateLogs();
         response.send({ logs });
+    }
+
+    async getUpstreamSyncStatus({ request, response }: HttpContext) {
+        const force = request.qs().force === 'true' || request.qs().force === true
+        const status = await this.upstreamSyncService.getStatus(force)
+        response.send(status)
+    }
+
+    async requestUpstreamSync({ response }: HttpContext) {
+        const result = await this.upstreamSyncService.requestSync()
+
+        if (result.success) {
+            response.send(result)
+            return
+        }
+
+        response.status(409).send({
+            success: false,
+            error: result.message,
+        })
+    }
+
+    async getUpstreamSyncLogs({ response }: HttpContext) {
+        response.send({ logs: this.upstreamSyncService.getLogs() })
     }
 
 

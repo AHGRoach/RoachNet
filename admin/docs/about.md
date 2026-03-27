@@ -1,17 +1,16 @@
-# About Project N.O.M.A.D.
+# About RoachNet
 
-Project N.O.M.A.D. (Node for Offline Media, Archives, and Data; "Nomad" for short) is a project started in 2025 by Chris Sherwood of [Crosstalk Solutions, LLC](https://crosstalksolutions.com). The goal of the project is not to create just another utility for storing offline resources, but rather to allow users to run their own ultimate "survival computer".
+RoachNet is an offline-first command center focused on keeping local tools, references, AI runtimes, and daily workflows available even when the internet is down.
 
-While many similar offline survival computers are designed to be run on bare-minimum, lightweight hardware, Project N.O.M.A.D. is quite the opposite. To install and run the available AI tools, we highly encourage the use of a beefy, GPU-backed device to make the most of your install. See the [Hardware Guide](https://www.projectnomad.us/hardware) for detailed build recommendations at three price points.
+The current codebase was imported from the open source `project-nomad` upstream and is being adapted into RoachNet with a stronger focus on local AI operator workflows, provider-aware onboarding, and broader offline utility coverage.
 
-Since its initial release, NOMAD has grown to include built-in AI chat with a Knowledge Base for document-aware responses, a System Benchmark with a community leaderboard, curated content collections with tiered options, and an Easy Setup Wizard to get new users up and running quickly.
+RoachNet keeps the imported foundation for offline content, maps, local chat, benchmarking, and guided setup, then extends it toward OpenClaw integration, user-manageable agents and skills, and clearer local-first controls.
 
-Project N.O.M.A.D. is open source, released under the [Apache License 2.0](https://github.com/Crosstalk-Solutions/project-nomad/blob/main/LICENSE).
+RoachNet currently preserves the upstream Apache 2.0 licensing and attribution while the codebase remains substantially derived from that imported base.
 
 ## Links
 
-- **Website:** [www.projectnomad.us](https://www.projectnomad.us)
-- **Hardware Guide:** [www.projectnomad.us/hardware](https://www.projectnomad.us/hardware)
-- **Discord:** [Join the Community](https://discord.com/invite/crosstalksolutions)
-- **GitHub:** [Crosstalk-Solutions/project-nomad](https://github.com/Crosstalk-Solutions/project-nomad)
-- **Benchmark Leaderboard:** [benchmark.projectnomad.us](https://benchmark.projectnomad.us)
+- **RoachNet Repo:** [AHGRoach/RoachNet](https://github.com/AHGRoach/RoachNet)
+- **Issue Tracker:** [RoachNet Issues](https://github.com/AHGRoach/RoachNet/issues)
+- **Upstream Provenance:** [docs/UPSTREAM.md](https://github.com/AHGRoach/RoachNet/blob/main/docs/UPSTREAM.md)
+- **Benchmark Leaderboard:** [Community leaderboard](https://benchmark.projectnomad.us)

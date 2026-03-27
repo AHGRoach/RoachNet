@@ -18,8 +18,10 @@ export default class BenchmarkSubmit extends BaseCommand {
   async run() {
     const { DockerService } = await import('#services/docker_service')
     const { BenchmarkService } = await import('#services/benchmark_service')
+    const { OllamaService } = await import('#services/ollama_service')
     const dockerService = new DockerService()
-    const benchmarkService = new BenchmarkService(dockerService)
+    const ollamaService = new OllamaService()
+    const benchmarkService = new BenchmarkService(dockerService, ollamaService)
 
     try {
       // Get the result to submit
@@ -63,7 +65,7 @@ export default class BenchmarkSubmit extends BaseCommand {
         this.logger.info(`  AI Tokens/sec: ${result.ai_tokens_per_second.toFixed(2)}`)
         this.logger.info(`  AI TTFT: ${result.ai_time_to_first_token?.toFixed(2)} ms`)
       }
-      this.logger.info(`  NOMAD Score: ${result.nomad_score.toFixed(2)}`)
+      this.logger.info(`  RoachNet Score: ${result.nomad_score.toFixed(2)}`)
       this.logger.info('')
       this.logger.info('Privacy Notice:')
       this.logger.info('  - Only the information shown above will be submitted')
@@ -91,7 +93,7 @@ export default class BenchmarkSubmit extends BaseCommand {
       this.logger.info(`Repository ID: ${submitResult.repository_id}`)
       this.logger.info(`Your percentile: ${submitResult.percentile}%`)
       this.logger.info('')
-      this.logger.info('Thank you for contributing to the NOMAD community!')
+      this.logger.info('Thank you for contributing to the RoachNet community!')
 
     } catch (error) {
       this.logger.error(`Submission failed: ${error.message}`)

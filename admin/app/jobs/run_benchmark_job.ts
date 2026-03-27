@@ -4,6 +4,7 @@ import { BenchmarkService } from '#services/benchmark_service'
 import type { RunBenchmarkJobParams } from '../../types/benchmark.js'
 import logger from '@adonisjs/core/services/logger'
 import { DockerService } from '#services/docker_service'
+import { OllamaService } from '#services/ollama_service'
 
 export class RunBenchmarkJob {
   static get queue() {
@@ -20,7 +21,8 @@ export class RunBenchmarkJob {
     logger.info(`[RunBenchmarkJob] Starting benchmark ${benchmark_id} of type ${benchmark_type}`)
 
     const dockerService = new DockerService()
-    const benchmarkService = new BenchmarkService(dockerService)
+    const ollamaService = new OllamaService()
+    const benchmarkService = new BenchmarkService(dockerService, ollamaService)
 
     try {
       let result

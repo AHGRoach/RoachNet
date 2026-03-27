@@ -21,8 +21,7 @@ import { useTransmit } from 'react-adonis-transmit'
 import { BenchmarkProgress, BenchmarkStatus } from '../../../types/benchmark'
 import BenchmarkResult from '#models/benchmark_result'
 import api from '~/lib/api'
-import useServiceInstalledStatus from '~/hooks/useServiceInstalledStatus'
-import { SERVICE_NAMES } from '../../../constants/service_names'
+import useAIRuntimeStatus from '~/hooks/useAIRuntimeStatus'
 import { BROADCAST_CHANNELS } from '../../../constants/broadcast'
 
 type BenchmarkProgressWithID = BenchmarkProgress & { benchmark_id: string }
@@ -37,7 +36,7 @@ export default function BenchmarkPage(props: {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
   const { subscribe } = useTransmit()
   const queryClient = useQueryClient()
-  const aiInstalled = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
+  const aiRuntimeStatus = useAIRuntimeStatus('ollama')
   const [progress, setProgress] = useState<BenchmarkProgressWithID | null>(null)
   const [isRunning, setIsRunning] = useState(props.benchmark.status !== 'idle')
   const refetchLatestRef = useRef<(() => void) | null>(null)
@@ -196,7 +195,7 @@ export default function BenchmarkPage(props: {
 
   // Handle Full Benchmark click with pre-flight check
   const handleFullBenchmarkClick = () => {
-    if (!aiInstalled) {
+    if (!aiRuntimeStatus.available) {
       setShowAIRequiredAlert(true)
       return
     }
@@ -267,7 +266,7 @@ export default function BenchmarkPage(props: {
       {
         status: 'calculating_score',
         progress: 95,
-        message: 'Calculating NOMAD score...',
+        message: 'Calculating RoachNet score...',
         label: 'Calculating Score',
         duration: 2000,
       },
@@ -364,7 +363,7 @@ export default function BenchmarkPage(props: {
           <div className="mb-8">
             <h1 className="text-4xl font-bold text-desert-green mb-2">System Benchmark</h1>
             <p className="text-desert-stone-dark">
-              Measure your server's performance and compare with the NOMAD community
+              Measure your system's performance and compare with the RoachNet community
             </p>
           </div>
 
@@ -408,7 +407,7 @@ export default function BenchmarkPage(props: {
                     <Alert
                       type="warning"
                       title={`${aiAssistantName} Required`}
-                      message={`Full benchmark requires ${aiAssistantName} to be installed. Install it to measure your complete NOMAD capability and share results with the community.`}
+                      message={`Full benchmark requires a running ${aiAssistantName} runtime. Start Ollama locally or install the managed service to measure your complete RoachNet capability and share results with the community.`}
                       variant="bordered"
                       dismissible
                       onDismiss={() => setShowAIRequiredAlert(false)}
@@ -444,28 +443,28 @@ export default function BenchmarkPage(props: {
                     <StyledButton
                       variant="secondary"
                       onClick={() => runBenchmark.mutate('ai')}
-                      disabled={runBenchmark.isPending || !aiInstalled}
+                      disabled={runBenchmark.isPending || !aiRuntimeStatus.available}
                       icon="IconWand"
                       title={
-                        !aiInstalled
-                          ? `${aiAssistantName} must be installed to run AI benchmark`
+                        !aiRuntimeStatus.available
+                          ? `${aiAssistantName} must be running to run the AI benchmark`
                           : undefined
                       }
                     >
                       AI Only
                     </StyledButton>
                   </div>
-                  {!aiInstalled && (
+                  {!aiRuntimeStatus.available && (
                     <p className="text-sm text-desert-stone-dark">
                       <span className="text-amber-600">Note:</span> {aiAssistantName} is not
-                      installed.
+                      available.
                       <Link
                         href="/settings/apps"
                         className="text-desert-green hover:underline ml-1"
                       >
                         Install it
                       </Link>{' '}
-                      to run full benchmarks and share results with the community.
+                      or start a local Ollama daemon to run full benchmarks and share results with the community.
                     </p>
                   )}
                 </div>
@@ -479,7 +478,7 @@ export default function BenchmarkPage(props: {
               <section className="mb-12">
                 <h2 className="text-2xl font-bold text-desert-green mb-6 flex items-center gap-2">
                   <div className="w-1 h-6 bg-desert-green" />
-                  NOMAD Score
+                  RoachNet Score
                 </h2>
 
                 <div className="bg-desert-white rounded-lg p-8 border border-desert-stone-light shadow-sm">
@@ -487,7 +486,7 @@ export default function BenchmarkPage(props: {
                     <div className="shrink-0">
                       <CircularGauge
                         value={latestResult.nomad_score}
-                        label="NOMAD Score"
+                        label="RoachNet Score"
                         size="lg"
                         variant="cpu"
                         subtext="out of 100"
@@ -501,7 +500,7 @@ export default function BenchmarkPage(props: {
                         {latestResult.nomad_score.toFixed(1)}
                       </div>
                       <p className="text-desert-stone-dark">
-                        Your NOMAD Score is a weighted composite of all benchmark results.
+                        Your RoachNet Score is a weighted composite of all benchmark results.
                       </p>
 
                       {/* Share with Community - Only for full benchmarks with AI data */}
@@ -767,7 +766,7 @@ export default function BenchmarkPage(props: {
                         </div>
                       </div>
                       <div>
-                        <div className="text-desert-stone-dark">NOMAD Score</div>
+                        <div className="text-desert-stone-dark">RoachNet Score</div>
                         <div className="font-bold text-desert-green">
                           {latestResult.nomad_score.toFixed(1)}
                         </div>

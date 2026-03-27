@@ -4,7 +4,14 @@ import { DockerService } from '#services/docker_service'
 import { ServiceSlim } from '../../types/services.js'
 import logger from '@adonisjs/core/services/logger'
 import si from 'systeminformation'
-import { GpuHealthStatus, NomadDiskInfo, NomadDiskInfoRaw, SystemInformationResponse } from '../../types/system.js'
+import {
+  GpuHealthStatus,
+  HardwareMemoryTier,
+  HardwareProfile,
+  NomadDiskInfo,
+  NomadDiskInfoRaw,
+  SystemInformationResponse,
+} from '../../types/system.js'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
 import { readFileSync } from 'fs'
 import path, { join } from 'path'
@@ -20,6 +27,10 @@ import { isNewerVersion } from '../utils/version.js'
 export class SystemService {
   private static appVersion: string | null = null
   private static diskInfoFile = '/storage/nomad-disk-info.json'
+  private static systemInfoCache:
+    | { value: SystemInformationResponse; expiresAt: number }
+    | null = null
+  private static readonly SYSTEM_INFO_CACHE_TTL_MS = 10000
 
   constructor(private dockerService: DockerService) { }
 
@@ -210,6 +221,14 @@ export class SystemService {
 
   async getSystemInfo(): Promise<SystemInformationResponse | undefined> {
     try {
+      const now = Date.now()
+      if (
+        SystemService.systemInfoCache &&
+        SystemService.systemInfoCache.expiresAt > now
+      ) {
+        return SystemService.systemInfoCache.value
+      }
+
       const [cpu, mem, os, currentLoad, fsSize, uptime, graphics] = await Promise.all([
         si.cpu(),
         si.mem(),
@@ -295,7 +314,14 @@ export class SystemService {
         // Docker info query failed, skip host-level enrichment
       }
 
-      return {
+      const hardwareProfile = this.buildHardwareProfile({
+        cpu,
+        mem,
+        os,
+        currentLoad,
+      })
+
+      const systemInfo = {
         cpu,
         mem,
         os,
@@ -305,10 +331,131 @@ export class SystemService {
         uptime,
         graphics,
         gpuHealth,
+        hardwareProfile,
       }
+
+      SystemService.systemInfoCache = {
+        value: systemInfo,
+        expiresAt: now + SystemService.SYSTEM_INFO_CACHE_TTL_MS,
+      }
+
+      return systemInfo
     } catch (error) {
       logger.error('Error getting system info:', error)
       return undefined
+    }
+  }
+
+  private buildHardwareProfile({
+    cpu,
+    mem,
+    os,
+    currentLoad,
+  }: {
+    cpu: SystemInformationResponse['cpu']
+    mem: SystemInformationResponse['mem']
+    os: SystemInformationResponse['os']
+    currentLoad: SystemInformationResponse['currentLoad']
+  }): HardwareProfile {
+    const cpuSignature = `${cpu.manufacturer || ''} ${cpu.brand || ''}`.toLowerCase()
+    const isAppleSilicon =
+      os.arch === 'arm64' &&
+      (cpuSignature.includes('apple') || /\bm[1-9]\b/.test(cpuSignature))
+
+    const memoryTier = this.getMemoryTier(mem.total)
+    const notes: string[] = []
+    const warnings: string[] = []
+
+    if (isAppleSilicon) {
+      notes.push('Prefer host-native Ollama or OpenClaw endpoints over Docker-managed AI containers on Apple Silicon.')
+      notes.push('Use arm64-native binaries with Metal acceleration and avoid Rosetta when possible.')
+      notes.push('Keep only the models you need loaded so unified memory stays available for maps, archives, and the UI.')
+    } else if (os.arch === 'arm64') {
+      notes.push('Prefer arm64-native builds and lighter quantized models to keep latency and thermals under control.')
+      notes.push('Local runtimes usually outperform containerized AI stacks on smaller ARM systems.')
+    } else {
+      notes.push('Local runtimes still reduce orchestration overhead, but Docker-managed services remain acceptable on x86-64 hosts.')
+      notes.push('Use benchmark results to decide whether a larger model tier is worth the memory cost.')
+    }
+
+    switch (memoryTier) {
+      case 'compact':
+        notes.push('Start with 4B to 8B quantized models and light embedding workloads.')
+        break
+      case 'balanced':
+        notes.push('7B to 14B quantized models are the safest default for day-to-day offline use.')
+        break
+      case 'creator':
+        notes.push('14B to 32B class models are realistic if you avoid stacking too many other heavy local services.')
+        break
+      case 'workstation':
+        notes.push('This machine has enough headroom for larger local models, retrieval pipelines, and concurrent content services.')
+        break
+    }
+
+    const memoryPressure = mem.total > 0
+      ? ((mem.total - mem.available) / mem.total) * 100
+      : 0
+
+    if (memoryPressure >= 80) {
+      warnings.push('Memory pressure is already high. Unload large models or reduce background services before running benchmarks or batch ingestion jobs.')
+    }
+
+    if (mem.swapused > 0) {
+      warnings.push('Swap is active. On Apple Silicon that usually means unified memory is oversubscribed and model latency will rise.')
+    }
+
+    if (currentLoad.currentLoad >= 85) {
+      warnings.push('CPU load is elevated. Schedule large downloads, indexing jobs, or benchmarks after the current workload settles.')
+    }
+
+    if (isAppleSilicon && mem.total < 16 * 1024 * 1024 * 1024) {
+      warnings.push('Unified memory is limited for Apple Silicon AI work. Stay with smaller quantized models and keep browser tabs to a minimum.')
+    }
+
+    return {
+      platformLabel: cpu.brand || cpu.manufacturer || os.arch,
+      chipFamily: isAppleSilicon ? 'apple_silicon' : os.arch === 'arm64' ? 'arm64' : os.arch === 'x64' ? 'x86_64' : 'generic',
+      isAppleSilicon,
+      memoryTier,
+      recommendedRuntime: isAppleSilicon || os.arch === 'arm64' ? 'native_local' : 'docker',
+      recommendedModelClass: this.getRecommendedModelClass(memoryTier, isAppleSilicon),
+      notes,
+      warnings,
+    }
+  }
+
+  private getMemoryTier(totalBytes: number): HardwareMemoryTier {
+    const totalGb = totalBytes / (1024 * 1024 * 1024)
+
+    if (totalGb < 16) {
+      return 'compact'
+    }
+
+    if (totalGb < 32) {
+      return 'balanced'
+    }
+
+    if (totalGb < 64) {
+      return 'creator'
+    }
+
+    return 'workstation'
+  }
+
+  private getRecommendedModelClass(
+    memoryTier: HardwareMemoryTier,
+    isAppleSilicon: boolean
+  ): string {
+    switch (memoryTier) {
+      case 'compact':
+        return isAppleSilicon ? '4B to 8B quantized models' : 'Small quantized models'
+      case 'balanced':
+        return '7B to 14B quantized models'
+      case 'creator':
+        return '14B to 32B quantized models'
+      case 'workstation':
+        return '32B+ local workflows'
     }
   }
 
@@ -422,8 +569,8 @@ export class SystemService {
     ])
 
     const lines: string[] = [
-      'Project NOMAD Debug Info',
-      '========================',
+      'RoachNet Debug Info',
+      '===================',
       `App Version: ${appVersion}`,
       `Environment: ${environment}`,
     ]

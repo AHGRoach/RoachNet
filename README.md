@@ -1,147 +1,77 @@
-<div align="center">
-<img src="https://raw.githubusercontent.com/Crosstalk-Solutions/project-nomad/refs/heads/main/admin/public/project_nomad_logo.png" width="200" height="200"/>
+# RoachNet
 
-# Project N.O.M.A.D.
-### Node for Offline Media, Archives, and Data
+RoachNet is an offline-first command center for local knowledge, AI, maps, utilities, and operator workflows when the internet is unavailable or unreliable.
 
-**Knowledge That Never Goes Offline**
+This repository uses an open-source upstream base from [Crosstalk Solutions](https://github.com/Crosstalk-Solutions/project-nomad) and is being adapted into a broader day-to-day offline operations platform with local AI, guided onboarding, and user-manageable agents and skills.
 
-[![Website](https://img.shields.io/badge/Website-projectnomad.us-blue)](https://www.projectnomad.us)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2)](https://discord.com/invite/crosstalksolutions)
-[![Benchmark](https://img.shields.io/badge/Benchmark-Leaderboard-green)](https://benchmark.projectnomad.us)
+## Upstream Base
 
-</div>
+- Upstream base: `Crosstalk-Solutions/project-nomad`
+- Imported into this repo on 2026-03-27
+- Imported from upstream commit `5c92c8981304424e37d38f74ef7e80d78fe82a13`
+- Local git setup keeps `origin` pointed at `AHGRoach/RoachNet` and adds `upstream` for the imported source repo
 
----
+RoachNet also exposes a separate upstream sync path in the app at `Settings -> Update -> Source Upstream Sync`. That flow fetches `upstream/main`, creates a backup branch, replays the RoachNet patchset onto a temporary refreshed upstream worktree, and then validates the refreshed checkout with the admin typecheck/build before switching the main branch over.
 
-Project N.O.M.A.D. is a self-contained, offline-first knowledge and education server packed with critical tools, knowledge, and AI to keep you informed and empowered—anytime, anywhere.
+RoachNet preserves upstream attribution and currently carries forward the Apache 2.0 licensing shipped with the imported upstream base.
 
-## Installation & Quickstart
-Project N.O.M.A.D. can be installed on any Debian-based operating system (we recommend Ubuntu). Installation is completely terminal-based, and all tools and resources are designed to be accessed through the browser, so there's no need for a desktop environment if you'd rather setup N.O.M.A.D. as a "server" and access it through other clients.
+## Current Foundation
 
-*Note: sudo/root privileges are required to run the install script*
+The imported base already provides:
 
-### Quick Install (Debian-based OS Only)
+- an offline-first management UI and API in [`admin/`](./admin)
+- install, start, stop, update, and uninstall scripts in [`install/`](./install)
+- curated content collections in [`collections/`](./collections)
+- local Ollama chat and RAG plumbing
+- settings, maps, docs, benchmarking, and easy-setup flows
+
+## Quick Start
+
+From the repo root on macOS:
+
 ```bash
-sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Crosstalk-Solutions/project-nomad/refs/heads/main/install/install_nomad.sh -o install_nomad.sh && sudo bash install_nomad.sh
+npm start
 ```
 
-Project N.O.M.A.D. is now installed on your device! Open a browser and navigate to `http://localhost:8080` (or `http://DEVICE_IP:8080`) to start exploring!
+That root launcher now:
 
-For a complete step-by-step walkthrough (including Ubuntu installation), see the [Installation Guide](https://www.projectnomad.us/install).
+- starts the local RoachNet server from [`admin/`](./admin)
+- waits for the app to become healthy on the configured local URL
+- opens the web UI in the default browser at `/home`
 
-### Advanced Installation
-For more control over the installation process, copy and paste the [Docker Compose template](https://raw.githubusercontent.com/Crosstalk-Solutions/project-nomad/refs/heads/main/install/management_compose.yaml) into a `docker-compose.yml` file and customize it to your liking (be sure to replace any placeholders with your actual values). Then, run `docker compose up -d` to start the Command Center and its dependencies. Note: this method is recommended for advanced users only, as it requires familiarity with Docker and manual configuration before starting.
+If you want to start the server without opening a browser tab:
 
-## How It Works
-N.O.M.A.D. is a management UI ("Command Center") and API that orchestrates a collection of containerized tools and resources via [Docker](https://www.docker.com/). It handles installation, configuration, and updates for everything — so you don't have to.
+```bash
+npm run start:no-browser
+```
 
-**Built-in capabilities include:**
-- **AI Chat with Knowledge Base** — local AI chat powered by [Ollama](https://ollama.com/), with document upload and semantic search (RAG via [Qdrant](https://qdrant.tech/))
-- **Information Library** — offline Wikipedia, medical references, ebooks, and more via [Kiwix](https://kiwix.org/)
-- **Education Platform** — Khan Academy courses with progress tracking via [Kolibri](https://learningequality.org/kolibri/)
-- **Offline Maps** — downloadable regional maps via [ProtoMaps](https://protomaps.com)
-- **Data Tools** — encryption, encoding, and analysis via [CyberChef](https://gchq.github.io/CyberChef/)
-- **Notes** — local note-taking via [FlatNotes](https://github.com/dullage/flatnotes)
-- **System Benchmark** — hardware scoring with a [community leaderboard](https://benchmark.projectnomad.us)
-- **Easy Setup Wizard** — guided first-time configuration with curated content collections
+## RoachNet Direction
 
-N.O.M.A.D. also includes built-in tools like a Wikipedia content selector, ZIM library manager, and content explorer.
+RoachNet extends the base toward an all-in-one offline utility for normal day-to-day operations during disaster scenarios, network outages, or disconnected field use.
 
-## What's Included
+Planned RoachNet-specific work includes:
 
-| Capability | Powered By | What You Get |
-|-----------|-----------|-------------|
-| Information Library | Kiwix | Offline Wikipedia, medical references, survival guides, ebooks |
-| AI Assistant | Ollama + Qdrant | Built-in chat with document upload and semantic search |
-| Education Platform | Kolibri | Khan Academy courses, progress tracking, multi-user support |
-| Offline Maps | ProtoMaps | Downloadable regional maps with search and navigation |
-| Data Tools | CyberChef | Encryption, encoding, hashing, and data analysis |
-| Notes | FlatNotes | Local note-taking with markdown support |
-| System Benchmark | Built-in | Hardware scoring, Builder Tags, and community leaderboard |
+1. OpenClaw integration alongside the existing Ollama stack
+2. A unified settings surface for Ollama and OpenClaw configuration
+3. An agent and skill management UI for adding, configuring, and operating local workflows
+4. A guided onboarding flow that explains each step, option, and tradeoff to the user
+5. Additional offline tools that keep the machine operational without relying on a live network connection
 
-## Device Requirements
-While many similar offline survival computers are designed to be run on bare-minimum, lightweight hardware, Project N.O.M.A.D. is quite the opposite. To install and run the
-available AI tools, we highly encourage the use of a beefy, GPU-backed device to make the most of your install.
+## Immediate Next Steps
 
-At it's core, however, N.O.M.A.D. is still very lightweight. For a barebones installation of the management application itself, the following minimal specs are required:
+1. Rebrand key docs, assets, and UI copy from the imported upstream product name to RoachNet
+2. Map existing Ollama, settings, and easy-setup surfaces to RoachNet feature requirements
+3. Add the first OpenClaw service layer and API endpoints
+4. Extend the onboarding flow to cover Ollama, OpenClaw, agents, and skills
+5. Define persistent configuration models for local providers, agents, skills, and onboarding state
 
-*Note: Project N.O.M.A.D. is not sponsored by any hardware manufacturer and is designed to be as hardware-agnostic as possible. The harware listed below is for example/comparison use only*
+## Repo Notes
 
-#### Minimum Specs
-- Processor: 2 GHz dual-core processor or better
-- RAM: 4GB system memory
-- Storage: At least 5 GB free disk space
-- OS: Debian-based (Ubuntu recommended)
-- Stable internet connection (required during install only)
-
-To run LLM's and other included AI tools:
-
-#### Optimal Specs
-- Processor: AMD Ryzen 7 or Intel Core i7 or better
-- RAM: 32 GB system memory
-- Graphics: NVIDIA RTX 3060 or AMD equivalent or better (more VRAM = run larger models)
-- Storage: At least 250 GB free disk space (preferably on SSD)
-- OS: Debian-based (Ubuntu recommended)
-- Stable internet connection (required during install only)
-
-**For detailed build recommendations at three price points ($150–$1,000+), see the [Hardware Guide](https://www.projectnomad.us/hardware).**
-
-Again, Project N.O.M.A.D. itself is quite lightweight - it's the tools and resources you choose to install with N.O.M.A.D. that will determine the specs required for your unique deployment
-
-## Frequently Asked Questions (FAQ)
-For answers to common questions about Project N.O.M.A.D., please see our [FAQ](FAQ.md) page.
-
-## About Internet Usage & Privacy
-Project N.O.M.A.D. is designed for offline usage. An internet connection is only required during the initial installation (to download dependencies) and if you (the user) decide to download additional tools and resources at a later time. Otherwise, N.O.M.A.D. does not require an internet connection and has ZERO built-in telemetry.
-
-To test internet connectivity, N.O.M.A.D. attempts to make a request to Cloudflare's utility endpoint, `https://1.1.1.1/cdn-cgi/trace` and checks for a successful response.
-
-## About Security
-By design, Project N.O.M.A.D. is intended to be open and available without hurdles - it includes no authentication. If you decide to connect your device to a local network after install (e.g. for allowing other devices to access it's resources), you can block/open ports to control which services are exposed.
-
-**Will authentication be added in the future?** Maybe. It's not currently a priority, but if there's enough demand for it, we may consider building in an optional authentication layer in a future release to support uses cases where multiple users need access to the same instance but with different permission levels (e.g. family use with parental controls, classroom use with teacher/admin accounts, etc.). We have a suggestion for this on our public roadmap, so if this is something you'd like to see, please upvote it here: https://roadmap.projectnomad.us/posts/1/user-authentication-please-build-in-user-auth-with-admin-user-roles
-
-For now, we recommend using network-level controls to manage access if you're planning to expose your N.O.M.A.D. instance to other devices on a local network. N.O.M.A.D. is not designed to be exposed directly to the internet, and we strongly advise against doing so unless you really know what you're doing, have taken appropriate security measures, and understand the risks involved.
-
-## Contributing
-Contributions are welcome and appreciated! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to the project.
-
-## Community & Resources
-
-- **Website:** [www.projectnomad.us](https://www.projectnomad.us) - Learn more about the project
-- **Discord:** [Join the Community](https://discord.com/invite/crosstalksolutions) - Get help, share your builds, and connect with other NOMAD users
-- **Benchmark Leaderboard:** [benchmark.projectnomad.us](https://benchmark.projectnomad.us) - See how your hardware stacks up against other NOMAD builds
-- **Troubleshooting Guide:** [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Find solutions to common issues
-- **FAQ:** [FAQ.md](FAQ.md) - Find answers to frequently asked questions
+- See [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) for import provenance and sync notes
+- See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the initial RoachNet implementation plan
+- See [`docs/LOCAL_BOOT.md`](./docs/LOCAL_BOOT.md) for the verified macOS local-dev boot path
+- See [`docs/SURFACE_MAP.md`](./docs/SURFACE_MAP.md) for the current settings, onboarding, and Ollama integration map
 
 ## License
 
-Project N.O.M.A.D. is licensed under the [Apache License 2.0](LICENSE).
-
-## Helper Scripts
-Once installed, Project N.O.M.A.D. has a few helper scripts should you ever need to troubleshoot issues or perform maintenance that can't be done through the Command Center. All of these scripts are found in Project N.O.M.A.D.'s install directory, `/opt/project-nomad`
-
-###
-
-###### Start Script - Starts all installed project containers
-```bash
-sudo bash /opt/project-nomad/start_nomad.sh
-```
-###
-
-###### Stop Script - Stops all installed project containers
-```bash
-sudo bash /opt/project-nomad/stop_nomad.sh
-```
-###
-
-###### Update Script - Attempts to pull the latest images for the Command Center and its dependencies (i.e. mysql) and recreate the containers. Note: this *only* updates the Command Center containers. It does not update the installable application containers - that should be done through the Command Center UI
-```bash
-sudo bash /opt/project-nomad/update_nomad.sh
-```
-
-###### Uninstall Script - Need to start fresh? Use the uninstall script to make your life easy. Note: this cannot be undone!
-```bash
-curl -fsSL https://raw.githubusercontent.com/Crosstalk-Solutions/project-nomad/refs/heads/main/install/uninstall_nomad.sh -o uninstall_nomad.sh && sudo bash uninstall_nomad.sh
-```
+This repository currently includes the upstream Apache 2.0 license from the imported base. Review [`LICENSE`](./LICENSE) and [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) before changing licensing or attribution details.

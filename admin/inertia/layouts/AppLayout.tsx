@@ -1,45 +1,83 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import Footer from '~/components/Footer'
 import ChatButton from '~/components/chat/ChatButton'
-import ChatModal from '~/components/chat/ChatModal'
-import useServiceInstalledStatus from '~/hooks/useServiceInstalledStatus'
-import { SERVICE_NAMES } from '../../constants/service_names'
+import useAIRuntimeStatus from '~/hooks/useAIRuntimeStatus'
 import { Link } from '@inertiajs/react'
-import { IconArrowLeft } from '@tabler/icons-react'
-import classNames from 'classnames'
+import { IconArrowLeft, IconHexagonLetterR, IconMap2, IconShieldBolt } from '@tabler/icons-react'
+import RoachNetBrand from '~/components/RoachNetBrand'
+
+const LazyChatModal = lazy(() => import('~/components/chat/ChatModal'))
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [isChatOpen, setIsChatOpen] = useState(false)
-  const aiAssistantInstalled = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
+  const aiAssistantRuntime = useAIRuntimeStatus('ollama')
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {
-        window.location.pathname !== '/home' && (
-          <Link href="/home" className="absolute top-60 md:top-48 left-4 flex items-center">
-            <IconArrowLeft className="mr-2" size={24} />
-            <p className="text-lg text-text-secondary">Back to Home</p>
-          </Link>
-        )}
-      <div
-        className="p-2 flex gap-2 flex-col items-center justify-center cursor-pointer"
-        onClick={() => (window.location.href = '/home')}
-      >
-        <img src="/project_nomad_logo.png" alt="Project Nomad Logo" className="h-40 w-40" />
-        <h1 className="text-5xl font-bold text-desert-green">Command Center</h1>
+    <div className="roachnet-shell min-h-screen flex flex-col px-3 py-3 md:px-5 md:py-5">
+      <div className="roachnet-panel relative overflow-hidden rounded-[2rem] border border-border-subtle">
+        <div className="absolute inset-x-0 top-0 h-px roachnet-divider" />
+        <div className="relative px-5 py-6 md:px-8 md:py-8">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+            <button
+              type="button"
+              className="cursor-pointer text-left"
+              onClick={() => (window.location.href = '/home')}
+            >
+              <RoachNetBrand
+                size="lg"
+                subtitle="Offline command grid for maps, archives, local AI, and field ops"
+              />
+            </button>
+
+            <div className="flex flex-wrap gap-3">
+              <div className="roachnet-card rounded-full px-4 py-2 text-xs uppercase tracking-[0.26em] text-desert-green-light">
+                <IconShieldBolt className="mr-2 inline size-4" />
+                Offline First
+              </div>
+              <div className="roachnet-card rounded-full px-4 py-2 text-xs uppercase tracking-[0.26em] text-desert-orange-light">
+                <IconMap2 className="mr-2 inline size-4" />
+                Maps, Docs, AI
+              </div>
+              <div className="roachnet-card rounded-full px-4 py-2 text-xs uppercase tracking-[0.26em] text-desert-tan-light">
+                <IconHexagonLetterR className="mr-2 inline size-4" />
+                Local Control
+              </div>
+            </div>
+          </div>
+
+          {window.location.pathname !== '/home' && (
+            <div className="mt-6">
+              <Link
+                href="/home"
+                className="inline-flex items-center rounded-full border border-border-default bg-surface-secondary/80 px-4 py-2 text-sm font-semibold text-text-secondary transition-colors hover:text-desert-green-light"
+              >
+                <IconArrowLeft className="mr-2 size-4" />
+                Back to Home
+              </Link>
+            </div>
+          )}
+        </div>
+
+        <div className="relative flex-1">{children}</div>
       </div>
-      <hr className={
-        classNames(
-          "text-desert-green font-semibold h-[1.5px] bg-desert-green border-none",
-          window.location.pathname !== '/home' ? "mt-12 md:mt-0" : "mt-0"
-        )} />
-      <div className="flex-1 w-full bg-desert">{children}</div>
       <Footer />
 
-      {aiAssistantInstalled && (
+      {aiAssistantRuntime.available && (
         <>
           <ChatButton onClick={() => setIsChatOpen(true)} />
-          <ChatModal open={isChatOpen} onClose={() => setIsChatOpen(false)} />
+          {isChatOpen && (
+            <Suspense
+              fallback={
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-sm">
+                  <div className="roachnet-card rounded-[1.5rem] border border-border-default px-6 py-5 text-sm uppercase tracking-[0.2em] text-text-secondary">
+                    Loading Chat
+                  </div>
+                </div>
+              }
+            >
+              <LazyChatModal open={isChatOpen} onClose={() => setIsChatOpen(false)} />
+            </Suspense>
+          )}
         </>
       )}
     </div>

@@ -45,6 +45,7 @@ router
 
 router
   .group(() => {
+    router.get('/ai', [SettingsController, 'ai'])
     router.get('/system', [SettingsController, 'system'])
     router.get('/apps', [SettingsController, 'apps'])
     router.get('/legal', [SettingsController, 'legal'])
@@ -141,6 +142,7 @@ router
     router.get('/info', [SystemController, 'getSystemInfo'])
     router.get('/internet-status', [SystemController, 'getInternetStatus'])
     router.get('/services', [SystemController, 'getServices'])
+    router.get('/ai/providers', [SystemController, 'getAIRuntimeProviders'])
     router.post('/services/affect', [SystemController, 'affectService'])
     router.post('/services/install', [SystemController, 'installService'])
     router.post('/services/force-reinstall', [SystemController, 'forceReinstallService'])
@@ -152,6 +154,9 @@ router
     router.post('/update', [SystemController, 'requestSystemUpdate'])
     router.get('/update/status', [SystemController, 'getSystemUpdateStatus'])
     router.get('/update/logs', [SystemController, 'getSystemUpdateLogs'])
+    router.get('/upstream-sync/status', [SystemController, 'getUpstreamSyncStatus'])
+    router.post('/upstream-sync', [SystemController, 'requestUpstreamSync'])
+    router.get('/upstream-sync/logs', [SystemController, 'getUpstreamSyncLogs'])
     router.get('/settings', [SettingsController, 'getSetting'])
     router.patch('/settings', [SettingsController, 'updateSetting'])
   })

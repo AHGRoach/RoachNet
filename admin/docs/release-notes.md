@@ -202,7 +202,7 @@
 ### 🚀 Features
 
 - **Content Manager**: Display friendly names (Title and Summary) instead of raw filenames for ZIM files
-- **AI Knowledge Base**: Automatically add NOMAD documentation to AI Knowledge Base on install
+- **AI Knowledge Base**: Automatically add RoachNet documentation to AI Knowledge Base on install
 
 ### 🐛 Bug Fixes
 
@@ -261,7 +261,7 @@
 
 ### 🚀 Features
 
-- **Benchmark**: Builder Tag system — claim leaderboard spots with NOMAD-themed tags (e.g., "Tactical-Llama-1234")
+- **Benchmark**: Builder Tag system — claim leaderboard spots with RoachNet-themed tags (e.g., "Neon-Hive-1234")
 - **Benchmark**: Full benchmark with AI now required for community sharing; HMAC-signed submissions
 - **Release Notes**: Subscribe to release notes via email
 - **Maps**: Automatically download base map assets if missing
@@ -293,7 +293,7 @@
 
 ### 🚀 Features
 
-- **System Benchmark**: Hardware scoring with NOMAD Score, circular gauges, and community leaderboard submission
+- **System Benchmark**: Hardware scoring with RoachNet Score, circular gauges, and community leaderboard submission
 - **Dashboard**: User-friendly app names with "Powered by" open source attribution
 - **Settings**: Updated nomenclature and added tiered content collections to Settings pages
 - **Queues**: Support working all queues with a single command
@@ -330,7 +330,7 @@
 - **Easy Setup Wizard**: Redesigned Step 1 with user-friendly capability cards instead of app names
 - **Tiered Collections**: Category-based content collections with Essential, Standard, and Comprehensive tiers
 - **Storage Projection Bar**: Visual disk usage indicator showing projected additions during Easy Setup
-- **Windows Support**: Docker Desktop support for local development with platform detection and NOMAD_STORAGE_PATH env var
+- **Windows Support**: Docker Desktop support for local development with platform detection and `NOMAD_STORAGE_PATH` env var
 - **Documentation**: Comprehensive in-app documentation (Home, Getting Started, FAQ, Use Cases)
 
 ### ✨ Improvements
@@ -535,7 +535,7 @@
     - Fixed renderer file permissions
     - Fixed absolute host path issue
 - **ZIM Manager**:
-    - Initial ZIM download now hosted in Project Nomad GitHub repo for better availability
+    - Initial ZIM download now hosted in the upstream GitHub repo for better availability
 
 ---
 
@@ -559,7 +559,7 @@
 
 ### ⚠️ Breaking Changes
 
-- **Container Naming**: As a result of standardized container naming, it is recommend that you do a fresh install of Project N.O.M.A.D. and any apps to avoid potential conflicts/duplication of containers
+- **Container Naming**: As a result of standardized container naming, it is recommend that you do a fresh install of the platform and any apps to avoid potential conflicts/duplication of containers
 
 ### 📚 Documentation
 
@@ -589,10 +589,10 @@
 
 ## Support
 
-- **Discord:** [Join the Community](https://discord.com/invite/crosstalksolutions) — Get help, share your builds, and connect with other NOMAD users
-- **Bug Reports:** [GitHub Issues](https://github.com/Crosstalk-Solutions/project-nomad/issues)
+- **Discord:** [Join the Community](https://discord.com/invite/crosstalksolutions) — Get help, share your builds, and connect with other RoachNet users
+- **Bug Reports:** [GitHub Issues](https://github.com/AHGRoach/RoachNet/issues)
 - **Website:** [www.projectnomad.us](https://www.projectnomad.us)
 
 ---
 
-*For the full changelog, see our [GitHub releases](https://github.com/Crosstalk-Solutions/project-nomad/releases).*
+*For the full changelog, see the [RoachNet GitHub releases](https://github.com/AHGRoach/RoachNet/releases).*

@@ -83,10 +83,10 @@ The AI must be installed first — enable it during Easy Setup or install it fro
 
 You can also remove documents from the Knowledge Base when they're no longer needed.
 
-NOMAD documentation is automatically added to the Knowledge Base when the AI Assistant is installed.
+RoachNet documentation is automatically added to the Knowledge Base when the AI Assistant is installed.
 
 ### What is the System Benchmark?
-The System Benchmark tests your hardware performance and generates a NOMAD Score — a weighted composite of CPU, memory, disk, and AI performance. You can create a Builder Tag (a NOMAD-themed identity like "Tactical-Llama-1234") and share your results with the [community leaderboard](https://benchmark.projectnomad.us).
+The System Benchmark tests your hardware performance and generates a RoachNet Score — a weighted composite of CPU, memory, disk, and AI performance. You can create a Builder Tag (a RoachNet-themed identity like "Neon-Hive-1234") and share your results with the [community leaderboard](https://benchmark.projectnomad.us).
 
 Go to **[System Benchmark →](/settings/benchmark)** to run one.
 
@@ -124,19 +124,19 @@ Local AI requires significant computing power. To improve speed:
 
 ### How do I enable GPU acceleration for AI?
 
-N.O.M.A.D. automatically detects NVIDIA GPUs when the NVIDIA Container Toolkit is installed on the host system. To set up GPU acceleration:
+RoachNet automatically detects NVIDIA GPUs when the NVIDIA Container Toolkit is installed on the host system. To set up GPU acceleration:
 
 1. **Install an NVIDIA GPU** in your server (if not already present)
 2. **Install the NVIDIA Container Toolkit** on the host — follow the [official installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 3. **Reinstall the AI Assistant** — Go to [Apps](/settings/apps), find AI Assistant, and click **Force Reinstall**
 
-N.O.M.A.D. will detect the GPU during installation and configure the AI to use it automatically. You'll see "NVIDIA container runtime detected" in the installation progress.
+RoachNet will detect the GPU during installation and configure the AI to use it automatically. You'll see "NVIDIA container runtime detected" in the installation progress.
 
 **Tip:** Run a [System Benchmark](/settings/benchmark) before and after to see the difference. GPU-accelerated systems typically see 100+ tokens per second vs 10-15 on CPU only.
 
 ### I added/changed my GPU but AI is still slow
 
-When you add or swap a GPU, N.O.M.A.D. needs to reconfigure the AI container to use it:
+When you add or swap a GPU, RoachNet needs to reconfigure the AI container to use it:
 
 1. Make sure the **NVIDIA Container Toolkit** is installed on the host
 2. Go to **[Apps](/settings/apps)**
@@ -146,7 +146,7 @@ Force Reinstall recreates the AI container with GPU support enabled. Without thi
 
 ### I see a "GPU passthrough not working" warning
 
-N.O.M.A.D. checks whether your GPU is actually accessible inside the AI container. If a GPU is detected on the host but isn't working inside the container, you'll see a warning banner on the System Information and AI Settings pages. Click the **"Fix: Reinstall AI Assistant"** button to recreate the container with proper GPU access. This preserves your downloaded AI models.
+RoachNet checks whether your GPU is actually accessible inside the AI container. If a GPU is detected on the host but isn't working inside the container, you'll see a warning banner on the System Information and AI Settings pages. Click the **"Fix: Reinstall AI Assistant"** button to recreate the container with proper GPU access. This preserves your downloaded AI models.
 
 ### AI Chat not available
 
@@ -208,7 +208,7 @@ Kolibri passwords are managed separately:
 
 ## Updates and Maintenance
 
-### How do I update N.O.M.A.D.?
+### How do I update RoachNet?
 1. Go to **Settings → Check for Updates**
 2. If an update is available, click to install
 3. The system will download updates and restart automatically
@@ -237,7 +237,7 @@ The system is designed to recover gracefully. If an update fails:
 
 ### Command-Line Maintenance
 
-For advanced troubleshooting or when you can't access the web interface, N.O.M.A.D. includes helper scripts in `/opt/project-nomad`:
+For advanced troubleshooting or when you can't access the web interface, RoachNet currently includes the imported upstream helper scripts in `/opt/project-nomad`:
 
 **Start all services:**
 ```bash
@@ -255,7 +255,7 @@ sudo bash /opt/project-nomad/update_nomad.sh
 ```
 *Note: This updates the Command Center only, not individual apps. Update apps through the web interface.*
 
-**Uninstall N.O.M.A.D.:**
+**Uninstall RoachNet:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Crosstalk-Solutions/project-nomad/refs/heads/main/install/uninstall_nomad.sh -o uninstall_nomad.sh
 sudo bash uninstall_nomad.sh
@@ -267,10 +267,10 @@ sudo bash uninstall_nomad.sh
 ## Privacy and Security
 
 ### Is my data private?
-Yes. N.O.M.A.D. runs entirely on your hardware. Your searches, AI conversations, and usage data never leave your server.
+Yes. RoachNet runs entirely on your hardware. Your searches, AI conversations, and usage data never leave your system.
 
 ### Can others access my server?
-By default, N.O.M.A.D. is accessible on your local network. Anyone on the same network can access it. For public networks, consider additional security measures.
+By default, RoachNet is accessible on your local network. Anyone on the same network can access it. For public networks, consider additional security measures.
 
 ### Does the AI send data anywhere?
 No. The AI runs completely locally. Your conversations are not sent to any external service. The AI chat is built into the Command Center — there's no separate service to configure.
@@ -280,13 +280,13 @@ No. The AI runs completely locally. Your conversations are not sent to any exter
 ## Getting More Help
 
 ### The AI can help
-Try asking a question in [AI Chat](/chat). The local AI can answer questions about many topics, including technical troubleshooting. If you've uploaded NOMAD documentation to the Knowledge Base, it can also help with NOMAD-specific questions.
+Try asking a question in [AI Chat](/chat). The local AI can answer questions about many topics, including technical troubleshooting. If you've uploaded RoachNet documentation to the Knowledge Base, it can also help with RoachNet-specific questions.
 
 ### Check the documentation
 You're in the docs now. Use the menu to find specific topics.
 
 ### Join the community
-Get help from other NOMAD users on **[Discord](https://discord.com/invite/crosstalksolutions)**.
+For now, the main collaboration path is the [RoachNet issue tracker](https://github.com/AHGRoach/RoachNet/issues).
 
 ### Release Notes
 See what's changed in each version: **[Release Notes](/docs/release-notes)**

@@ -84,7 +84,7 @@ N.O.M.A.D. includes a built-in AI chat interface powered by Ollama. It runs enti
 
 **Note:** The AI Assistant must be installed first. Enable it during Easy Setup or install it from the [Apps](/settings/apps) page.
 
-**GPU Acceleration:** If your server has an NVIDIA GPU with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed, N.O.M.A.D. will automatically use it for AI — dramatically faster responses (10-20x improvement). If you add a GPU later, go to [Apps](/settings/apps) and **Force Reinstall** the AI Assistant to enable it.
+**GPU Acceleration:** If your system has an NVIDIA GPU with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed, RoachNet will automatically use it for AI when the managed runtime is active. If you add a GPU later, go to [Apps](/settings/apps) and **Force Reinstall** the AI Assistant to enable it.
 
 ---
 
@@ -96,7 +96,7 @@ The Knowledge Base lets you upload documents so the AI can reference them when a
 
 **Supported file types:**
 - PDFs, text files, and other document formats
-- NOMAD documentation is automatically loaded when the AI Assistant is installed
+- RoachNet documentation is automatically loaded when the AI Assistant is installed
 
 **How to use it:**
 1. Go to **[Knowledge Base →](/knowledge-base)**
@@ -150,7 +150,7 @@ As your needs change, you can add more content anytime:
 
 ![Content Explorer — browse and download Wikipedia packages and curated collections](/docs/content-explorer.png)
 
-N.O.M.A.D. includes a dedicated Wikipedia content management tool for browsing and downloading Wikipedia packages.
+RoachNet includes a dedicated Wikipedia content management tool for browsing and downloading Wikipedia packages.
 
 **How to use it:**
 1. Go to **[Content Explorer →](/settings/zim/remote-explorer)**
@@ -161,15 +161,15 @@ N.O.M.A.D. includes a dedicated Wikipedia content management tool for browsing a
 
 ### System Benchmark
 
-![System Benchmark with NOMAD Score and Builder Tag](/docs/benchmark.png)
+![System Benchmark with RoachNet Score and Builder Tag](/docs/benchmark.png)
 
-Test your hardware performance and see how your NOMAD build stacks up against the community.
+Test your hardware performance and see how your RoachNet build stacks up against the community.
 
 **How to use it:**
 1. Go to **[System Benchmark →](/settings/benchmark)**
 2. Choose a benchmark type: Full, System Only, or AI Only
-3. View your NOMAD Score (a weighted composite of CPU, memory, disk, and AI performance)
-4. Create a Builder Tag (your NOMAD-themed identity, like "Tactical-Llama-1234")
+3. View your RoachNet Score (a weighted composite of CPU, memory, disk, and AI performance)
+4. Create a Builder Tag (your RoachNet-themed identity, like "Neon-Hive-1234")
 5. Share your results with the [community leaderboard](https://benchmark.projectnomad.us)
 
 **Note:** Only Full Benchmarks with AI data can be shared to the community leaderboard.

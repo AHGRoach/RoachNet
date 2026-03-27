@@ -7,6 +7,7 @@ import { UsePageProps } from '../../types/system'
 import { IconMenu2, IconX } from '@tabler/icons-react'
 import ThemeToggle from '~/components/ThemeToggle'
 import DebugInfoModal from './DebugInfoModal'
+import RoachNetBrand from './RoachNetBrand'
 
 type SidebarItem = {
   name: string
@@ -53,10 +54,9 @@ const StyledSidebar: React.FC<StyledSidebarProps> = ({ title, items }) => {
 
   const Sidebar = () => {
     return (
-      <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-desert-sand px-6 ring-1 ring-white/5 pt-4 shadow-md">
+      <div className="roachnet-panel flex grow flex-col gap-y-5 overflow-y-auto rounded-r-[1.75rem] bg-surface-primary/95 px-6 pt-4 shadow-md">
         <div className="flex h-16 shrink-0 items-center">
-          <img src="/project_nomad_logo.png" alt="Project Nomad Logo" className="h-16 w-16" />
-          <h1 className="ml-3 text-xl font-semibold text-text-primary">{title}</h1>
+          <RoachNetBrand size="sm" subtitle={title} />
         </div>
         <nav className="flex flex-1 flex-col">
           <ul role="list" className="flex flex-1 flex-col gap-y-7">
@@ -78,11 +78,11 @@ const StyledSidebar: React.FC<StyledSidebarProps> = ({ title, items }) => {
             </li>
           </ul>
         </nav>
-        <div className="mb-4 flex flex-col items-center gap-1 text-sm text-text-secondary text-center">
-          <p>Project N.O.M.A.D. Command Center v{appVersion}</p>
+        <div className="mb-4 flex flex-col items-center gap-2 text-sm text-text-secondary text-center">
+          <p className="text-xs uppercase tracking-[0.22em] text-text-muted">RoachNet Grid v{appVersion}</p>
           <button
             onClick={() => setDebugModalOpen(true)}
-            className="text-gray-500 hover:text-desert-green inline-flex items-center gap-1 cursor-pointer"
+            className="inline-flex items-center gap-1 text-text-secondary hover:text-desert-green-light cursor-pointer"
           >
             <IconBug className="size-3.5" />
             Debug Info
@@ -97,10 +97,10 @@ const StyledSidebar: React.FC<StyledSidebarProps> = ({ title, items }) => {
     <>
       <button
         type="button"
-        className="absolute left-4 top-4 z-50 xl:hidden"
+        className="absolute left-4 top-4 z-50 rounded-full border border-border-default bg-surface-primary/90 p-2 xl:hidden"
         onClick={() => setSidebarOpen(true)}
       >
-        <IconMenu2 aria-hidden="true" className="size-8" />
+        <IconMenu2 aria-hidden="true" className="size-8 text-desert-green-light" />
       </button>
       {/* Mobile sidebar */}
       <Dialog open={sidebarOpen} onClose={setSidebarOpen} className="relative z-50 xl:hidden">

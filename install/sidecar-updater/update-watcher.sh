@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Project N.O.M.A.D. Update Sidecar - Polls for update requests and executes them
+# RoachNet update sidecar - polls for update requests and executes them
 
 SHARED_DIR="/shared"
 REQUEST_FILE="${SHARED_DIR}/update-request"

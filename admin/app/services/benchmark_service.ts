@@ -6,6 +6,7 @@ import axios from 'axios'
 import { DateTime } from 'luxon'
 import BenchmarkResult from '#models/benchmark_result'
 import BenchmarkSetting from '#models/benchmark_setting'
+import { OllamaService } from '#services/ollama_service'
 import { SystemService } from '#services/system_service'
 import type {
   BenchmarkType,
@@ -24,7 +25,6 @@ import type {
 } from '../../types/benchmark.js'
 import { randomUUID, createHmac } from 'node:crypto'
 import { DockerService } from './docker_service.js'
-import { SERVICE_NAMES } from '../../constants/service_names.js'
 import { BROADCAST_CHANNELS } from '../../constants/broadcast.js'
 import Dockerode from 'dockerode'
 
@@ -68,7 +68,7 @@ export class BenchmarkService {
   private currentBenchmarkId: string | null = null
   private currentStatus: BenchmarkStatus = 'idle'
 
-  constructor(private dockerService: DockerService) {}
+  constructor(private dockerService: DockerService, private ollamaService: OllamaService) {}
 
   /**
    * Run a full benchmark suite
@@ -447,31 +447,34 @@ export class BenchmarkService {
    */
   private async _runAIBenchmark(): Promise<AIScores> {
     try {
+      this._updateStatus('running_ai', 'Running AI benchmark...')
 
-    this._updateStatus('running_ai', 'Running AI benchmark...')
+      const runtimeStatus = await this.ollamaService.getRuntimeStatus()
+      const ollamaAPIURL = runtimeStatus.baseUrl
+      if (!runtimeStatus.available || !ollamaAPIURL) {
+        throw new Error(
+          runtimeStatus.error || 'AI Assistant runtime could not be determined. Ensure AI Assistant is running.'
+        )
+      }
 
-    const ollamaAPIURL = await this.dockerService.getServiceURL(SERVICE_NAMES.OLLAMA)
-    if (!ollamaAPIURL) {
-      throw new Error('AI Assistant service location could not be determined. Ensure AI Assistant is installed and running.')
-    }
+      // Check if Ollama is available
+      try {
+        await axios.get(`${ollamaAPIURL}/api/tags`, { timeout: 5000 })
+      } catch (error) {
+        const errorCode = error.code || error.response?.status || 'unknown'
+        throw new Error(
+          `Ollama is not running or not accessible (${errorCode}). Ensure AI Assistant is running.`
+        )
+      }
 
-    // Check if Ollama is available
-    try {
-      await axios.get(`${ollamaAPIURL}/api/tags`, { timeout: 5000 })
-    } catch (error) {
-      const errorCode = error.code || error.response?.status || 'unknown'
-      throw new Error(`Ollama is not running or not accessible (${errorCode}). Ensure AI Assistant is installed and running.`)
-    }
+      // Check if the benchmark model is available, pull if not
+      const modelResponse = await this.ollamaService.downloadModel(AI_BENCHMARK_MODEL)
+      if (!modelResponse.success) {
+        throw new Error(`Model does not exist and failed to download: ${modelResponse.message}`)
+      }
 
-    // Check if the benchmark model is available, pull if not
-    const ollamaService = new (await import('./ollama_service.js')).OllamaService()
-    const modelResponse = await ollamaService.downloadModel(AI_BENCHMARK_MODEL)
-    if (!modelResponse.success) {
-      throw new Error(`Model does not exist and failed to download: ${modelResponse.message}`)
-    }
-
-    // Run inference benchmark
-    const startTime = Date.now()
+      // Run inference benchmark
+      const startTime = Date.now()
 
       const response = await axios.post(
         `${ollamaAPIURL}/api/generate`,

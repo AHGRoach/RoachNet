@@ -4,40 +4,46 @@ import StyledTable from '~/components/StyledTable'
 import SettingsLayout from '~/layouts/SettingsLayout'
 import { NomadOllamaModel } from '../../../types/ollama'
 import StyledButton from '~/components/StyledButton'
-import useServiceInstalledStatus from '~/hooks/useServiceInstalledStatus'
 import Alert from '~/components/Alert'
 import { useNotifications } from '~/context/NotificationContext'
 import api from '~/lib/api'
 import { useModals } from '~/context/ModalContext'
 import StyledModal from '~/components/StyledModal'
 import { ModelResponse } from 'ollama'
-import { SERVICE_NAMES } from '../../../constants/service_names'
 import Switch from '~/components/inputs/Switch'
 import StyledSectionHeader from '~/components/StyledSectionHeader'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import Input from '~/components/inputs/Input'
-import { IconSearch, IconRefresh } from '@tabler/icons-react'
+import { IconSearch } from '@tabler/icons-react'
 import useDebounce from '~/hooks/useDebounce'
 import ActiveModelDownloads from '~/components/ActiveModelDownloads'
 import { useSystemInfo } from '~/hooks/useSystemInfo'
+import type { AIRuntimeStatus } from '../../../types/ai'
+
+const GPU_BANNER_STORAGE_KEY = 'roachnet:gpu-banner-dismissed'
+const LEGACY_GPU_BANNER_STORAGE_KEY = 'nomad:gpu-banner-dismissed'
 
 export default function ModelsPage(props: {
   models: {
     availableModels: NomadOllamaModel[]
     installedModels: ModelResponse[]
+    runtimeStatus: AIRuntimeStatus
     settings: { chatSuggestionsEnabled: boolean; aiAssistantCustomName: string }
   }
 }) {
   const { aiAssistantName } = usePage<{ aiAssistantName: string }>().props
-  const { isInstalled } = useServiceInstalledStatus(SERVICE_NAMES.OLLAMA)
   const { addNotification } = useNotifications()
   const { openModal, closeAllModals } = useModals()
   const { debounce } = useDebounce()
   const { data: systemInfo } = useSystemInfo({})
+  const runtimeStatus = props.models.runtimeStatus
 
   const [gpuBannerDismissed, setGpuBannerDismissed] = useState(() => {
     try {
-      return localStorage.getItem('nomad:gpu-banner-dismissed') === 'true'
+      return (
+        localStorage.getItem(GPU_BANNER_STORAGE_KEY) === 'true' ||
+        localStorage.getItem(LEGACY_GPU_BANNER_STORAGE_KEY) === 'true'
+      )
     } catch {
       return false
     }
@@ -47,7 +53,7 @@ export default function ModelsPage(props: {
   const handleDismissGpuBanner = () => {
     setGpuBannerDismissed(true)
     try {
-      localStorage.setItem('nomad:gpu-banner-dismissed', 'true')
+      localStorage.setItem(GPU_BANNER_STORAGE_KEY, 'true')
     } catch {}
   }
 
@@ -67,7 +73,10 @@ export default function ModelsPage(props: {
               message: `${aiAssistantName} is being reinstalled with GPU support. This page will reload shortly.`,
               type: 'success',
             })
-            try { localStorage.removeItem('nomad:gpu-banner-dismissed') } catch {}
+            try {
+              localStorage.removeItem(GPU_BANNER_STORAGE_KEY)
+              localStorage.removeItem(LEGACY_GPU_BANNER_STORAGE_KEY)
+            } catch {}
             setTimeout(() => window.location.reload(), 5000)
           } catch (error) {
             addNotification({
@@ -220,7 +229,7 @@ export default function ModelsPage(props: {
 
   return (
     <SettingsLayout>
-      <Head title={`${aiAssistantName} Settings | Project N.O.M.A.D.`} />
+      <Head title={`${aiAssistantName} Settings | RoachNet`} />
       <div className="xl:pl-72 w-full">
         <main className="px-12 py-6">
           <h1 className="text-4xl font-semibold mb-4">{aiAssistantName}</h1>
@@ -229,15 +238,25 @@ export default function ModelsPage(props: {
             starting with smaller models first to see how they perform on your system before moving
             on to larger ones.
           </p>
-          {!isInstalled && (
+          {!runtimeStatus.available && (
             <Alert
-              title={`${aiAssistantName}'s dependencies are not installed. Please install them to manage AI models.`}
+              title={`${aiAssistantName} is not available.`}
+              message={`Start Ollama locally on ${runtimeStatus.baseUrl || 'http://127.0.0.1:11434'}, set OLLAMA_BASE_URL, or install the managed service to manage models from this page.`}
               type="warning"
               variant="solid"
               className="!mt-6"
             />
           )}
-          {isInstalled && systemInfo?.gpuHealth?.status === 'passthrough_failed' && !gpuBannerDismissed && (
+          {runtimeStatus.available && runtimeStatus.source !== 'docker' && runtimeStatus.baseUrl && (
+            <Alert
+              type="info"
+              variant="bordered"
+              title="Using External Ollama Runtime"
+              message={`${aiAssistantName} is connected to ${runtimeStatus.baseUrl}. Docker-specific reinstall and GPU passthrough controls do not apply in this mode.`}
+              className="!mt-6"
+            />
+          )}
+          {runtimeStatus.available && runtimeStatus.source === 'docker' && systemInfo?.gpuHealth?.status === 'passthrough_failed' && !gpuBannerDismissed && (
             <Alert
               type="warning"
               variant="bordered"
@@ -390,6 +409,13 @@ export default function ModelsPage(props: {
                                 <StyledButton
                                   variant={isInstalled ? 'danger' : 'primary'}
                                   onClick={() => {
+                                    if (!runtimeStatus.available) {
+                                      addNotification({
+                                        message: `${aiAssistantName} is not available. Start Ollama or install the managed service first.`,
+                                        type: 'error',
+                                      })
+                                      return
+                                    }
                                     if (!isInstalled) {
                                       handleInstallModel(tag.name)
                                     } else {
@@ -397,6 +423,12 @@ export default function ModelsPage(props: {
                                     }
                                   }}
                                   icon={isInstalled ? 'IconTrash' : 'IconDownload'}
+                                  disabled={!runtimeStatus.available}
+                                  title={
+                                    !runtimeStatus.available
+                                      ? `${aiAssistantName} must be running to manage models`
+                                      : undefined
+                                  }
                                 >
                                   {isInstalled ? 'Delete' : 'Install'}
                                 </StyledButton>

@@ -6,6 +6,19 @@ export type GpuHealthStatus = {
   ollamaGpuAccessible: boolean
 }
 
+export type HardwareMemoryTier = 'compact' | 'balanced' | 'creator' | 'workstation'
+
+export type HardwareProfile = {
+  platformLabel: string
+  chipFamily: 'apple_silicon' | 'arm64' | 'x86_64' | 'generic'
+  isAppleSilicon: boolean
+  memoryTier: HardwareMemoryTier
+  recommendedRuntime: 'native_local' | 'docker'
+  recommendedModelClass: string
+  notes: string[]
+  warnings: string[]
+}
+
 export type SystemInformationResponse = {
   cpu: Systeminformation.CpuData
   mem: Systeminformation.MemData
@@ -16,6 +29,7 @@ export type SystemInformationResponse = {
   uptime: Systeminformation.TimeData
   graphics: Systeminformation.GraphicsData
   gpuHealth?: GpuHealthStatus
+  hardwareProfile: HardwareProfile
 }
 
 // Type inferrence is not working properly with usePage and shared props, so we define this type manually
@@ -76,6 +90,34 @@ export type SystemUpdateStatus = {
   timestamp: string
 }
 
+export type UpstreamSyncStage =
+  | 'idle'
+  | 'checking'
+  | 'syncing'
+  | 'building'
+  | 'complete'
+  | 'error'
+
+export type UpstreamSyncStatus = {
+  stage: UpstreamSyncStage
+  progress: number
+  message: string
+  timestamp: string
+  supported: boolean
+  canSync: boolean
+  syncAvailable: boolean
+  currentBranch: string | null
+  currentCommit: string | null
+  upstreamBranch: string
+  upstreamCommit: string | null
+  baseUpstreamCommit: string | null
+  mergeBase: string | null
+  patchsetCommits: number
+  upstreamCommitsAhead: number
+  hasTrackedChanges: boolean
+  backupBranch: string | null
+  repoRoot: string | null
+}
 
 export type CheckLatestVersionResult = {
   success: boolean,

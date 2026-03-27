@@ -3,17 +3,16 @@ import type { HttpContext } from '@adonisjs/core/http'
 import { ChatService } from '#services/chat_service'
 import { createSessionSchema, updateSessionSchema, addMessageSchema } from '#validators/chat'
 import KVStore from '#models/kv_store'
-import { SystemService } from '#services/system_service'
-import { SERVICE_NAMES } from '../../constants/service_names.js'
+import { AIRuntimeService } from '#services/ai_runtime_service'
 
 @inject()
 export default class ChatsController {
-  constructor(private chatService: ChatService, private systemService: SystemService) {}
+  constructor(private chatService: ChatService, private aiRuntimeService: AIRuntimeService) {}
 
   async inertia({ inertia, response }: HttpContext) {
-    const aiAssistantInstalled = await this.systemService.checkServiceInstalled(SERVICE_NAMES.OLLAMA)
-    if (!aiAssistantInstalled) {
-      return response.status(404).json({ error: 'AI Assistant service not installed' })
+    const aiAssistantAvailable = await this.aiRuntimeService.isProviderAvailable('ollama')
+    if (!aiAssistantAvailable) {
+      return response.status(404).json({ error: 'AI Assistant runtime not available' })
     }
     
     const chatSuggestionsEnabled = await KVStore.getValue('chat.suggestionsEnabled')

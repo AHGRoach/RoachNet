@@ -21,8 +21,10 @@ export default class BenchmarkResults extends BaseCommand {
   async run() {
     const { DockerService } = await import('#services/docker_service')
     const { BenchmarkService } = await import('#services/benchmark_service')
+    const { OllamaService } = await import('#services/ollama_service')
     const dockerService = new DockerService()
-    const benchmarkService = new BenchmarkService(dockerService)
+    const ollamaService = new OllamaService()
+    const benchmarkService = new BenchmarkService(dockerService, ollamaService)
 
     try {
       let results
@@ -78,7 +80,7 @@ export default class BenchmarkResults extends BaseCommand {
         }
         this.logger.info('')
 
-        this.logger.info(`NOMAD Score: ${result.nomad_score.toFixed(2)} / 100`)
+        this.logger.info(`RoachNet Score: ${result.nomad_score.toFixed(2)} / 100`)
 
         if (result.submitted_to_repository) {
           this.logger.info(`Submitted: Yes (${result.repository_id})`)

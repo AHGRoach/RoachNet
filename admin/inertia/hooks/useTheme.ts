@@ -3,14 +3,14 @@ import api from '~/lib/api'
 
 export type Theme = 'light' | 'dark'
 
-const STORAGE_KEY = 'nomad:theme'
+const STORAGE_KEY = 'roachnet:theme'
 
 function getInitialTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored === 'dark' || stored === 'light') return stored
   } catch {}
-  return 'light'
+  return 'dark'
 }
 
 export function useTheme() {

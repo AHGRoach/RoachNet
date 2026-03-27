@@ -1,11 +1,14 @@
 {
-  "name": "project-nomad",
+  "name": "roachnet",
   "version": "1.30.3",
-  "description": "\"",
+  "description": "RoachNet offline operations platform",
   "main": "index.js",
   "scripts": {
+    "build:web": "PATH=\"/opt/homebrew/opt/node@22/bin:$PATH\" npm --prefix admin run build",
+    "start": "PATH=\"/opt/homebrew/opt/node@22/bin:$PATH\" node scripts/run-roachnet.mjs",
+    "start:no-browser": "PATH=\"/opt/homebrew/opt/node@22/bin:$PATH\" ROACHNET_NO_BROWSER=1 node scripts/run-roachnet.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "Crosstalk Solutions, LLC",
+  "author": "AHGRoach",
   "license": "ISC"
 }

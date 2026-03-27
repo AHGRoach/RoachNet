@@ -56,8 +56,10 @@ export default await Env.create(new URL('../', import.meta.url), {
 
   /*
   |----------------------------------------------------------
-  | Variables for configuring Project Nomad's external API URL
+  | Variables for configuring external AI runtime URLs
   |----------------------------------------------------------
   */
   NOMAD_API_URL: Env.schema.string.optional(),
+  OLLAMA_BASE_URL: Env.schema.string.optional(),
+  OPENCLAW_BASE_URL: Env.schema.string.optional(),
 })

@@ -64,19 +64,19 @@ export default function HorizontalBarChart({
         <div key={index} className="space-y-2">
           <div className="flex justify-between items-baseline">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-desert-green">{item.label}</span>
+              <span className="font-semibold text-desert-green-light">{item.label}</span>
               {item.type && (
-                <span className="text-xs px-2 py-0.5 rounded bg-desert-stone-lighter text-desert-stone-dark font-mono">
+                <span className="rounded-full border border-border-subtle bg-surface-secondary/90 px-2 py-0.5 font-mono text-xs text-text-secondary">
                   {item.type}
                 </span>
               )}
             </div>
-            <div className="text-sm text-desert-stone-dark font-mono">
+            <div className="font-mono text-sm text-text-secondary">
               {item.used} / {item.total}
             </div>
           </div>
           <div className="relative">
-            <div className="h-8 bg-desert-green-lighter bg-opacity-20 rounded-lg border border-desert-stone-light overflow-hidden">
+            <div className="h-8 overflow-hidden rounded-lg border border-border-subtle bg-surface-secondary/80">
               <div
                 className={classNames(
                   'h-full rounded-lg transition-all duration-1000 ease-out relative overflow-hidden',
@@ -95,7 +95,7 @@ export default function HorizontalBarChart({
                 'absolute top-1/2 -translate-y-1/2 font-bold text-sm',
                 item.value > 15
                   ? 'left-3 text-white drop-shadow-md'
-                  : 'right-3 text-desert-green'
+                  : 'right-3 text-desert-green-light'
               )}
             >
               {Math.round(item.value)}%
@@ -109,7 +109,7 @@ export default function HorizontalBarChart({
                   getStatusColor(item.value)
                 )}
               />
-              <span className="text-xs text-desert-stone">{getStatusLabel(item.value)}</span>
+              <span className="text-xs text-text-secondary">{getStatusLabel(item.value)}</span>
             </div>
           )}
         </div>

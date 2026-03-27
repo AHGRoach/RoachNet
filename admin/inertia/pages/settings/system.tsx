@@ -16,6 +16,9 @@ import api from '~/lib/api'
 import StatusCard from '~/components/systeminfo/StatusCard'
 import { IconCpu, IconDatabase, IconServer, IconDeviceDesktop, IconComponents } from '@tabler/icons-react'
 
+const GPU_BANNER_STORAGE_KEY = 'roachnet:gpu-banner-dismissed'
+const LEGACY_GPU_BANNER_STORAGE_KEY = 'nomad:gpu-banner-dismissed'
+
 export default function SettingsPage(props: {
   system: { info: SystemInformationResponse | undefined }
 }) {
@@ -27,7 +30,10 @@ export default function SettingsPage(props: {
 
   const [gpuBannerDismissed, setGpuBannerDismissed] = useState(() => {
     try {
-      return localStorage.getItem('nomad:gpu-banner-dismissed') === 'true'
+      return (
+        localStorage.getItem(GPU_BANNER_STORAGE_KEY) === 'true' ||
+        localStorage.getItem(LEGACY_GPU_BANNER_STORAGE_KEY) === 'true'
+      )
     } catch {
       return false
     }
@@ -37,7 +43,7 @@ export default function SettingsPage(props: {
   const handleDismissGpuBanner = () => {
     setGpuBannerDismissed(true)
     try {
-      localStorage.setItem('nomad:gpu-banner-dismissed', 'true')
+      localStorage.setItem(GPU_BANNER_STORAGE_KEY, 'true')
     } catch {}
   }
 
@@ -57,7 +63,10 @@ export default function SettingsPage(props: {
               message: 'AI Assistant is being reinstalled with GPU support. This page will reload shortly.',
               type: 'success',
             })
-            try { localStorage.removeItem('nomad:gpu-banner-dismissed') } catch {}
+            try {
+              localStorage.removeItem(GPU_BANNER_STORAGE_KEY)
+              localStorage.removeItem(LEGACY_GPU_BANNER_STORAGE_KEY)
+            } catch {}
             setTimeout(() => window.location.reload(), 5000)
           } catch (error) {
             addNotification({
@@ -74,8 +83,8 @@ export default function SettingsPage(props: {
       >
         <p className="text-text-primary">
           This will recreate the AI Assistant container with GPU support enabled.
-          Your downloaded models will be preserved. The service will be briefly
-          unavailable during reinstall.
+          Your downloaded models will be preserved. The service will be briefly unavailable during
+          reinstall.
         </p>
       </StyledModal>,
       'gpu-health-force-reinstall-modal'
@@ -107,6 +116,26 @@ export default function SettingsPage(props: {
 
   // Build storage display items - fall back to fsSize when disk array is empty
   const storageItems = getAllDiskDisplayItems(info?.disk, info?.fsSize)
+  const hardwareProfile = info?.hardwareProfile
+
+  const memoryTierLabels = {
+    compact: 'Compact',
+    balanced: 'Balanced',
+    creator: 'Creator',
+    workstation: 'Workstation',
+  } as const
+
+  const chipFamilyLabels = {
+    apple_silicon: 'Apple Silicon',
+    arm64: 'ARM64',
+    x86_64: 'x86-64',
+    generic: 'Generic Host',
+  } as const
+
+  const recommendedRuntimeLabel =
+    hardwareProfile?.recommendedRuntime === 'native_local'
+      ? 'Native local runtime'
+      : 'Docker-compatible runtime'
 
   return (
     <SettingsLayout>
@@ -114,10 +143,13 @@ export default function SettingsPage(props: {
       <div className="xl:pl-72 w-full">
         <main className="px-6 lg:px-12 py-6 lg:py-8">
           <div className="mb-8">
-            <h1 className="text-4xl font-bold text-desert-green mb-2">System Information</h1>
-            <p className="text-desert-stone-dark">
-              Real-time monitoring and diagnostics • Last updated: {new Date().toLocaleString()} •
-              Refreshing data every 30 seconds
+            <p className="roachnet-kicker text-xs text-desert-green-light">Diagnostics</p>
+            <h1 className="mb-2 text-4xl font-bold uppercase tracking-[0.12em] text-text-primary">
+              System Information
+            </h1>
+            <p className="text-text-secondary">
+              Live hardware telemetry, runtime guidance, and RoachNet optimization data for local
+              offline workloads. Last updated: {new Date().toLocaleString()}
             </p>
           </div>
           {Number(memoryUsagePercent) > 90 && (
@@ -130,6 +162,77 @@ export default function SettingsPage(props: {
               />
             </div>
           )}
+          {hardwareProfile && (
+            <section className="mb-12">
+              <h2 className="mb-6 flex items-center gap-2 text-2xl font-bold text-desert-green">
+                <div className="h-6 w-1 bg-desert-green" />
+                Optimization Profile
+              </h2>
+
+              <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                <div className="roachnet-card rounded-[1.75rem] border border-border-default p-6 md:p-7">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-[1.2rem] border border-border-default bg-surface-secondary/80 p-4">
+                      <p className="roachnet-kicker text-[0.64rem] text-text-muted">Chip Family</p>
+                      <p className="mt-2 text-lg font-semibold text-text-primary">
+                        {chipFamilyLabels[hardwareProfile.chipFamily]}
+                      </p>
+                      <p className="mt-1 text-sm text-text-secondary">{hardwareProfile.platformLabel}</p>
+                    </div>
+                    <div className="rounded-[1.2rem] border border-border-default bg-surface-secondary/80 p-4">
+                      <p className="roachnet-kicker text-[0.64rem] text-text-muted">Preferred Runtime</p>
+                      <p className="mt-2 text-lg font-semibold text-text-primary">{recommendedRuntimeLabel}</p>
+                      <p className="mt-1 text-sm text-text-secondary">
+                        {hardwareProfile.isAppleSilicon ? 'Best fit for Metal-backed local AI on Apple Silicon.' : 'Use this as the default deployment posture.'}
+                      </p>
+                    </div>
+                    <div className="rounded-[1.2rem] border border-border-default bg-surface-secondary/80 p-4">
+                      <p className="roachnet-kicker text-[0.64rem] text-text-muted">Memory Tier</p>
+                      <p className="mt-2 text-lg font-semibold text-text-primary">
+                        {memoryTierLabels[hardwareProfile.memoryTier]}
+                      </p>
+                      <p className="mt-1 text-sm text-text-secondary">{formatBytes(info?.mem.total || 0)} unified or system memory</p>
+                    </div>
+                    <div className="rounded-[1.2rem] border border-border-default bg-surface-secondary/80 p-4">
+                      <p className="roachnet-kicker text-[0.64rem] text-text-muted">Model Class</p>
+                      <p className="mt-2 text-lg font-semibold text-text-primary">{hardwareProfile.recommendedModelClass}</p>
+                      <p className="mt-1 text-sm text-text-secondary">Recommended starting point for stable offline workloads.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="roachnet-card rounded-[1.75rem] border border-border-default p-6 md:p-7">
+                  <p className="roachnet-kicker text-[0.68rem] text-desert-green-light">RoachNet Guidance</p>
+                  <div className="mt-4 space-y-3">
+                    {hardwareProfile.notes.map((note) => (
+                      <div
+                        key={note}
+                        className="rounded-[1.1rem] border border-border-subtle bg-surface-secondary/70 px-4 py-3 text-sm leading-6 text-text-secondary"
+                      >
+                        {note}
+                      </div>
+                    ))}
+                  </div>
+
+                  {hardwareProfile.warnings.length > 0 && (
+                    <div className="mt-5">
+                      <Alert
+                        type="warning"
+                        variant="bordered"
+                        title="Runtime Pressure Detected"
+                      >
+                        <ul className="list-disc space-y-2 pl-5 text-sm text-text-secondary">
+                          {hardwareProfile.warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      </Alert>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
           <section className="mb-12">
             <h2 className="text-2xl font-bold text-desert-green mb-6 flex items-center gap-2">
               <div className="w-1 h-6 bg-desert-green" />
@@ -137,7 +240,7 @@ export default function SettingsPage(props: {
             </h2>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              <div className="bg-desert-white rounded-lg p-6 border border-desert-stone-light shadow-sm hover:shadow-lg transition-shadow">
+              <div className="roachnet-card rounded-[1.5rem] border border-border-default p-6 transition-shadow hover:shadow-lg">
                 <CircularGauge
                   value={info?.currentLoad.currentLoad || 0}
                   label="CPU Usage"
@@ -147,7 +250,7 @@ export default function SettingsPage(props: {
                   icon={<IconCpu className="w-8 h-8" />}
                 />
               </div>
-              <div className="bg-desert-white rounded-lg p-6 border border-desert-stone-light shadow-sm hover:shadow-lg transition-shadow">
+              <div className="roachnet-card rounded-[1.5rem] border border-border-default p-6 transition-shadow hover:shadow-lg">
                 <CircularGauge
                   value={Number(memoryUsagePercent)}
                   label="Memory Usage"
@@ -157,7 +260,7 @@ export default function SettingsPage(props: {
                   icon={<IconDatabase className="w-8 h-8" />}
                 />
               </div>
-              <div className="bg-desert-white rounded-lg p-6 border border-desert-stone-light shadow-sm hover:shadow-lg transition-shadow">
+              <div className="roachnet-card rounded-[1.5rem] border border-border-default p-6 transition-shadow hover:shadow-lg">
                 <CircularGauge
                   value={Number(swapUsagePercent)}
                   label="Swap Usage"
@@ -246,36 +349,36 @@ export default function SettingsPage(props: {
               <div className="w-1 h-6 bg-desert-green" />
               Memory Allocation
             </h2>
-            <div className="bg-desert-white rounded-lg p-8 border border-desert-stone-light shadow-sm hover:shadow-lg transition-shadow">
+            <div className="roachnet-card rounded-[1.75rem] border border-border-default p-8 transition-shadow hover:shadow-lg">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
                 <div className="text-center">
-                  <div className="text-3xl font-bold text-desert-green mb-1">
+                  <div className="mb-1 text-3xl font-bold text-desert-green-light">
                     {formatBytes(info?.mem.total || 0)}
                   </div>
-                  <div className="text-sm text-desert-stone-dark uppercase tracking-wide">
+                  <div className="text-sm uppercase tracking-wide text-text-secondary">
                     Total RAM
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="text-3xl font-bold text-desert-green mb-1">
+                  <div className="mb-1 text-3xl font-bold text-desert-green-light">
                     {formatBytes(memoryUsed)}
                   </div>
-                  <div className="text-sm text-desert-stone-dark uppercase tracking-wide">
+                  <div className="text-sm uppercase tracking-wide text-text-secondary">
                     Used RAM
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="text-3xl font-bold text-desert-green mb-1">
+                  <div className="mb-1 text-3xl font-bold text-desert-green-light">
                     {formatBytes(info?.mem.available || 0)}
                   </div>
-                  <div className="text-sm text-desert-stone-dark uppercase tracking-wide">
+                  <div className="text-sm uppercase tracking-wide text-text-secondary">
                     Available RAM
                   </div>
                 </div>
               </div>
-              <div className="relative h-12 bg-desert-stone-lighter rounded-lg overflow-hidden border border-desert-stone-light">
+              <div className="relative h-12 overflow-hidden rounded-lg border border-border-subtle bg-surface-secondary/80">
                 <div
-                  className="absolute left-0 top-0 h-full bg-desert-orange transition-all duration-1000"
+                  className="absolute left-0 top-0 h-full bg-[linear-gradient(90deg,#00ff00,#ff00ff,#9c6b2f)] transition-all duration-1000"
                   style={{ width: `${memoryUsagePercent}%` }}
                 ></div>
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -292,7 +395,7 @@ export default function SettingsPage(props: {
               Storage Devices
             </h2>
 
-            <div className="bg-desert-white rounded-lg p-8 border border-desert-stone-light shadow-sm hover:shadow-lg transition-shadow">
+            <div className="roachnet-card rounded-[1.75rem] border border-border-default p-8 transition-shadow hover:shadow-lg">
               {storageItems.length > 0 ? (
                 <HorizontalBarChart
                   items={storageItems}
@@ -316,7 +419,7 @@ export default function SettingsPage(props: {
                   ]}
                 />
               ) : (
-                <div className="text-center text-desert-stone-dark py-8">
+                <div className="py-8 text-center text-text-secondary">
                   No storage devices detected
                 </div>
               )}

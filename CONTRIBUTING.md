@@ -1,187 +1,131 @@
-# Contributing to Project N.O.M.A.D.
+# Contributing to RoachNet
 
-Thank you for your interest in contributing to Project N.O.M.A.D.! Community contributions are what keep this project growing and improving. Please read this guide fully before getting started — it will save you (and the maintainers) a lot of time.
-
-> **Note:** Acceptance of contributions is not guaranteed. All pull requests are evaluated based on quality, relevance, and alignment with the project's goals. The maintainers of Project N.O.M.A.D. ("Nomad") reserve the right accept, deny, or modify any pull request at their sole discretion.
-
----
-
-## Table of Contents
-
-- [Code of Conduct](#code-of-conduct)
-- [Before You Start](#before-you-start)
-- [Getting Started](#getting-started)
-- [Development Workflow](#development-workflow)
-- [Commit Messages](#commit-messages)
-- [Release Notes](#release-notes)
-- [Versioning](#versioning)
-- [Submitting a Pull Request](#submitting-a-pull-request)
-- [Feedback & Community](#feedback--community)
-
----
-
-## Code of Conduct
-
-Please read and review our full [Code of Conduct](https://github.com/Crosstalk-Solutions/project-nomad/blob/main/CODE_OF_CONDUCT.md) before contributing. In short: please be respectful and considerate in all interactions with maintainers and other contributors.
-
-We are committed to providing a welcoming environment for everyone. Disrespectful or abusive behavior will not be tolerated. 
-
----
+RoachNet is being built into an offline-first command center with local AI, maps, content archives, and guided runtime management. Contributions are welcome, but they need to move the project toward that goal rather than back toward a generic Docker-only mirror of the imported upstream base.
 
 ## Before You Start
 
-**Open an issue first.** Before writing any code, please [open an issue](../../issues/new) to discuss your proposed change. This helps avoid duplicate work and ensures your contribution aligns with the project's direction.
+1. Open or review an issue first so the work is aligned before code lands.
+2. Read [README.md](README.md), [docs/LOCAL_BOOT.md](docs/LOCAL_BOOT.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
+3. Keep privacy, offline capability, and local-first operation in mind when proposing changes.
 
-When opening an issue:
-- Use a clear, descriptive title
-- Describe the problem you're solving or the feature you want to add
-- If it's a bug, include steps to reproduce it and as much detail about your environment as possible
-- Ensure you redact any personal or sensitive information in any logs, configs, etc.
+## Development Priorities
 
----
+Changes are especially valuable when they improve one of these areas:
 
-## Getting Started with Contributing
-**Please note**: this is the Getting Started guide for developing and contributing to Nomad, NOT [installing Nomad](https://github.com/Crosstalk-Solutions/project-nomad/blob/main/README.md) for regular use! 
+- Apple Silicon performance and efficiency
+- Local runtime management for Ollama and OpenClaw
+- Guided onboarding and settings UX
+- Offline content workflows
+- Stability and clear diagnostics
 
-### Prerequisites
+## Local Setup
 
-- A Debian-based OS (Ubuntu recommended)
-- `sudo`/root privileges
-- Docker installed and running
-- A stable internet connection (required for dependency downloads)
-- Node.js (for frontend/admin work)
+Follow the boot guide in [docs/LOCAL_BOOT.md](docs/LOCAL_BOOT.md). The current local development flow uses:
 
-### Fork & Clone
+- Node.js 22
+- MySQL
+- Redis
+- The `admin/` app for the current backend and Inertia UI
 
-1. Click **Fork** at the top right of this repository
-2. Clone your fork locally:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/project-nomad.git
-   cd project-nomad
-   ```
-3. Add the upstream remote so you can stay in sync:
-   ```bash
-   git remote add upstream https://github.com/Crosstalk-Solutions/project-nomad.git
-   ```
+Apple Silicon contributors should prefer arm64-native tools and local AI runtimes where possible.
 
-### Avoid Installing a Release Version Locally
-Because Nomad relies heavily on Docker, we actually recommend against installing a release version of the project on the same local machine where you are developing. This can lead to conflicts with ports, volumes, and other resources. Instead, you can run your development version in a separate Docker environment while keeping your local machine clean. It certainly __can__ be done, but it adds complexity to your setup and workflow. If you choose to install a release version locally, please ensure you have a clear strategy for managing potential conflicts and resource usage.
+## Fork, Clone, and Remotes
 
----
+Clone your fork:
 
-## Development Workflow
+```bash
+git clone https://github.com/YOUR_USERNAME/RoachNet.git
+cd RoachNet
+```
 
-1. **Sync with upstream** before starting any new work. We prefer rebasing over merge commits to keep a clean, linear git history as much as possible (this also makes it easier for maintainers to review and merge your changes). To sync with upstream:
-   ```bash
-   git fetch upstream
-   git checkout main
-   git rebase upstream/main
-   ```
+Point `origin` at your fork and keep the main RoachNet repo as the primary sync target:
 
-2. **Create a feature branch** off `main` with a descriptive name:
-   ```bash
-   git checkout -b fix/issue-123
-   # or
-   git checkout -b feature/add-new-tool
-   ```
+```bash
+git remote add upstream https://github.com/AHGRoach/RoachNet.git
+```
 
-3. **Make your changes.** Follow existing code style and conventions. Test your changes locally against a running N.O.M.A.D. instance before submitting.
+If you are working on upstream-base synchronization, there is also a separate imported-source remote documented in [docs/UPSTREAM.md](docs/UPSTREAM.md).
 
-4. **Add release notes** (see [Release Notes](#release-notes) below).
+## Workflow
 
-5. **Commit your changes** using [Conventional Commits](#commit-messages).
+1. Sync with the main branch before new work:
 
-6. **Push your branch** and open a pull request.
+```bash
+git fetch upstream
+git checkout main
+git rebase upstream/main
+```
 
----
+2. Create a focused branch:
+
+```bash
+git checkout -b feature/your-change
+```
+
+3. Make the change with a bias toward:
+
+- native local runtimes over unnecessary container indirection
+- Apple Silicon efficiency
+- dark RoachNet brand styling
+- maintainable, explicit code over clever shortcuts
+
+4. Add release notes for user-facing changes in [admin/docs/release-notes.md](admin/docs/release-notes.md).
+
+5. Test what you changed locally.
+
+6. Push the branch and open a pull request.
 
 ## Commit Messages
 
-This project uses [Conventional Commits](https://www.conventionalcommits.org/). All commit messages must follow this format:
+Use Conventional Commits:
 
-```
+```text
 <type>(<scope>): <description>
 ```
 
-**Common types:**
+Examples:
 
-| Type | When to use |
-|------|-------------|
-| `feat` | A new user-facing feature |
-| `fix` | A bug fix |
-| `docs` | Documentation changes only |
-| `refactor` | Code change that isn't a fix or feature and does not affect functionality |
-| `chore` | Build process, dependency updates, tooling |
-| `test` | Adding or updating tests |
-
-**Scope** is optional but encouraged — use it to indicate the area of the codebase affected (e.g., `api`, `ui`, `maps`).
-
-**Examples:**
+```text
+feat(ai): add OpenClaw provider diagnostics
+fix(system): reduce hardware probe overhead on Apple Silicon
+docs: refresh local boot guide for RoachNet branding
 ```
-feat(ui): add dark mode toggle to Command Center
-fix(api): resolve container status not updating after restart
-docs: update hardware requirements in README
-chore(deps): bump docker-compose to v2.24
-```
-
----
 
 ## Release Notes
 
-Human-readable release notes live in [`admin/docs/release-notes.md`](admin/docs/release-notes.md) and are displayed directly in the Command Center UI.
+Human-readable release notes live in [admin/docs/release-notes.md](admin/docs/release-notes.md).
 
-When your changes include anything user-facing, **add a summary to the `## Unreleased` section** at the top of that file under the appropriate heading:
+When the change affects users, add an entry under `## Unreleased` using:
 
-- **Features** — new user-facing capabilities
-- **Bug Fixes** — corrections to existing behavior
-- **Improvements** — enhancements, refactors, docs, or dependency updates
-
-Use the format `- **Area**: Description` to stay consistent with existing entries.
-
-**Example:**
 ```markdown
-## Unreleased
-
-### Features
-- **Maps**: Added support for downloading South America regional maps
-
-### Bug Fixes
-- **AI Chat**: Fixed document upload failing on filenames with special characters
+- **Area**: Description
 ```
 
-> When a release is triggered, CI automatically stamps the version and date, commits the update, and publishes the content to the GitHub release. You do not need to do this manually.
+## Pull Requests
 
----
+A good PR should include:
 
-## Versioning
+- what changed
+- why it changed
+- how it was tested
+- any runtime or environment assumptions
 
-This project uses [Semantic Versioning](https://semver.org/). Versions are managed in the root `package.json` and updated automatically by `semantic-release`. The `project-nomad` Docker image uses this version. The `admin/package.json` version stays at `0.0.0` and should not be changed manually.
+If the change touches performance, call out the target hardware and whether Apple Silicon behavior was checked.
 
----
+## Style and Scope
 
-## Submitting a Pull Request
+Please avoid changes that:
 
-1. Push your branch to your fork:
-   ```bash
-   git push origin your-branch-name
-   ```
-2. Open a pull request against the `main` branch of this repository
-3. In the PR description:
-   - Summarize what your changes do and why
-   - Reference the related issue (e.g., `Closes #123`)
-   - Note any relevant testing steps or environment details
-4. Be responsive to feedback — maintainers may request changes. Pull requests with no activity for an extended period may be closed.
+- reintroduce upstream branding
+- assume Docker is the only valid runtime path
+- add unnecessary network dependencies to offline workflows
+- weaken local privacy guarantees without a strong reason
 
----
+## Community
 
-## Feedback & Community
+RoachNet coordination currently lives in the repository:
 
-Have questions or want to discuss ideas before opening an issue? Join the community:
+- Issues: [github.com/AHGRoach/RoachNet/issues](https://github.com/AHGRoach/RoachNet/issues)
+- Discussions: [github.com/AHGRoach/RoachNet/discussions](https://github.com/AHGRoach/RoachNet/discussions)
 
-- **Discord:** [Join the Crosstalk Solutions server](https://discord.com/invite/crosstalksolutions) — the best place to get help, share your builds, and talk with other N.O.M.A.D. users
-- **Website:** [www.projectnomad.us](https://www.projectnomad.us)
-- **Benchmark Leaderboard:** [benchmark.projectnomad.us](https://benchmark.projectnomad.us)
-
----
-
-*Project N.O.M.A.D. is licensed under the [Apache License 2.0](LICENSE).*
+RoachNet is licensed under the [Apache License 2.0](LICENSE).

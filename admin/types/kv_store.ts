@@ -9,6 +9,8 @@ export const KV_STORE_SCHEMA = {
   'ui.hasVisitedEasySetup':     'boolean',
   'ui.theme':                   'string',
   'ai.assistantCustomName':     'string',
+  'ai.ollamaBaseUrl':           'string',
+  'ai.openclawBaseUrl':         'string',
   'gpu.type':                   'string',
 } as const
 

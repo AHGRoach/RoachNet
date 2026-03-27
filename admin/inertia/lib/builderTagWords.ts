@@ -1,4 +1,4 @@
-// Builder Tag word lists for generating unique, NOMAD-themed identifiers
+// Builder Tag word lists for generating unique, RoachNet-themed identifiers
 // Format: [Adjective]-[Noun]-[4-digit number]
 
 export const ADJECTIVES = [
@@ -10,7 +10,7 @@ export const ADJECTIVES = [
   'Silent',
   'Covert',
   'Lone',
-  'Nomad',
+  'RoachNet',
   'Digital',
   'Cyber',
   'Off-Grid',
@@ -35,6 +35,8 @@ export const ADJECTIVES = [
   'Carbon',
   'Quantum',
   'Neural',
+  'Neon',
+  'Hex',
   'Alpha',
   'Omega',
   'Delta',
@@ -52,6 +54,7 @@ export const ADJECTIVES = [
   'Vigilant',
   'Outland',
   'Frontier',
+  'Swarm',
 ] as const
 
 export const NOUNS = [
@@ -75,7 +78,7 @@ export const NOUNS = [
   'Scout',
   'Survivor',
   'Prepper',
-  'Nomad',
+  'Roach',
   'Wanderer',
   'Drifter',
   'Outpost',
@@ -101,6 +104,8 @@ export const NOUNS = [
   'Nexus',
   'Archive',
   'Relay',
+  'Hive',
+  'Carapace',
   'Silo',
   'Depot',
   'Bastion',

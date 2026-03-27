@@ -13,28 +13,40 @@ import Fuse, { IFuseOptions } from 'fuse.js'
 import { BROADCAST_CHANNELS } from '../../constants/broadcast.js'
 import env from '#start/env'
 import { NOMAD_API_DEFAULT_BASE_URL } from '../../constants/misc.js'
+import type { AIRuntimeSource, AIRuntimeStatus } from '../../types/ai.js'
+import KVStore from '#models/kv_store'
 
 const NOMAD_MODELS_API_PATH = '/api/v1/ollama/models'
 const MODELS_CACHE_FILE = path.join(process.cwd(), 'storage', 'ollama-models-cache.json')
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 hours
+const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 
 @inject()
 export class OllamaService {
   private ollama: Ollama | null = null
   private ollamaInitPromise: Promise<void> | null = null
+  private ollamaHost: string | null = null
 
   constructor() { }
 
   private async _initializeOllamaClient() {
     if (!this.ollamaInitPromise) {
       this.ollamaInitPromise = (async () => {
-        const dockerService = new (await import('./docker_service.js')).DockerService()
-        const qdrantUrl = await dockerService.getServiceURL(SERVICE_NAMES.OLLAMA)
-        if (!qdrantUrl) {
-          throw new Error('Ollama service is not installed or running.')
+        const runtimeStatus = await this.getRuntimeStatus()
+        if (!runtimeStatus.available || !runtimeStatus.baseUrl) {
+          throw new Error(runtimeStatus.error || 'Ollama service is not installed or running.')
         }
-        this.ollama = new Ollama({ host: qdrantUrl })
-      })()
+
+        if (!this.ollama || this.ollamaHost !== runtimeStatus.baseUrl) {
+          this.ollamaHost = runtimeStatus.baseUrl
+          this.ollama = new Ollama({ host: runtimeStatus.baseUrl })
+        }
+      })().catch((error) => {
+        this.ollama = null
+        this.ollamaHost = null
+        this.ollamaInitPromise = null
+        throw error
+      })
     }
     return this.ollamaInitPromise
   }
@@ -131,6 +143,42 @@ export class OllamaService {
   public async getClient() {
     await this._ensureDependencies()
     return this.ollama!
+  }
+
+  public async getRuntimeStatus(): Promise<AIRuntimeStatus> {
+    let lastError: string | null = null
+
+    const primaryCandidates = await this.getPrimaryRuntimeCandidates()
+
+    for (const candidate of primaryCandidates) {
+      const runtimeStatus = await this.checkRuntimeCandidate(candidate.baseUrl, candidate.source)
+      if (runtimeStatus.available) {
+        return runtimeStatus
+      }
+
+      lastError = runtimeStatus.error || lastError
+    }
+
+    const dockerCandidate = await this.getDockerRuntimeCandidate()
+    if (dockerCandidate) {
+      const dockerRuntimeStatus = await this.checkRuntimeCandidate(
+        dockerCandidate.baseUrl,
+        dockerCandidate.source
+      )
+      if (dockerRuntimeStatus.available) {
+        return dockerRuntimeStatus
+      }
+
+      lastError = dockerRuntimeStatus.error || lastError
+    }
+
+    return {
+      provider: 'ollama',
+      available: false,
+      source: 'none',
+      baseUrl: null,
+      error: lastError || 'Ollama runtime is not available.',
+    }
   }
 
   public async chat(chatRequest: ChatRequest & { stream?: boolean }) {
@@ -342,6 +390,105 @@ export class OllamaService {
         `[OllamaService] Failed to write models cache: ${error instanceof Error ? error.message : error}`
       )
     }
+  }
+
+  private async getPrimaryRuntimeCandidates(): Promise<Array<{ baseUrl: string; source: AIRuntimeSource }>> {
+    const settingUrl = (await KVStore.getValue('ai.ollamaBaseUrl'))?.trim()
+    const configuredUrl = env.get('OLLAMA_BASE_URL')?.trim()
+    const candidates: Array<{ baseUrl: string; source: AIRuntimeSource }> = []
+    const seen = new Set<string>()
+
+    const addCandidate = (baseUrl: string | null | undefined, source: AIRuntimeSource) => {
+      if (!baseUrl) {
+        return
+      }
+
+      const normalizedBaseUrl = this.normalizeBaseUrl(baseUrl)
+      if (seen.has(normalizedBaseUrl)) {
+        return
+      }
+
+      seen.add(normalizedBaseUrl)
+      candidates.push({ baseUrl: normalizedBaseUrl, source })
+    }
+
+    addCandidate(settingUrl, 'configured')
+    addCandidate(configuredUrl, 'configured')
+    addCandidate(DEFAULT_OLLAMA_BASE_URL, 'local')
+
+    return candidates
+  }
+
+  private async getDockerRuntimeCandidate(): Promise<{ baseUrl: string; source: AIRuntimeSource } | null> {
+    try {
+      const dockerService = new (await import('./docker_service.js')).DockerService()
+      const dockerUrl = await dockerService.getServiceURL(SERVICE_NAMES.OLLAMA)
+      if (!dockerUrl) {
+        return null
+      }
+
+      return {
+        baseUrl: this.normalizeBaseUrl(dockerUrl),
+        source: 'docker',
+      }
+    } catch (error) {
+      logger.debug(
+        `[OllamaService] Skipping Docker runtime candidate lookup: ${error instanceof Error ? error.message : error}`
+      )
+      return null
+    }
+  }
+
+  private async checkRuntimeCandidate(
+    baseUrl: string,
+    source: AIRuntimeSource
+  ): Promise<AIRuntimeStatus> {
+    try {
+      await axios.get(this.buildRuntimeUrl(baseUrl, '/api/version'), { timeout: 10000 })
+
+      return {
+        provider: 'ollama',
+        available: true,
+        source,
+        baseUrl,
+        error: null,
+      }
+    } catch (error) {
+      return {
+        provider: 'ollama',
+        available: false,
+        source,
+        baseUrl,
+        error: this.getRuntimeErrorMessage(baseUrl, error),
+      }
+    }
+  }
+
+  private buildRuntimeUrl(baseUrl: string, pathname: string): string {
+    const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+    return new URL(pathname.replace(/^\//, ''), normalizedBaseUrl).toString()
+  }
+
+  private normalizeBaseUrl(baseUrl: string): string {
+    return baseUrl.trim().replace(/\/+$/, '')
+  }
+
+  private getRuntimeErrorMessage(baseUrl: string, error: unknown): string {
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status) {
+        return `Ollama runtime at ${baseUrl} returned HTTP ${error.response.status}.`
+      }
+
+      if (error.code) {
+        return `Ollama runtime at ${baseUrl} is not reachable (${error.code}).`
+      }
+    }
+
+    if (error instanceof Error && error.message) {
+      return `Ollama runtime at ${baseUrl} is not reachable: ${error.message}`
+    }
+
+    return `Ollama runtime at ${baseUrl} is not reachable.`
   }
 
   private sortModels(models: NomadOllamaModel[], sort?: 'pulls' | 'name'): NomadOllamaModel[] {

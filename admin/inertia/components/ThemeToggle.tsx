@@ -12,13 +12,12 @@ export default function ThemeToggle({ compact = false }: ThemeToggleProps) {
   return (
     <button
       onClick={toggleTheme}
-      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-sm transition-colors
-                 text-desert-stone hover:text-desert-green-darker cursor-pointer"
-      aria-label={isDark ? 'Switch to Day Ops' : 'Switch to Night Ops'}
-      title={isDark ? 'Switch to Day Ops' : 'Switch to Night Ops'}
+      className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-secondary/80 px-3 py-1.5 text-sm text-text-secondary transition-colors hover:text-desert-green-light cursor-pointer"
+      aria-label={isDark ? 'Switch to daylight mode' : 'Switch to stealth mode'}
+      title={isDark ? 'Switch to daylight mode' : 'Switch to stealth mode'}
     >
       {isDark ? <IconSun className="size-4" /> : <IconMoon className="size-4" />}
-      {!compact && <span>{isDark ? 'Day Ops' : 'Night Ops'}</span>}
+      {!compact && <span>{isDark ? 'Daylight' : 'Stealth'}</span>}
     </button>
   )
 }

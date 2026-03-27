@@ -5,6 +5,7 @@ import { ChatSession } from '../../../types/chat'
 import { IconMessage } from '@tabler/icons-react'
 import { useState } from 'react'
 import KnowledgeBaseModal from './KnowledgeBaseModal'
+import RoachNetBrand from '../RoachNetBrand'
 
 interface ChatSidebarProps {
   sessions: ChatSession[]
@@ -89,7 +90,12 @@ export default function ChatSidebar({
         )}
       </div>
       <div className="p-4 flex flex-col items-center justify-center gap-y-2">
-        <img src="/project_nomad_logo.png" alt="Project Nomad Logo" className="h-28 w-28 mb-6" />
+        <RoachNetBrand
+          size="md"
+          subtitle={aiAssistantName}
+          align="center"
+          className="mb-4 flex-col"
+        />
         <StyledButton
           onClick={() => {
             if (isInModal) {

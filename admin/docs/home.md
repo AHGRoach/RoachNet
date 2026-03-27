@@ -1,12 +1,12 @@
-# Welcome to Project N.O.M.A.D.
+# Welcome to RoachNet
 
-Your personal offline knowledge server is ready to use.
+Your offline command grid is ready to use.
 
-## What is N.O.M.A.D.?
+## What is RoachNet?
 
-**N.O.M.A.D.** stands for **Node for Offline Media, Archives, and Data**. It's your personal server for accessing knowledge, education, and AI assistance — even when you have no internet connection.
+**RoachNet** is an offline-first command center for knowledge, education, local AI, maps, and field-ready utilities when the network is unavailable or unreliable.
 
-Think of it as having Wikipedia, Khan Academy, an AI assistant, and offline maps all in one place, running on hardware you control.
+Think of it as having Wikipedia, education tools, local AI, and offline maps all in one place, running on hardware you control.
 
 ![Command Center Dashboard](/docs/dashboard.png)
 
@@ -38,7 +38,7 @@ Navigate and explore maps without an internet connection. Download regions you n
 **[Open Maps →](/maps)**
 
 ### Benchmark Your Hardware
-Run a System Benchmark to see how your hardware performs and compare your NOMAD Score with the community leaderboard.
+Run a System Benchmark to see how your hardware performs and compare your RoachNet Score with the community leaderboard.
 
 **[Open Benchmark →](/settings/benchmark)**
 
@@ -46,7 +46,7 @@ Run a System Benchmark to see how your hardware performs and compare your NOMAD 
 
 ## Getting Started
 
-**New to N.O.M.A.D.?** Use the Easy Setup wizard to configure your server and download content collections.
+**New to RoachNet?** Use the Easy Setup wizard to configure your system and download content collections.
 
 **[Run Easy Setup →](/easy-setup)**
 
@@ -72,7 +72,7 @@ Or explore the **[Getting Started Guide](/docs/getting-started)** for a walkthro
 
 ## Keeping Your Server Updated
 
-N.O.M.A.D. works best when kept up to date while you have internet access. This ensures you have the latest:
+RoachNet works best when kept up to date while you have internet access. This ensures you have the latest:
 - Software features and bug fixes
 - Wikipedia and reference content
 - Educational materials

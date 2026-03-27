@@ -1,8 +1,14 @@
 import axios, { AxiosError, AxiosInstance } from 'axios'
+import type { AIRuntimeProvidersResponse } from '../../types/ai'
 import { ListRemoteZimFilesResponse, ListZimFilesResponse } from '../../types/zim'
 import { ServiceSlim } from '../../types/services'
 import { FileEntry } from '../../types/files'
-import { CheckLatestVersionResult, SystemInformationResponse, SystemUpdateStatus } from '../../types/system'
+import {
+  CheckLatestVersionResult,
+  SystemInformationResponse,
+  SystemUpdateStatus,
+  UpstreamSyncStatus,
+} from '../../types/system'
 import { DownloadJobWithProgress, WikipediaState } from '../../types/downloads'
 import { EmbedJobWithProgress } from '../../types/rag'
 import type { CategoryWithStatus, CollectionWithStatus, ContentUpdateCheckResult, ResourceUpdateInfo } from '../../types/collections'
@@ -447,6 +453,13 @@ class API {
     })()
   }
 
+  async getAIRuntimeProviders() {
+    return catchInternal(async () => {
+      const response = await this.client.get<AIRuntimeProvidersResponse>('/system/ai/providers')
+      return response.data
+    })()
+  }
+
   async getSystemUpdateStatus() {
     return catchInternal(async () => {
       const response = await this.client.get<SystemUpdateStatus>('/system/update/status')
@@ -457,6 +470,22 @@ class API {
   async getSystemUpdateLogs() {
     return catchInternal(async () => {
       const response = await this.client.get<{ logs: string }>('/system/update/logs')
+      return response.data
+    })()
+  }
+
+  async getUpstreamSyncStatus(force: boolean = false) {
+    return catchInternal(async () => {
+      const response = await this.client.get<UpstreamSyncStatus>('/system/upstream-sync/status', {
+        params: { force },
+      })
+      return response.data
+    })()
+  }
+
+  async getUpstreamSyncLogs() {
+    return catchInternal(async () => {
+      const response = await this.client.get<{ logs: string }>('/system/upstream-sync/logs')
       return response.data
     })()
   }
@@ -577,6 +606,15 @@ class API {
     return catchInternal(async () => {
       const response = await this.client.post<{ success: boolean; message: string }>(
         '/system/update'
+      )
+      return response.data
+    })()
+  }
+
+  async startUpstreamSync() {
+    return catchInternal(async () => {
+      const response = await this.client.post<{ success: boolean; message: string }>(
+        '/system/upstream-sync'
       )
       return response.data
     })()

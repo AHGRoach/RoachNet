@@ -21,6 +21,7 @@ import classNames from 'classnames'
 import type { CategoryWithStatus, SpecTier, SpecResource } from '../../../types/collections'
 import { resolveTierResources } from '~/lib/collections'
 import { SERVICE_NAMES } from '../../../constants/service_names'
+import useAIRuntimeStatus from '~/hooks/useAIRuntimeStatus'
 
 // Capability definitions - maps user-friendly categories to services
 interface Capability {
@@ -135,6 +136,7 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
   const { isOnline } = useInternetStatus()
   const queryClient = useQueryClient()
   const { data: systemInfo } = useSystemInfo({ enabled: true })
+  const aiRuntimeStatus = useAIRuntimeStatus('ollama')
 
   const anySelectionMade =
     selectedServices.length > 0 ||
@@ -332,7 +334,11 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
 
     try {
       // All of these ops don't actually wait for completion, they just kick off the process, so we can run them in parallel without awaiting each one sequentially
-      const installPromises = selectedServices.map((serviceName) => api.installService(serviceName))
+      const servicesToInstall = selectedServices.filter((serviceName) => {
+        return serviceName !== SERVICE_NAMES.OLLAMA || !aiRuntimeStatus.available
+      })
+
+      const installPromises = servicesToInstall.map((serviceName) => api.installService(serviceName))
 
       await Promise.all(installPromises)
 
@@ -489,6 +495,10 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
 
   // Check if a capability is already installed (all its services are installed)
   const isCapabilityInstalled = (capability: Capability) => {
+    if (capability.id === 'ai' && aiRuntimeStatus.available) {
+      return true
+    }
+
     return capability.services.every((service) =>
       installedServices.some((s) => s.service_name === service)
     )
@@ -523,6 +533,10 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
     const selected = isCapabilitySelected(capability)
     const installed = isCapabilityInstalled(capability)
     const exists = capabilityExists(capability)
+    const runtimeLinked =
+      capability.id === 'ai' &&
+      aiRuntimeStatus.available &&
+      !installedServices.some((service) => service.service_name === SERVICE_NAMES.OLLAMA)
 
     if (!exists) return null
 
@@ -554,8 +568,8 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
                 {capability.name}
               </h3>
               {installed && (
-                <span className="text-xs bg-desert-green text-white px-2 py-0.5 rounded-full">
-                  Installed
+                <span className="text-xs bg-desert-green text-desert-green-darker px-2 py-0.5 rounded-full uppercase tracking-[0.18em]">
+                  {runtimeLinked ? 'Linked' : 'Installed'}
                 </span>
               )}
             </div>
@@ -567,6 +581,11 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
             >
               Powered by {capability.technicalName}
             </p>
+            {runtimeLinked && aiRuntimeStatus.baseUrl && (
+              <p className="mt-2 text-xs uppercase tracking-[0.18em] text-desert-green-light">
+                Local runtime detected at {aiRuntimeStatus.baseUrl}
+              </p>
+            )}
             <p
               className={classNames(
                 'text-sm mt-3',
@@ -635,11 +654,20 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
     return (
       <div className="space-y-8">
         <div className="text-center mb-6">
-          <h2 className="text-3xl font-bold text-text-primary mb-2">What do you want NOMAD to do?</h2>
+          <h2 className="text-3xl font-bold text-text-primary mb-2">What do you want RoachNet to do?</h2>
           <p className="text-text-secondary">
             Select the capabilities you need. You can always add more later.
           </p>
         </div>
+
+        {aiRuntimeStatus.available && aiRuntimeStatus.baseUrl && (
+          <Alert
+            title={`${aiAssistantName} runtime already connected`}
+            message={`RoachNet found a local Ollama runtime at ${aiRuntimeStatus.baseUrl}. You can skip the managed install and go straight to model downloads.`}
+            type="info"
+            variant="bordered"
+          />
+        )}
 
         {allInstalled ? (
           <div className="text-center py-12">
@@ -746,7 +774,8 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
   const renderStep3 = () => {
     // Check if AI or Information capabilities are selected OR already installed
     const isAiSelected = selectedServices.includes(SERVICE_NAMES.OLLAMA) ||
-      installedServices.some((s) => s.service_name === SERVICE_NAMES.OLLAMA)
+      installedServices.some((s) => s.service_name === SERVICE_NAMES.OLLAMA) ||
+      aiRuntimeStatus.available
     const isInformationSelected = selectedServices.includes(SERVICE_NAMES.KIWIX) ||
       installedServices.some((s) => s.service_name === SERVICE_NAMES.KIWIX)
 
@@ -768,6 +797,15 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
         {/* AI Model Selection - Only show if AI capability is selected */}
         {isAiSelected && (
           <div className="mb-8">
+            {aiRuntimeStatus.available && aiRuntimeStatus.baseUrl && (
+              <Alert
+                title={`${aiAssistantName} is ready`}
+                message={`RoachNet will use your ${aiRuntimeStatus.source} runtime at ${aiRuntimeStatus.baseUrl} for model downloads and chat.`}
+                type="info"
+                variant="bordered"
+                className="mb-4"
+              />
+            )}
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-surface-primary border border-border-subtle flex items-center justify-center shadow-sm">
                 <IconCpu className="w-6 h-6 text-text-primary" />
@@ -963,6 +1001,20 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
           />
         ) : (
           <div className="space-y-6">
+            {(selectedServices.includes(SERVICE_NAMES.OLLAMA) || aiRuntimeStatus.available) && (
+              <div className="bg-surface-primary rounded-lg border-2 border-desert-stone-light p-6">
+                <h3 className="text-xl font-semibold text-text-primary mb-4">AI Runtime</h3>
+                <div className="flex items-center">
+                  <IconCheck size={20} className="text-desert-green mr-2" />
+                  <span className="text-text-primary">
+                    {aiRuntimeStatus.available
+                      ? `${aiAssistantName} will use the detected ${aiRuntimeStatus.source} runtime${aiRuntimeStatus.baseUrl ? ` at ${aiRuntimeStatus.baseUrl}` : ''}.`
+                      : `${aiAssistantName} will be installed as a managed local runtime.`}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {selectedServices.length > 0 && (
               <div className="bg-surface-primary rounded-lg border-2 border-desert-stone-light p-6">
                 <h3 className="text-xl font-semibold text-text-primary mb-4">
@@ -970,7 +1022,12 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
                 </h3>
                 <ul className="space-y-2">
                   {[...CORE_CAPABILITIES, ...ADDITIONAL_TOOLS]
-                    .filter((cap) => cap.services.some((s) => selectedServices.includes(s)))
+                    .filter((cap) =>
+                      cap.services.some((s) =>
+                        selectedServices.includes(s) &&
+                        !(cap.id === 'ai' && aiRuntimeStatus.available)
+                      )
+                    )
                     .map((capability) => (
                       <li key={capability.id} className="flex items-center">
                         <IconCheck size={20} className="text-desert-green mr-2" />
@@ -1086,7 +1143,7 @@ export default function EasySetupWizard(props: { system: { services: ServiceSlim
 
             <Alert
               title="Ready to Start"
-              message="Click 'Complete Setup' to begin installing apps and downloading content. This may take some time depending on your internet connection and the size of the downloads."
+              message="Click 'Complete Setup' to begin linking runtimes, installing apps, and downloading content. This may take some time depending on your internet connection and the size of the downloads."
               type="info"
               variant="solid"
             />
