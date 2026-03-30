@@ -43,3 +43,6 @@ admin/public/assets
 # Admin specific development files
 admin/storage
 admin/node_modules_node25_partial_20260327
+
+# Local Netlify folder
+.netlify
