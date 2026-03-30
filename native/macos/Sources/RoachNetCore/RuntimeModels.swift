@@ -205,7 +205,38 @@ public enum RoachNetRepositoryLocator {
             }
         }
 
+        if let bundledRoot = bundledRepositoryRoot() {
+            return bundledRoot
+        }
+
         return nil
+    }
+
+    public static func bundledRepositoryRoot() -> URL? {
+        guard let resourceURL = Bundle.main.resourceURL else {
+            return nil
+        }
+
+        let candidate = resourceURL.appendingPathComponent("RoachNetSource", isDirectory: true)
+        guard isRepositoryRoot(candidate) else {
+            return nil
+        }
+
+        return candidate
+    }
+
+    public static func bundledInstallerAssetsDirectory() -> URL? {
+        guard let resourceURL = Bundle.main.resourceURL else {
+            return nil
+        }
+
+        let candidate = resourceURL.appendingPathComponent("InstallerAssets", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return nil
+        }
+
+        return candidate
     }
 
     public static func configURL() -> URL {
@@ -276,13 +307,9 @@ public enum RoachNetRepositoryLocator {
 
     private static func ascendForRepoRoot(from start: URL) -> URL? {
         var current = start.standardizedFileURL
-        let fileManager = FileManager.default
 
         for _ in 0..<12 {
-            let script = current.appendingPathComponent("scripts/run-roachnet-setup.mjs").path
-            let package = current.appendingPathComponent("package.json").path
-
-            if fileManager.fileExists(atPath: script), fileManager.fileExists(atPath: package) {
+            if isRepositoryRoot(current) {
                 return current
             }
 
@@ -294,6 +321,13 @@ public enum RoachNetRepositoryLocator {
         }
 
         return nil
+    }
+
+    private static func isRepositoryRoot(_ candidate: URL) -> Bool {
+        let fileManager = FileManager.default
+        let script = candidate.appendingPathComponent("scripts/run-roachnet-setup.mjs").path
+        let package = candidate.appendingPathComponent("package.json").path
+        return fileManager.fileExists(atPath: script) && fileManager.fileExists(atPath: package)
     }
 }
 

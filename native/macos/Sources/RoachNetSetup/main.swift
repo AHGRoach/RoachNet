@@ -277,6 +277,11 @@ final class SetupController: ObservableObject {
         environment["ROACHNET_SETUP_NO_BROWSER"] = "1"
         environment["ROACHNET_SETUP_READY_FILE"] = readyFileURL.path
         environment["ROACHNET_REPO_ROOT"] = repoRoot.path
+        if let installerAssets = RoachNetRepositoryLocator.bundledInstallerAssetsDirectory() {
+            environment["ROACHNET_SETUP_APP_BUNDLE"] = installerAssets
+                .appendingPathComponent("setup-assets.marker")
+                .path
+        }
         process.environment = environment
 
         try process.run()

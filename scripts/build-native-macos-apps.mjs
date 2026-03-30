@@ -100,7 +100,97 @@ async function buildIcns() {
   return icnsPath
 }
 
-async function bundleApp({ name, executable, identifier, iconPath }) {
+function shouldIncludeBundledSourcePath(relativePath) {
+  if (!relativePath || relativePath === '') {
+    return true
+  }
+
+  const normalizedPath = relativePath.split(path.sep).join('/')
+  const segments = normalizedPath.split('/')
+  const topLevel = segments[0]
+
+  if (
+    [
+      '.git',
+      '.netlify',
+      '.native',
+      '.next',
+      '.turbo',
+      'dist',
+      'release',
+      'desktop-dist',
+      'setup-dist',
+      'node_modules',
+    ].includes(topLevel)
+  ) {
+    return false
+  }
+
+  if (
+    normalizedPath.startsWith('native/macos/.build/') ||
+    normalizedPath.startsWith('native/macos/dist/') ||
+    normalizedPath.startsWith('native/linux/target/') ||
+    normalizedPath.startsWith('native/windows/bin/') ||
+    normalizedPath.startsWith('native/windows/obj/')
+  ) {
+    return false
+  }
+
+  if (
+    normalizedPath === 'admin/node_modules' ||
+    normalizedPath === 'admin/storage' ||
+    normalizedPath === 'admin/build' ||
+    normalizedPath.startsWith('admin/node_modules/') ||
+    normalizedPath.startsWith('admin/storage/') ||
+    normalizedPath.startsWith('admin/build/') ||
+    normalizedPath.startsWith('installer/node_modules/') ||
+    normalizedPath.includes('/node_modules_node') ||
+    normalizedPath.includes('/storage/logs/') ||
+    normalizedPath.includes('/storage/tmp/')
+  ) {
+    return false
+  }
+
+  if (
+    normalizedPath === 'admin/.env' ||
+    normalizedPath === '.DS_Store' ||
+    normalizedPath.endsWith('/.DS_Store') ||
+    normalizedPath.endsWith('.dmg') ||
+    normalizedPath.endsWith('.zip') ||
+    normalizedPath.endsWith('.pkg') ||
+    normalizedPath.endsWith('.zim')
+  ) {
+    return false
+  }
+
+  return true
+}
+
+async function copyBundledSourceTree(destinationPath) {
+  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-source-staging-'))
+  const stagedSourcePath = path.join(stagingRoot, 'RoachNetSource')
+
+  rmSync(destinationPath, { recursive: true, force: true })
+  try {
+    await cp(repoRoot, stagedSourcePath, {
+      recursive: true,
+      force: true,
+      filter(source) {
+        const relativePath = path.relative(repoRoot, source)
+        return shouldIncludeBundledSourcePath(relativePath)
+      },
+    })
+
+    await cp(stagedSourcePath, destinationPath, {
+      recursive: true,
+      force: true,
+    })
+  } finally {
+    rmSync(stagingRoot, { recursive: true, force: true })
+  }
+}
+
+async function bundleApp({ name, executable, identifier, iconPath, prepareResources }) {
   const bundlePath = path.join(distPath, `${name}.app`)
   const contentsPath = path.join(bundlePath, 'Contents')
   const macOSPath = path.join(contentsPath, 'MacOS')
@@ -114,6 +204,10 @@ async function bundleApp({ name, executable, identifier, iconPath }) {
 
   if (iconPath) {
     await cp(iconPath, path.join(resourcesPath, 'RoachNet.icns'))
+  }
+
+  if (prepareResources) {
+    await prepareResources({ bundlePath, contentsPath, resourcesPath })
   }
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -160,17 +254,33 @@ async function main() {
   mkdirSync(distPath, { recursive: true })
   const binPath = await buildSwiftPackage()
   const iconPath = await buildIcns()
+  const desktopAppBundlePath = path.join(distPath, 'RoachNet.app')
 
   const apps = [
-    {
-      name: 'RoachNet Setup',
-      executable: path.join(binPath, 'RoachNetSetup'),
-      identifier: 'com.roachwares.roachnet.setup',
-    },
     {
       name: 'RoachNet',
       executable: path.join(binPath, 'RoachNetApp'),
       identifier: 'com.roachwares.roachnet',
+    },
+    {
+      name: 'RoachNet Setup',
+      executable: path.join(binPath, 'RoachNetSetup'),
+      identifier: 'com.roachwares.roachnet.setup',
+      prepareResources: async ({ resourcesPath }) => {
+        const bundledSourcePath = path.join(resourcesPath, 'RoachNetSource')
+        const installerAssetsPath = path.join(resourcesPath, 'InstallerAssets')
+
+        await copyBundledSourceTree(bundledSourcePath)
+        mkdirSync(installerAssetsPath, { recursive: true })
+        writeFileSync(path.join(installerAssetsPath, 'setup-assets.marker'), '', 'utf8')
+
+        if (existsSync(desktopAppBundlePath)) {
+          await cp(desktopAppBundlePath, path.join(installerAssetsPath, 'RoachNet.app'), {
+            recursive: true,
+            force: true,
+          })
+        }
+      },
     },
   ]
 
