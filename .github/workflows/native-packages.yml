@@ -18,6 +18,13 @@ jobs:
   build-native:
     name: Build macOS
     runs-on: macos-latest
+    env:
+      APPLE_DEVELOPER_ID_APP_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_BASE64 }}
+      APPLE_DEVELOPER_ID_APP_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD }}
+      APPLE_DEVELOPER_ID_APP_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APP_IDENTITY }}
+      APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+      APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+      APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
 
     steps:
       - name: Checkout
@@ -39,10 +46,10 @@ jobs:
         run: npm --prefix admin ci
 
       - name: Import Developer ID certificate
-        if: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_BASE64 != '' && secrets.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD != '' }}
+        if: ${{ env.APPLE_DEVELOPER_ID_APP_CERT_BASE64 != '' && env.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD != '' }}
         env:
-          APP_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_BASE64 }}
-          APP_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD }}
+          APP_CERT_BASE64: ${{ env.APPLE_DEVELOPER_ID_APP_CERT_BASE64 }}
+          APP_CERT_PASSWORD: ${{ env.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}-roachnet
         run: |
           CERT_PATH="$RUNNER_TEMP/roachnet-developer-id.p12"
@@ -60,11 +67,11 @@ jobs:
           echo "ROACHNET_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Configure notarization profile
-        if: ${{ secrets.APPLE_NOTARY_APPLE_ID != '' && secrets.APPLE_NOTARY_APP_PASSWORD != '' && secrets.APPLE_NOTARY_TEAM_ID != '' && env.ROACHNET_SIGNING_KEYCHAIN != '' }}
+        if: ${{ env.APPLE_NOTARY_APPLE_ID != '' && env.APPLE_NOTARY_APP_PASSWORD != '' && env.APPLE_NOTARY_TEAM_ID != '' && env.ROACHNET_SIGNING_KEYCHAIN != '' }}
         env:
-          APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_ID: ${{ env.APPLE_NOTARY_APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ env.APPLE_NOTARY_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ env.APPLE_NOTARY_TEAM_ID }}
         run: |
           xcrun notarytool store-credentials roachnet-notary \
             --apple-id "$APPLE_ID" \
@@ -77,7 +84,7 @@ jobs:
 
       - name: Build native macOS packages
         env:
-          ROACHNET_CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APP_IDENTITY }}
+          ROACHNET_CODESIGN_IDENTITY: ${{ env.APPLE_DEVELOPER_ID_APP_IDENTITY }}
           ROACHNET_NOTARY_PROFILE: ${{ env.ROACHNET_NOTARY_PROFILE }}
           ROACHNET_NOTARY_KEYCHAIN: ${{ env.ROACHNET_NOTARY_KEYCHAIN }}
         run: node scripts/build-native-macos-apps.mjs
