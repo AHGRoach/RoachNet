@@ -39,6 +39,20 @@ Signing and Gatekeeper:
   - `APPLE_NOTARY_APPLE_ID`
   - `APPLE_NOTARY_APP_PASSWORD`
   - `APPLE_NOTARY_TEAM_ID`
+- You can push those secrets into GitHub with one command once you have the certificate and notary credentials:
+
+```bash
+export APPLE_DEVELOPER_ID_APP_CERT_PATH="$HOME/Downloads/RoachNet-Developer-ID.p12"
+export APPLE_DEVELOPER_ID_APP_CERT_PASSWORD="your-p12-export-password"
+export APPLE_DEVELOPER_ID_APP_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export APPLE_NOTARY_APPLE_ID="you@example.com"
+export APPLE_NOTARY_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+export APPLE_NOTARY_TEAM_ID="TEAMID1234"
+npm run release:apple-secrets
+```
+
+- If you already have the certificate as a base64 string, set `APPLE_DEVELOPER_ID_APP_CERT_BASE64` instead of `APPLE_DEVELOPER_ID_APP_CERT_PATH`.
+- The App Store Connect password here is the Apple app-specific password used by `notarytool`.
 - When those secrets are present, `scripts/build-native-macos-apps.mjs` signs with Developer ID and the workflow notarizes plus staples the macOS artifacts.
 
 This scaffold is intentionally focused on:

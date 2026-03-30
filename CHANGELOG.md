@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added a repo-native Apple release secret bootstrapper at `scripts/configure-apple-release-secrets.sh` plus an `npm run release:apple-secrets` wrapper so Developer ID and notarization credentials can be loaded into GitHub with one repeatable command.
+- Expanded the native macOS README with the exact environment variables and command sequence needed to wire the `Native Packages` workflow for a real Gatekeeper-safe notarized build.
+
 ## v1.30.6 - 2026-03-30
 
 ### Native macOS and onboarding
