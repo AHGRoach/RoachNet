@@ -6,7 +6,6 @@
 
 - Reworked the native macOS app shell so the product surfaces are back in the app instead of hidden behind the reduced summary shell.
 - Restored native panes for `Suite`, `Maps`, `Education`, `Archives`, `Vault`, and `Runtime`.
-- Tightened the native macOS copy and hierarchy so the app and setup flow read more like the website and less like internal tooling.
 - Rebuilt the native macOS app and installer bundles with the current RoachNet icon and refreshed UI copy.
 
 ### RoachClaw and local AI
@@ -20,15 +19,12 @@
 
 ### Installer and setup
 
-- Continued the shift to a separate installer-first product flow where setup happens before the main app opens.
 - Updated setup defaults so RoachClaw now prefers `qwen2.5-coder:7b` as the default local model.
 - Improved setup and shell copy so the product voice is calmer and more human.
 - Kept runtime orchestration and installer config aligned between the setup flow and the native app.
 
 ### Website and branding
 
-- Restructured `roachnet.org` to sell the product first and push setup details lower on the page.
-- Rewrote the landing-page copy in a friendlier, more human voice centered on local-first use rather than infrastructure.
 - Refined the feature structure around `Command Deck`, `RoachClaw`, `Offline Maps & Vault`, and contained installs.
 - Kept the public macOS installer download live from `roachnet.org`.
 
