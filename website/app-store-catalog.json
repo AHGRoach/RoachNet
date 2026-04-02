@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-04-01T18:55:00-04:00",
+  "updatedAt": "2026-04-02T17:25:00-04:00",
   "items": [
     {
       "title": "Field Maps",
@@ -28,17 +28,17 @@
       "status": "Contained first",
       "source": "Ollama + RoachNet curation",
       "summary": "Machine-aware local models recommended from the user’s specs, with contained installs and a cloud lane fallback for first boot.",
-      "primaryLabel": "Download RoachNet 1.30.5",
+      "primaryLabel": "Download RoachNet 1.30.6",
       "primaryUrl": "https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-macOS.dmg"
     },
     {
-      "title": "Field Ops Toolkit",
+      "title": "Developer Toolchain",
       "kind": "Tools",
       "size": "500 MB-8 GB",
-      "status": "Planning",
-      "source": "Jam, CyberChef, dev utilities",
-      "summary": "A future catalog lane for offline-friendly dev and field tools that should install from RoachNet’s mirror instead of scattered upstream download pages.",
-      "primaryLabel": "Open wikipedia manifest",
+      "status": "Design ready",
+      "source": "Jam, CyberChef, Dev surfaces",
+      "summary": "The same backend can stage future Jam-ready utilities, data-lab tools, and RoachNet Dev workspace downloads through one mirror-backed catalog.",
+      "primaryLabel": "Open tooling manifest",
       "primaryUrl": "./collections/wikipedia.json"
     }
   ]

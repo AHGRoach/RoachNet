@@ -414,7 +414,7 @@ public enum RoachNetRepositoryLocator {
     }
 }
 
-private extension JSONEncoder {
+extension JSONEncoder {
     static var pretty: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

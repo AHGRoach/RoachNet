@@ -1,6 +1,6 @@
 const owner = 'AHGRoach'
 const repo = 'RoachNet'
-const releaseVersion = '1.30.5'
+const releaseVersion = '1.30.6'
 const latestReleaseApi = `https://api.github.com/repos/${owner}/${repo}/releases/latest`
 const latestReleasePage = `https://github.com/${owner}/${repo}/releases/latest`
 const latestDownloadBase = `https://github.com/${owner}/${repo}/releases/latest/download`
@@ -48,7 +48,7 @@ let selectedCommandIndex = -1
 let timeTicker = null
 
 const fallbackCatalog = {
-  updatedAt: '2026-04-01T12:00:00-04:00',
+  updatedAt: '2026-04-02T17:25:00-04:00',
   items: [
     {
       title: 'Field Maps',
@@ -81,13 +81,13 @@ const fallbackCatalog = {
       primaryUrl: hostedDownloads.mac.url,
     },
     {
-      title: 'Field Ops Toolkit',
+      title: 'Developer Toolchain',
       kind: 'Tools',
       size: '500 MB-8 GB',
-      status: 'Planning',
-      source: 'Jam, CyberChef, dev utilities',
-      summary: 'Curated offline-friendly utility bundles staged through one catalog instead of a mess of installer links.',
-      primaryLabel: 'Open wikipedia manifest',
+      status: 'Design ready',
+      source: 'Jam, CyberChef, Dev surfaces',
+      summary: 'Future Jam-ready utilities, data-lab tools, and RoachNet Dev workspace downloads can ride the same mirror-backed catalog instead of a mess of installer links.',
+      primaryLabel: 'Open tooling manifest',
       primaryUrl: './collections/wikipedia.json',
     },
   ],

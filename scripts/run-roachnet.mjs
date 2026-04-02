@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -12,6 +12,7 @@ import {
   composeDownRoachNetServices,
   composeUpRoachNetServices,
   detectRoachNetContainerRuntime,
+  getRoachNetComposeProjectName,
   startRoachNetContainerRuntime,
 } from './lib/roachnet_container_runtime.mjs'
 
@@ -45,8 +46,10 @@ const BUILD_RUNTIME_QDRANT_PORT = '36333'
 const BUILD_RUNTIME_OLLAMA_PORT = '36434'
 const BUILD_RUNTIME_OPENCLAW_PORT = '13001'
 const MANAGED_RUNTIME_DB_USER = 'nomad_user'
-const MANAGED_RUNTIME_DB_PASSWORD = '7154b9bbb511df8d89c1e1417d8427e3'
+const MANAGED_RUNTIME_SECRETS_FILENAME = 'roachnet-managed-runtime-secrets.json'
 const MANAGED_RUNTIME_DB_DATABASE = 'nomad'
+const LEGACY_MANAGED_RUNTIME_DB_PASSWORD = '7154b9bbb511df8d89c1e1417d8427e3'
+const LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD = '00e17487a0231b35b6030087ecb9aaf5'
 
 function parseEnvFile(content) {
   const values = {}
@@ -119,6 +122,10 @@ function getPreferredNpmBinary() {
 
 function hashString(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function randomSecret(size = 24) {
+  return randomBytes(size).toString('hex')
 }
 
 function collectBuildSignatureParts(currentPath, relativePath = '.') {
@@ -305,6 +312,76 @@ function getManagedRuntimeStateRoot(envValues) {
   return path.join(getRuntimeEnvValues(envValues).NOMAD_STORAGE_PATH, 'runtime-state')
 }
 
+function getManagedRuntimeSecretsPath(envValues) {
+  return path.join(getManagedRuntimeStateRoot(envValues), MANAGED_RUNTIME_SECRETS_FILENAME)
+}
+
+function getManagedRuntimeSecrets(envValues) {
+  const runtimeStateRoot = getManagedRuntimeStateRoot(envValues)
+  const secretsPath = getManagedRuntimeSecretsPath(envValues)
+  const mysqlStatePath = path.join(runtimeStateRoot, 'mysql')
+  const hasExistingManagedDatabase =
+    existsSync(mysqlStatePath) && readdirSync(mysqlStatePath).length > 0
+  const compatibilityOrigin = hasExistingManagedDatabase ? 'legacy-compatible' : 'generated'
+  const fallbackAppKey = envValues.APP_KEY?.trim() || randomSecret(24)
+  const fallbackDbPassword =
+    envValues.DB_PASSWORD?.trim() ||
+    (hasExistingManagedDatabase ? LEGACY_MANAGED_RUNTIME_DB_PASSWORD : randomSecret(16))
+  const fallbackDbRootPassword =
+    envValues.ROACHNET_DB_ROOT_PASSWORD?.trim() ||
+    (hasExistingManagedDatabase ? LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD : randomSecret(16))
+
+  mkdirSync(runtimeStateRoot, { recursive: true })
+
+  if (existsSync(secretsPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(secretsPath, 'utf8'))
+      const origin = parsed?.origin || compatibilityOrigin
+      const normalizedSecrets = {
+        origin,
+        appKey: envValues.APP_KEY?.trim() || parsed?.appKey || fallbackAppKey,
+        dbPassword:
+          envValues.DB_PASSWORD?.trim() ||
+          (origin === 'generated'
+            ? parsed?.dbPassword || fallbackDbPassword
+            : fallbackDbPassword),
+        dbRootPassword:
+          envValues.ROACHNET_DB_ROOT_PASSWORD?.trim() ||
+          (origin === 'generated'
+            ? parsed?.dbRootPassword || fallbackDbRootPassword
+            : fallbackDbRootPassword),
+        generatedAt: parsed?.generatedAt || new Date().toISOString(),
+      }
+
+      if (JSON.stringify(parsed) !== JSON.stringify(normalizedSecrets)) {
+        writeFileSync(secretsPath, `${JSON.stringify(normalizedSecrets, null, 2)}\n`, {
+          encoding: 'utf8',
+          mode: 0o600,
+        })
+      }
+
+      return normalizedSecrets
+    } catch {
+      // Regenerate malformed state below.
+    }
+  }
+
+  const secrets = {
+    origin: compatibilityOrigin,
+    appKey: fallbackAppKey,
+    dbPassword: fallbackDbPassword,
+    dbRootPassword: fallbackDbRootPassword,
+    generatedAt: new Date().toISOString(),
+  }
+
+  writeFileSync(secretsPath, `${JSON.stringify(secrets, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+
+  return secrets
+}
+
 function getRuntimeEnvValues(envValues) {
   const storageRoot = normalizeStorageRoot(
     process.env.NOMAD_STORAGE_PATH?.trim() || envValues.NOMAD_STORAGE_PATH?.trim()
@@ -327,17 +404,19 @@ function getRuntimeEnvValues(envValues) {
 
 function getBuildRuntimeEnvValues(envValues) {
   const runtimeValues = getRuntimeEnvValues(envValues)
+  const runtimeSecrets = getManagedRuntimeSecrets(envValues)
 
   return {
     ...runtimeValues,
     HOST: '127.0.0.1',
     PORT: '8080',
     URL: 'http://127.0.0.1:8080',
+    APP_KEY: runtimeSecrets.appKey,
     DB_HOST: '127.0.0.1',
     DB_PORT: BUILD_RUNTIME_MYSQL_PORT,
     DB_DATABASE: MANAGED_RUNTIME_DB_DATABASE,
     DB_USER: MANAGED_RUNTIME_DB_USER,
-    DB_PASSWORD: MANAGED_RUNTIME_DB_PASSWORD,
+    DB_PASSWORD: runtimeSecrets.dbPassword,
     REDIS_HOST: '127.0.0.1',
     REDIS_PORT: BUILD_RUNTIME_REDIS_PORT,
     QDRANT_URL: `http://127.0.0.1:${BUILD_RUNTIME_QDRANT_PORT}`,
@@ -448,14 +527,56 @@ function ensureOpenClawRuntimeConfig(runtimeEnvValues) {
 function getManagedRuntimeEnvValues(envValues) {
   const runtimeValues = getRuntimeEnvValues(envValues)
   const storageRoot = runtimeValues.NOMAD_STORAGE_PATH
+  const runtimeSecrets = getManagedRuntimeSecrets(envValues)
 
   return {
     ...process.env,
     ...runtimeValues,
+    APP_KEY: runtimeSecrets.appKey,
+    DB_PASSWORD: runtimeSecrets.dbPassword,
+    ROACHNET_DB_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
     ROACHNET_REPO_ROOT: repoRoot,
     ROACHNET_HOST_STORAGE_PATH: storageRoot,
     ROACHNET_RUNTIME_STATE_ROOT: getManagedRuntimeStateRoot(envValues),
   }
+}
+
+function escapeSqlString(value) {
+  return String(value).replace(/'/g, "''")
+}
+
+async function repairManagedRuntimeDatabaseUser(envValues) {
+  const managedEnv = getManagedRuntimeEnvValues(envValues)
+  const sql = [
+    `CREATE DATABASE IF NOT EXISTS \`${MANAGED_RUNTIME_DB_DATABASE}\`;`,
+    `CREATE USER IF NOT EXISTS '${MANAGED_RUNTIME_DB_USER}'@'%' IDENTIFIED BY '${escapeSqlString(managedEnv.DB_PASSWORD)}';`,
+    `ALTER USER '${MANAGED_RUNTIME_DB_USER}'@'%' IDENTIFIED BY '${escapeSqlString(managedEnv.DB_PASSWORD)}';`,
+    `GRANT ALL PRIVILEGES ON \`${MANAGED_RUNTIME_DB_DATABASE}\`.* TO '${MANAGED_RUNTIME_DB_USER}'@'%';`,
+    'FLUSH PRIVILEGES;',
+  ].join(' ')
+
+  await runCommand(
+    'docker',
+    [
+      'compose',
+      '-p',
+      getRoachNetComposeProjectName(repoRoot),
+      '-f',
+      managementComposePath,
+      'exec',
+      '-T',
+      'mysql',
+      'mysql',
+      '-uroot',
+      `-p${managedEnv.ROACHNET_DB_ROOT_PASSWORD}`,
+      '-e',
+      sql,
+    ],
+    {
+      cwd: repoRoot,
+      env: managedEnv,
+    }
+  )
 }
 
 function getServerRuntimeTarget() {
@@ -966,10 +1087,31 @@ async function ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues) {
   })
   console.log('Preparing the compiled RoachNet database...')
 
-  await runCommand(nodeBinary, [consoleEntrypoint, 'migration:run', '--force'], {
-    cwd: runtimeRoot,
-    env: consoleEnv,
-  })
+  try {
+    await runCommand(nodeBinary, [consoleEntrypoint, 'migration:run', '--force'], {
+      cwd: runtimeRoot,
+      env: consoleEnv,
+    })
+  } catch (error) {
+    const normalizedMessage = String(error?.message || '')
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+
+    if (!normalizedMessage.includes('access denied')) {
+      throw error
+    }
+
+    console.warn('Managed MySQL credentials drifted. Repairing the contained database user and retrying...')
+    debugBoot('build-runtime:db-bootstrap:repair-user', {
+      runtimeRoot,
+    })
+    await repairManagedRuntimeDatabaseUser(runtimeEnvValues)
+
+    await runCommand(nodeBinary, [consoleEntrypoint, 'migration:run', '--force'], {
+      cwd: runtimeRoot,
+      env: consoleEnv,
+    })
+  }
 
   await runCommand(nodeBinary, [consoleEntrypoint, 'db:seed'], {
     cwd: runtimeRoot,

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import 'reflect-metadata'
 
 const require = createRequire(import.meta.url)
 const adonisCoreRoot = path.dirname(require.resolve('@adonisjs/core/package.json'))

@@ -286,9 +286,7 @@ function discardPath(targetPath) {
 }
 
 async function copyBundledSourceTree(destinationPath) {
-  const bundledEnvSource = existsSync(path.join(repoRoot, 'admin', '.env'))
-    ? path.join(repoRoot, 'admin', '.env')
-    : path.join(repoRoot, 'admin', '.env.example')
+  const bundledEnvSource = path.join(repoRoot, 'admin', '.env.example')
   const bundledEnvDestination = path.join(destinationPath, 'admin', '.env')
 
   discardPath(destinationPath)
@@ -305,6 +303,13 @@ async function copyBundledSourceTree(destinationPath) {
   if (existsSync(bundledEnvSource)) {
     console.log(`Copying bundled environment file into ${bundledEnvDestination}...`)
     const bundledEnvValues = parseEnvFile(readFileSync(bundledEnvSource, 'utf8'))
+    delete bundledEnvValues.APP_KEY
+    delete bundledEnvValues.DB_PASSWORD
+    delete bundledEnvValues.ROACHNET_DB_ROOT_PASSWORD
+    delete bundledEnvValues.GITHUB_TOKEN
+    delete bundledEnvValues.NETLIFY_AUTH_TOKEN
+    delete bundledEnvValues.OPENAI_API_KEY
+    delete bundledEnvValues.ANTHROPIC_API_KEY
     delete bundledEnvValues.NOMAD_STORAGE_PATH
     delete bundledEnvValues.OPENCLAW_WORKSPACE_PATH
     writeFileSync(bundledEnvDestination, serializeEnvFile(bundledEnvValues), 'utf8')

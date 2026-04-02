@@ -8,6 +8,7 @@ import RoachNetDesign
 enum WorkspacePane: String, CaseIterable, Identifiable {
     case suite = "Suite"
     case home = "Home"
+    case dev = "Dev"
     case roachClaw = "RoachClaw"
     case maps = "Maps"
     case education = "Education"
@@ -21,6 +22,7 @@ enum WorkspacePane: String, CaseIterable, Identifiable {
         switch self {
         case .suite: return "square.grid.3x2.fill"
         case .home: return "house.fill"
+        case .dev: return "terminal.fill"
         case .roachClaw: return "sparkles"
         case .maps: return "map.fill"
         case .education: return "graduationcap.fill"
@@ -34,6 +36,7 @@ enum WorkspacePane: String, CaseIterable, Identifiable {
         switch self {
         case .suite: return "App surfaces"
         case .home: return "Command grid"
+        case .dev: return "Code and shell"
         case .roachClaw: return "Models and skills"
         case .maps: return "Offline regions"
         case .education: return "Wikipedia and collections"
@@ -678,6 +681,54 @@ final class WorkspaceModel: ObservableObject {
         }
 
         isSendingPrompt = false
+    }
+
+    func requestDeveloperAssist(prompt: String) async throws -> String {
+        guard setupCompleted else {
+            throw NSError(domain: "RoachNetDeveloperAssist", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Finish setup before using the coding assistant."
+            ])
+        }
+
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else {
+            throw NSError(domain: "RoachNetDeveloperAssist", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Enter a coding task before calling RoachClaw."
+            ])
+        }
+
+        let currentConfig = config
+        if snapshot?.roachClaw.ready != true {
+            await bootstrapRoachClawIfNeeded(using: currentConfig)
+        }
+
+        let selectedModel = resolvedChatModel()
+        let preferredCloudModel = preferredCloudChatModel(excluding: selectedModel)
+        let shouldPreferCloudWarmupLane =
+            snapshot?.roachClaw.ready != true &&
+            snapshot?.internetConnected == true &&
+            preferredCloudModel != nil
+        let primaryModel = shouldPreferCloudWarmupLane ? (preferredCloudModel ?? selectedModel) : selectedModel
+        let primaryTimeout: TimeInterval = isCloudModel(primaryModel) ? 45 : 30
+
+        do {
+            return try await ManagedAppRuntimeBridge.shared.sendChat(
+                using: currentConfig,
+                model: primaryModel,
+                prompt: trimmedPrompt,
+                timeout: primaryTimeout
+            )
+        } catch {
+            if !isCloudModel(primaryModel), let fallbackModel = preferredCloudChatModel(excluding: primaryModel) {
+                return try await ManagedAppRuntimeBridge.shared.sendChat(
+                    using: currentConfig,
+                    model: fallbackModel,
+                    prompt: trimmedPrompt,
+                    timeout: 45
+                )
+            }
+            throw error
+        }
     }
 
     func shutdownRuntime() async {
@@ -1871,6 +1922,8 @@ private struct RootWorkspaceView: View {
                             switch activePane {
                             case .suite, .home:
                                 home
+                            case .dev:
+                                DevWorkspaceView(model: model)
                             case .roachClaw:
                                 roachClaw
                             case .maps:
@@ -1963,6 +2016,7 @@ private struct RootWorkspaceView: View {
                     RoachSectionHeader("Suite", title: "Everything stays together.", detail: "Installed modules open from here, and missing ones can be staged without leaving the app.")
 
                     LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                        suiteCard(title: "Dev", detail: "Native coding, shell, and secrets surfaces.", value: "Projects and AI assist", pane: .dev)
                         suiteCard(title: "Maps", detail: "Offline regions and route assets.", value: "\(model.snapshot?.mapCollections.count ?? 0) collections", pane: .maps)
                         suiteCard(title: "Education", detail: "Wikipedia and curated reference packs.", value: educationSummary, pane: .education)
                         suiteCard(title: "Archives", detail: "Saved websites and captured references.", value: "\(model.snapshot?.siteArchives.count ?? 0) saved", pane: .archives)

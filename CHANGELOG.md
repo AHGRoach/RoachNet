@@ -5,6 +5,27 @@
 - Added a repo-native Apple release secret bootstrapper at `scripts/configure-apple-release-secrets.sh` plus an `npm run release:apple-secrets` wrapper so Developer ID and notarization credentials can be loaded into GitHub with one repeatable command.
 - Expanded the native macOS README with the exact environment variables and command sequence needed to wire the `Native Packages` workflow for a real Gatekeeper-safe notarized build.
 
+## v1.30.6 - 2026-04-02
+
+### Native developer surfaces
+
+- Added a native `Dev` workspace to the macOS shell with a contained project browser, in-app code editor, Ghostty-style shell lane, RoachClaw assist, and workspace-aware project creation inside the RoachNet vault.
+- Added Keychain-backed secret records for developer and cloud-lane credentials so RoachNet can keep metadata in the vault while keeping actual secret values off disk.
+- Extended the shared native design system and shell polish so the `Home`, `Dev`, and `RoachClaw` panes feel like one product instead of separate utility views.
+
+### Runtime and first-boot stability
+
+- Moved the contained runtime away from hardcoded compose credentials by generating local-only managed runtime secrets at launch and interpolating them into the runtime environment.
+- Added compatibility and repair logic for existing managed MySQL state so upgraded installs can keep booting instead of getting stuck on stale database credentials.
+- Verified the contained RoachClaw path still comes up on the local endpoints, keeps the default local model aligned to the contained lane, and leaves cloud fallback available for fast first boot.
+- Expanded the native and fallback settings surfaces for `AI Control` and `Model Store` so the revived local-model and cloud-lane story stays visible even when the old web shell is not present.
+
+### Website and app-store surfaces
+
+- Refreshed `roachnet.org` to tell the 1.30.6 story: contained dev surfaces, native coding workspace, and the updated App Store/catalog direction.
+- Replaced the website’s screen gallery with fresh captures from the real 1.30.6 native shell, including the new `Dev` pane.
+- Updated the website-backed App Store catalog to reflect mirror-backed maps, archives, RoachClaw model packs, and future developer toolchain downloads served from the same backend.
+
 ## v1.30.5 - 2026-04-01
 
 ### Native macOS shell, setup, and onboarding

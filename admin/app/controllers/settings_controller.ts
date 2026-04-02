@@ -42,11 +42,13 @@ export default class SettingsController {
       summary,
       badge,
       sections,
+      actions = [],
     }: {
       title: string
       summary: string
       badge: string
       sections: Array<{ title: string; items: string[] }>
+      actions?: Array<{ label: string; href: string }>
     }
   ) {
     const sectionMarkup = sections
@@ -58,6 +60,15 @@ export default class SettingsController {
         return `<section><h2>${this.escapeHtml(section.title)}</h2><ul>${itemsMarkup}</ul></section>`
       })
       .join('')
+
+    const actionsMarkup = actions.length
+      ? `<nav class="actions" aria-label="${this.escapeHtml(title)} actions">${actions
+          .map(
+            (action) =>
+              `<a class="action" href="${this.escapeHtml(action.href)}">${this.escapeHtml(action.label)}</a>`
+          )
+          .join('')}</nav>`
+      : ''
 
     return response
       .status(200)
@@ -115,6 +126,26 @@ export default class SettingsController {
         background: rgba(10, 18, 28, 0.78);
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
       }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 0 0 26px;
+      }
+      .action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 16px;
+        border-radius: 999px;
+        border: 1px solid rgba(122, 240, 199, 0.16);
+        background: rgba(122, 240, 199, 0.08);
+        color: #eef3f8;
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
     </style>
   </head>
   <body>
@@ -122,6 +153,7 @@ export default class SettingsController {
       <h1>${this.escapeHtml(title)}</h1>
       <p>${this.escapeHtml(summary)}</p>
       <div class="chip">${this.escapeHtml(badge)}</div>
+      ${actionsMarkup}
       ${sectionMarkup}
     </main>
   </body>
@@ -201,13 +233,24 @@ export default class SettingsController {
       summary:
         'RoachNet now treats the native shell as the main control surface. This fallback keeps the contained AI lane visible when the legacy settings shell is missing.',
       badge: `${systemInfo.hardwareProfile.platformLabel} · ${systemInfo.hardwareProfile.recommendedModelClass}`,
+      actions: [
+        { label: 'Open Model Store', href: '/settings/models' },
+        { label: 'Back to Home', href: '/home' },
+      ],
       sections: [
         {
-          title: 'Providers',
+          title: 'Contained Providers',
           items: Object.entries(providers.providers).map(([name, provider]) => {
             const target = provider.baseUrl ? ` · ${provider.baseUrl}` : ''
             return `${name} · ${provider.available ? 'ready' : 'offline'}${target}`
           }),
+        },
+        {
+          title: 'Lane Policy',
+          items: [
+            'Local lane · preferred for privacy, portability, and predictable first-launch behavior.',
+            'Cloud lane · optional fast-start path when the user adds a remote provider through the native secrets surface.',
+          ],
         },
       ],
     })
@@ -313,19 +356,30 @@ export default class SettingsController {
       badge: runtimeStatus.available
         ? `contained lane · ${runtimeStatus.baseUrl ?? 'connected'}`
         : runtimeStatus.error ?? 'ollama offline',
+      actions: [
+        { label: 'Open AI Control', href: '/settings/ai' },
+        { label: 'Back to Home', href: '/home' },
+      ],
       sections: [
         {
-          title: 'Installed',
+          title: 'Installed Models',
           items: (installedModels || []).map((model) => model.name),
         },
         {
-          title: 'Recommended',
+          title: 'Recommended Models',
           items: (availableModels?.models || []).slice(0, 8).flatMap((model) =>
             model.tags.slice(0, 1).map((tag) => `${model.name} · ${tag.name} · ${tag.size}`)
           ),
         },
         {
-          title: 'Settings',
+          title: 'Cloud Lane',
+          items: [
+            'Fast first boot stays available when the user adds a remote provider in the native secrets surface.',
+            'RoachClaw can keep the contained local lane as the default while still falling back to a cloud lane when local models are cold.',
+          ],
+        },
+        {
+          title: 'Controls',
           items: [
             `Chat suggestions: ${chatSuggestionsEnabled ?? false ? 'enabled' : 'disabled'}`,
             `Assistant name: ${aiAssistantCustomName?.toString() || 'default'}`,

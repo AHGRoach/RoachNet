@@ -1461,9 +1461,6 @@ function buildManagementCompose({
   installPath,
   appPort,
   dbUser,
-  dbPassword,
-  dbRootPassword,
-  appKey,
   logLevel,
   publicUrl,
   storagePath,
@@ -1479,9 +1476,6 @@ function buildManagementCompose({
   const resolvedOllamaBaseUrl = ollamaBaseUrl.replace(/"/g, '\\"')
   const resolvedOpenClawBaseUrl = openClawBaseUrl.replace(/"/g, '\\"')
   const resolvedLogLevel = logLevel.replace(/"/g, '\\"')
-  const resolvedAppKey = appKey.replace(/"/g, '\\"')
-  const resolvedDbPassword = dbPassword.replace(/"/g, '\\"')
-  const resolvedDbRootPassword = dbRootPassword.replace(/"/g, '\\"')
   const resolvedDbUser = dbUser.replace(/"/g, '\\"')
 
   return `services:
@@ -1505,12 +1499,12 @@ function buildManagementCompose({
       HOST: "0.0.0.0"
       URL: "${publicBaseUrl}"
       LOG_LEVEL: "${resolvedLogLevel}"
-      APP_KEY: "${resolvedAppKey}"
+      APP_KEY: "${APP_KEY}"
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_DATABASE: nomad
       DB_USER: "${resolvedDbUser}"
-      DB_PASSWORD: "${resolvedDbPassword}"
+      DB_PASSWORD: "${DB_PASSWORD}"
       DB_SSL: "false"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -1518,7 +1512,7 @@ function buildManagementCompose({
       OPENCLAW_WORKSPACE_PATH: "${openClawWorkspaceRoot}"
       OLLAMA_BASE_URL: "${resolvedOllamaBaseUrl}"
       OPENCLAW_BASE_URL: "${resolvedOpenClawBaseUrl}"
-      ROACHNET_DB_ROOT_PASSWORD: "${resolvedDbRootPassword}"
+      ROACHNET_DB_ROOT_PASSWORD: "${ROACHNET_DB_ROOT_PASSWORD}"
     depends_on:
       mysql:
         condition: service_healthy
@@ -1539,16 +1533,16 @@ function buildManagementCompose({
       - -c
       - rm -f /var/run/mysqld/mysqld.sock.lock /var/run/mysqld/mysqlx.sock.lock /var/run/mysqld/mysqld.sock /var/run/mysqld/mysqlx.sock && exec docker-entrypoint.sh mysqld
     environment:
-      MYSQL_ROOT_PASSWORD: "${resolvedDbRootPassword}"
+      MYSQL_ROOT_PASSWORD: "${ROACHNET_DB_ROOT_PASSWORD}"
       MYSQL_DATABASE: nomad
       MYSQL_USER: "${resolvedDbUser}"
-      MYSQL_PASSWORD: "${resolvedDbPassword}"
+      MYSQL_PASSWORD: "${DB_PASSWORD}"
     tmpfs:
       - /var/run/mysqld
     volumes:
       - "${runtimeRoot}/mysql:/var/lib/mysql"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${resolvedDbRootPassword}"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p\"$${ROACHNET_DB_ROOT_PASSWORD}\""]
       interval: 15s
       timeout: 10s
       retries: 20
