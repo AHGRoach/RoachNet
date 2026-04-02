@@ -2,6 +2,11 @@ name: Native Packages
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional existing GitHub release tag to attach the DMG and checksum to'
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -13,6 +18,9 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/native-packages.yml'
+
+permissions:
+  contents: write
 
 jobs:
   build-native:
@@ -89,6 +97,9 @@ jobs:
           ROACHNET_NOTARY_KEYCHAIN: ${{ env.ROACHNET_NOTARY_KEYCHAIN }}
         run: node scripts/build-native-macos-apps.mjs
 
+      - name: Generate release checksum
+        run: shasum -a 256 native/macos/dist/RoachNet-Setup-macOS.dmg > native/macos/dist/RoachNet-Setup-macOS.dmg.sha256
+
       - name: Upload native artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -97,4 +108,17 @@ jobs:
             native/macos/dist/RoachNet.app
             native/macos/dist/RoachNet Setup.app
             native/macos/dist/RoachNet-Setup-macOS.dmg
+            native/macos/dist/RoachNet-Setup-macOS.dmg.sha256
           if-no-files-found: error
+
+      - name: Upload release assets
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            native/macos/dist/RoachNet-Setup-macOS.dmg \
+            native/macos/dist/RoachNet-Setup-macOS.dmg.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
