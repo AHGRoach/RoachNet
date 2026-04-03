@@ -204,7 +204,7 @@ function getCurrentAppVersion() {
     return packagedVersion
   }
 
-  return readJsonFile(path.join(repoRoot, 'package.json'))?.version || '1.30.9'
+  return readJsonFile(path.join(repoRoot, 'package.json'))?.version || '1.4.0'
 }
 
 function parseGitHubRepo(sourceRepoUrl = DEFAULT_SOURCE_REPO_URL) {

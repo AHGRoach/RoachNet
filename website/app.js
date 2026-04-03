@@ -1,6 +1,6 @@
 const owner = 'AHGRoach'
 const repo = 'RoachNet'
-const releaseVersion = '1.30.10'
+const releaseVersion = '1.4'
 const latestReleaseApi = `https://api.github.com/repos/${owner}/${repo}/releases/latest`
 const latestReleasePage = `https://github.com/${owner}/${repo}/releases/latest`
 const latestDownloadBase = `https://github.com/${owner}/${repo}/releases/latest/download`
@@ -85,7 +85,7 @@ const fallbackCatalog = {
         'Required before regional map collections',
         'Installs directly into the native Maps lane',
       ],
-      installLabel: 'Get',
+      installLabel: 'Install to RoachNet',
       detailLabel: 'View manifest',
       detailUrl: './collections/maps.json',
       installIntent: {
@@ -111,7 +111,7 @@ const fallbackCatalog = {
         'Regional downloads for Alaska, California, Hawaii, Oregon, and Washington',
         'Mapped install path inside the field-ops shelf',
       ],
-      installLabel: 'Get',
+      installLabel: 'Install to RoachNet',
       detailLabel: 'Open collection',
       detailUrl: './collections/maps.json',
       installIntent: {
@@ -120,86 +120,84 @@ const fallbackCatalog = {
       },
     },
     {
-      id: 'medicine-essential',
-      title: 'Medicine Essentials',
-      subtitle: 'Field medicine, NHS meds, CDC travel health',
-      category: 'Knowledge',
-      section: 'Knowledge Packs',
-      size: '331 MB',
-      status: 'Recommended',
-      source: 'Kiwix mirror',
-      icon: './assets/app-store/medicine-essential.svg',
+      id: 'course-freecodecamp-javascript',
+      title: 'freeCodeCamp: JavaScript Algorithms and Data Structures',
+      subtitle: 'A compact coding course mirrored into the RoachNet Education lane',
+      category: 'Essential',
+      section: 'Software Development',
+      size: '7 MB',
+      status: 'Great first install',
+      source: 'freeCodeCamp via Kiwix',
       summary:
-        'A compact medical reference pack for first aid, medications, emergency care, and field medicine without pulling the full library on day one.',
-      accent: 'green',
-      machineFit: 'Lean enough for first boot and travel installs',
+        'Install one real course instead of a giant provider bundle. This entry opens RoachNet and queues the focused freeCodeCamp JavaScript course directly into the native app.',
+      accent: 'violet',
+      machineFit: 'Fast add-on for any supported machine',
       includes: [
-        'Emergency care and first-aid references',
-        'Medication and travel-health docs',
-        'Contained knowledge install in the Education lane',
+        'Focused JavaScript fundamentals course',
+        'One-course install handoff into RoachNet',
+        'Good first coding shelf for a clean machine',
       ],
-      installLabel: 'Get',
-      detailLabel: 'View catalog',
+      installLabel: 'Install to RoachNet',
+      detailLabel: 'Open manifest',
       detailUrl: './collections/kiwix-categories.json',
       installIntent: {
-        action: 'education-tier',
-        category: 'medicine',
-        tier: 'medicine-essential',
+        action: 'education-resource',
+        category: 'computing',
+        resource: 'freecodecamp_en_javascript-algorithms-and-data-structures',
       },
     },
     {
-      id: 'survival-essential',
-      title: 'Survival Essentials',
-      subtitle: 'Winter prep and bug-out basics',
-      category: 'Knowledge',
-      section: 'Knowledge Packs',
-      size: '2.3 GB',
-      status: 'Ready',
-      source: 'Kiwix mirror',
-      icon: './assets/app-store/survival-essential.svg',
+      id: 'course-open-music-theory',
+      title: 'Open Music Theory',
+      subtitle: 'Harmony, notation, rhythm, and ear-training in one offline shelf',
+      category: 'Essential',
+      section: 'Music Production & Audio',
+      size: '78 MB',
+      status: 'Great first install',
+      source: 'Open Music Theory via Kiwix',
       summary:
-        'Queue the lean survival pack first so RoachNet has practical emergency references without waiting on the larger preparedness tiers.',
-      accent: 'gold',
-      machineFit: 'Good default for field kits and travel setups',
+        'A real course app for RoachNet’s music lane, mirrored cleanly so the user can install focused theory content without dragging in a whole site or provider wrapper.',
+      accent: 'magenta',
+      machineFit: 'Fast add-on for any supported machine',
       includes: [
-        'Prepper and bug-out references',
-        'Offline winter and emergency planning docs',
-        'Install queue lands in the Education lane',
+        'Open music-theory coursework',
+        'Installs directly into the Education lane',
+        'Useful for production, arranging, and scoring sessions',
       ],
-      installLabel: 'Get',
-      detailLabel: 'View catalog',
+      installLabel: 'Install to RoachNet',
+      detailLabel: 'Open manifest',
       detailUrl: './collections/kiwix-categories.json',
       installIntent: {
-        action: 'education-tier',
-        category: 'survival',
-        tier: 'survival-essential',
+        action: 'education-resource',
+        category: 'music-audio',
+        resource: 'openmusictheory.com_en_all',
       },
     },
     {
-      id: 'wikipedia-quick-reference',
-      title: 'Wikipedia Quick Reference',
-      subtitle: 'Top 100,000 articles, minimal images',
-      category: 'Knowledge',
-      section: 'Knowledge Packs',
-      size: '313 MB',
-      status: 'Fast first install',
-      source: 'Kiwix mirror',
-      icon: './assets/app-store/wikipedia-quick-reference.svg',
+      id: 'course-cloudflare-learning-center',
+      title: 'Cloudflare Learning Center',
+      subtitle: 'Edge, DNS, security, and web-infrastructure docs mirrored offline',
+      category: 'Standard',
+      section: 'IT & Infrastructure',
+      size: '182 MB',
+      status: 'Recommended next install',
+      source: 'Cloudflare Learning Center via Kiwix',
       summary:
-        'A small Wikipedia lane for quick lookup work. It is the best default when the user wants offline reference without committing to a multi-gigabyte encyclopedia on first boot.',
-      accent: 'blue',
-      machineFit: 'Fastest encyclopedia option for smaller installs',
+        'A focused infrastructure course app that lands in RoachNet as its own install target instead of masquerading as a generic provider shelf.',
+      accent: 'bronze',
+      machineFit: 'Easy install once the core workspace is already healthy',
       includes: [
-        'Top article quick-reference pack',
-        'Minimal image footprint for faster sync',
-        'Wikipedia option queued directly in RoachNet',
+        'Practical edge and networking reference',
+        'Offline ops shelf for the RoachNet vault',
+        'Direct native install handoff',
       ],
-      installLabel: 'Get',
-      detailLabel: 'View options',
-      detailUrl: './collections/wikipedia.json',
+      installLabel: 'Install to RoachNet',
+      detailLabel: 'Open manifest',
+      detailUrl: './collections/kiwix-categories.json',
       installIntent: {
-        action: 'wikipedia-option',
-        option: 'top-mini',
+        action: 'education-resource',
+        category: 'it-infrastructure',
+        resource: 'cloudflare.com_en_learning-center',
       },
     },
     {
@@ -223,7 +221,7 @@ const fallbackCatalog = {
       ],
       installLabel: 'Get',
       detailLabel: 'Open RoachClaw',
-      detailUrl: './index.html#screens',
+      detailUrl: 'https://roachnet.org/#screens',
       installIntent: {
         action: 'roachclaw-model',
         model: 'qwen2.5-coder:1.5b',
@@ -250,7 +248,7 @@ const fallbackCatalog = {
       ],
       installLabel: 'Get',
       detailLabel: 'Open RoachClaw',
-      detailUrl: './index.html#screens',
+      detailUrl: 'https://roachnet.org/#screens',
       installIntent: {
         action: 'roachclaw-model',
         model: 'qwen2.5-coder:7b',
@@ -440,6 +438,48 @@ function normalizeCatalogValue(value) {
     .trim()
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function deriveIconMonogram(item) {
+  if (item?.iconMonogram) {
+    return String(item.iconMonogram).replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase()
+  }
+
+  const words = String(item?.title || 'RoachNet')
+    .split(/[\s:/-]+/)
+    .filter(Boolean)
+
+  if (words.length >= 2) {
+    return words
+      .slice(0, 3)
+      .map((word) => word[0].toUpperCase())
+      .join('')
+      .slice(0, 4)
+  }
+
+  return words.join('').replace(/[^a-z0-9]/gi, '').slice(0, 3).toUpperCase() || 'RN'
+}
+
+function renderStoreIcon(item, variant = 'card') {
+  if (item?.icon) {
+    return `<img src="${item.icon}" alt="${escapeHtml(item.title)} icon" loading="lazy" />`
+  }
+
+  return `
+    <div class="store-generated-icon store-generated-icon--${variant}" role="img" aria-label="${escapeHtml(item.title)} icon">
+      <span class="store-generated-icon__band">${escapeHtml(item.iconBand || item.category || 'RoachNet')}</span>
+      <strong class="store-generated-icon__mono">${escapeHtml(deriveIconMonogram(item))}</strong>
+    </div>
+  `
+}
+
 function buildInstallUrl(item) {
   if (!item?.installIntent) {
     return ''
@@ -454,6 +494,54 @@ function buildInstallUrl(item) {
 
   const query = params.toString()
   return query ? `roachnet://install-content?${query}` : 'roachnet://install-content'
+}
+
+function attemptNativeInstall(url) {
+  if (!url) {
+    return
+  }
+
+  let completed = false
+  let fallbackTimer = null
+
+  const clearFallback = () => {
+    completed = true
+    if (fallbackTimer) {
+      window.clearTimeout(fallbackTimer)
+      fallbackTimer = null
+    }
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    window.removeEventListener('pagehide', clearFallback)
+    window.removeEventListener('blur', handleBlur)
+  }
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') {
+      clearFallback()
+    }
+  }
+
+  const handleBlur = () => {
+    window.setTimeout(() => {
+      if (document.visibilityState === 'hidden') {
+        clearFallback()
+      }
+    }, 150)
+  }
+
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('pagehide', clearFallback)
+  window.addEventListener('blur', handleBlur)
+
+  fallbackTimer = window.setTimeout(() => {
+    if (completed) {
+      return
+    }
+    clearFallback()
+    window.location.href = 'https://roachnet.org/#downloads'
+  }, 1400)
+
+  window.location.href = url
 }
 
 function getCatalogItems(catalog = appStoreCatalog) {
@@ -560,7 +648,7 @@ function renderStoreCard(item, compact = false) {
     <article class="store-app-card${compact ? ' store-app-card--compact' : ''}" data-accent="${item.accent || 'blue'}" data-reveal>
       <div class="store-app-card__top">
         <div class="store-app-card__icon">
-          <img src="${item.icon}" alt="${item.title} icon" loading="lazy" />
+          ${renderStoreIcon(item, compact ? 'compact' : 'card')}
         </div>
         <div class="store-app-card__copy">
           <div class="store-app-card__eyebrow-row">
@@ -619,7 +707,7 @@ function renderFeaturedStoreCard(item, items = []) {
   appStoreFeatured.innerHTML = `
     <article class="store-featured-card" data-accent="${item.accent || 'blue'}" data-reveal>
       <div class="store-featured-card__icon">
-        <img src="${item.icon}" alt="${item.title} icon" loading="lazy" />
+        ${renderStoreIcon(item, 'featured')}
       </div>
       <div class="store-featured-card__copy">
         <span class="store-featured-card__eyebrow">Today in RoachNet Apps</span>
@@ -808,7 +896,7 @@ function renderAppDetailSheet(item) {
     <article class="app-detail-sheet__content" data-accent="${item.accent || 'blue'}">
       <div class="app-detail-sheet__hero">
         <div class="app-detail-sheet__icon">
-          <img src="${item.icon}" alt="${item.title} icon" loading="lazy" />
+          ${renderStoreIcon(item, 'detail')}
         </div>
         <div class="app-detail-sheet__copy">
           <p class="app-detail-sheet__eyebrow">${item.section} · ${item.category}</p>
@@ -1151,6 +1239,16 @@ appDetailOverlay?.addEventListener('click', (event) => {
   if (event.target === appDetailOverlay) {
     closeAppDetail()
   }
+})
+
+document.addEventListener('click', (event) => {
+  const installLink = event.target.closest('a[href^="roachnet://install-content"]')
+  if (!installLink) {
+    return
+  }
+
+  event.preventDefault()
+  attemptNativeInstall(installLink.getAttribute('href') || '')
 })
 
 document.addEventListener('keydown', (event) => {

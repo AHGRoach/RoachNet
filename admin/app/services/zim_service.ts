@@ -263,6 +263,67 @@ export class ZimService {
     return downloadFilenames.length > 0 ? downloadFilenames : null
   }
 
+  async downloadCategoryResource(categorySlug: string, resourceId: string): Promise<string | null> {
+    const manifestService = new CollectionManifestService()
+    const spec =
+      await manifestService.getSpecWithFallback<import('../../types/collections.js').ZimCategoriesSpec>(
+        'zim_categories'
+      )
+    if (!spec) {
+      throw new Error('Could not load ZIM categories spec')
+    }
+
+    const category = spec.categories.find((entry) => entry.slug === categorySlug)
+    if (!category) {
+      throw new Error(`Category not found: ${categorySlug}`)
+    }
+
+    const resource = category.tiers
+      .flatMap((tier) => tier.resources)
+      .find((entry) => entry.id === resourceId)
+    if (!resource) {
+      throw new Error(`Resource not found: ${resourceId}`)
+    }
+
+    const existingInstall = await InstalledResource.query()
+      .where('resource_type', 'zim')
+      .where('resource_id', resource.id)
+      .first()
+
+    if (existingInstall) {
+      return null
+    }
+
+    const existingJob = await RunDownloadJob.getByUrl(resource.url)
+    if (existingJob) {
+      logger.warn(`[ZimService] Download already in progress for ${resource.url}, skipping.`)
+      return null
+    }
+
+    const filename = resource.url.split('/').pop()
+    if (!filename) {
+      throw new Error(`Could not determine filename for ${resource.url}`)
+    }
+
+    const filepath = resolveStoragePath(ZIM_STORAGE_PATH, filename)
+
+    await RunDownloadJob.dispatch({
+      url: resource.url,
+      filepath,
+      timeout: 30000,
+      allowedMimeTypes: ZIM_MIME_TYPES,
+      forceNew: true,
+      filetype: 'zim',
+      resourceMetadata: {
+        resource_id: resource.id,
+        version: resource.version,
+        collection_ref: categorySlug,
+      },
+    })
+
+    return filename
+  }
+
   async downloadRemoteSuccessCallback(urls: string[], restart = true) {
     // Check if any URL is a Wikipedia download and handle it
     for (const url of urls) {

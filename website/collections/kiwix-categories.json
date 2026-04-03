@@ -471,145 +471,340 @@
       ]
     },
     {
-      "name": "Computing & Technology",
+      "name": "Software Development",
       "slug": "computing",
       "icon": "IconCode",
-      "description": "Programming tutorials, electronics projects, and technical documentation for makers and developers.",
+      "description": "Open-source coding courses, language docs, and practical developer references that install one course at a time into the RoachNet Education lane.",
       "language": "en",
       "tiers": [
         {
           "name": "Essential",
           "slug": "computing-essential",
-          "description": "Learn to code with interactive tutorials and core programming documentation.",
+          "description": "Start with approachable coding courses and the language docs you will actually reach for on day one.",
           "recommended": true,
           "resources": [
             {
-              "id": "freecodecamp_en_all",
+              "id": "freecodecamp_en_javascript-algorithms-and-data-structures",
               "version": "2026-02",
-              "title": "freeCodeCamp",
-              "description": "Interactive programming tutorials - JavaScript, algorithms, and data structures",
-              "url": "https://download.kiwix.org/zim/freecodecamp/freecodecamp_en_all_2026-02.zim",
-              "size_mb": 8
+              "title": "freeCodeCamp: JavaScript Algorithms and Data Structures",
+              "description": "A compact interactive course focused on JavaScript fundamentals, algorithms, and data-structure practice.",
+              "url": "https://download.kiwix.org/zim/freecodecamp/freecodecamp_en_javascript-algorithms-and-data-structures_2026-02.zim",
+              "size_mb": 7
             },
             {
-              "id": "devdocs_en_python",
-              "version": "2026-02",
-              "title": "Python Documentation",
-              "description": "Complete Python language reference and tutorials",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_python_2026-02.zim",
-              "size_mb": 4
+              "id": "coreyms_en_python-tutorials",
+              "version": "2026-04",
+              "title": "Corey Schafer: Python Tutorials",
+              "description": "A practical Python video course covering scripting, automation, and everyday development workflows.",
+              "url": "https://download.kiwix.org/zim/videos/coreyms_en_python-tutorials_2026-04.zim",
+              "size_mb": 2020
             },
             {
-              "id": "devdocs_en_javascript",
-              "version": "2026-01",
-              "title": "JavaScript Documentation",
-              "description": "MDN JavaScript reference and guides",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_javascript_2026-01.zim",
-              "size_mb": 3
-            },
-            {
-              "id": "devdocs_en_html",
-              "version": "2026-01",
-              "title": "HTML Documentation",
-              "description": "MDN HTML elements and attributes reference",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_html_2026-01.zim",
-              "size_mb": 2
-            },
-            {
-              "id": "devdocs_en_css",
-              "version": "2026-01",
-              "title": "CSS Documentation",
-              "description": "MDN CSS properties and selectors reference",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_css_2026-01.zim",
-              "size_mb": 5
+              "id": "docs.python.org_en",
+              "version": "2025-09",
+              "title": "Python Docs",
+              "description": "The official Python documentation mirrored for offline reference inside RoachNet.",
+              "url": "https://download.kiwix.org/zim/zimit/docs.python.org_en_2025-09.zim",
+              "size_mb": 2365
             }
           ]
         },
         {
           "name": "Standard",
           "slug": "computing-standard",
-          "description": "Maker projects with Arduino and Raspberry Pi, plus more programming docs. Includes Essential.",
+          "description": "Add the web stack, version-control training, and container fundamentals. Includes Essential.",
           "includesTier": "computing-essential",
           "resources": [
             {
-              "id": "arduino.stackexchange.com_en_all",
-              "version": "2026-02",
-              "title": "Arduino Q&A",
-              "description": "Stack Exchange Q&A for Arduino microcontroller projects",
-              "url": "https://download.kiwix.org/zim/stack_exchange/arduino.stackexchange.com_en_all_2026-02.zim",
-              "size_mb": 247
-            },
-            {
-              "id": "raspberrypi.stackexchange.com_en_all",
-              "version": "2026-02",
-              "title": "Raspberry Pi Q&A",
-              "description": "Stack Exchange Q&A for Raspberry Pi projects and troubleshooting",
-              "url": "https://download.kiwix.org/zim/stack_exchange/raspberrypi.stackexchange.com_en_all_2026-02.zim",
-              "size_mb": 285
-            },
-            {
-              "id": "devdocs_en_node",
-              "version": "2026-02",
-              "title": "Node.js Documentation",
-              "description": "Node.js API reference and guides",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_node_2026-02.zim",
-              "size_mb": 1
-            },
-            {
               "id": "devdocs_en_react",
               "version": "2026-02",
-              "title": "React Documentation",
-              "description": "React library reference and tutorials",
+              "title": "React Docs",
+              "description": "The current React documentation set for component patterns, state, effects, and modern app structure.",
               "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_react_2026-02.zim",
               "size_mb": 3
             },
             {
-              "id": "devdocs_en_git",
+              "id": "coreyms_en_git-tutorials",
+              "version": "2026-04",
+              "title": "Corey Schafer: Git Tutorials",
+              "description": "A concise Git course focused on commits, branches, remotes, and sane day-to-day collaboration.",
+              "url": "https://download.kiwix.org/zim/videos/coreyms_en_git-tutorials_2026-04.zim",
+              "size_mb": 57
+            },
+            {
+              "id": "devdocs_en_docker",
               "version": "2026-01",
-              "title": "Git Documentation",
-              "description": "Git version control reference",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_git_2026-01.zim",
-              "size_mb": 1
+              "title": "Docker Docs",
+              "description": "Container basics, image workflows, and Compose reference for local runtime and service work.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_docker_2026-01.zim",
+              "size_mb": 2
             }
           ]
         },
         {
           "name": "Comprehensive",
           "slug": "computing-comprehensive",
-          "description": "Deep electronics knowledge and extensive Q&A for hardware projects. Includes Standard.",
+          "description": "Fill out the language shelf with systems-level references and cloud-native runtime docs. Includes Standard.",
           "includesTier": "computing-standard",
           "resources": [
             {
-              "id": "electronics.stackexchange.com_en_all",
-              "version": "2026-02",
-              "title": "Electronics Q&A",
-              "description": "Stack Exchange Q&A for circuit design, components, and electrical engineering",
-              "url": "https://download.kiwix.org/zim/stack_exchange/electronics.stackexchange.com_en_all_2026-02.zim",
-              "size_mb": 3800
-            },
-            {
-              "id": "robotics.stackexchange.com_en_all",
-              "version": "2026-02",
-              "title": "Robotics Q&A",
-              "description": "Stack Exchange Q&A for robotics projects and automation",
-              "url": "https://download.kiwix.org/zim/stack_exchange/robotics.stackexchange.com_en_all_2026-02.zim",
-              "size_mb": 233
-            },
-            {
-              "id": "devdocs_en_docker",
+              "id": "devdocs_en_go",
               "version": "2026-01",
-              "title": "Docker Documentation",
-              "description": "Docker container reference and guides",
-              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_docker_2026-01.zim",
+              "title": "Go Docs",
+              "description": "Offline Go language and standard-library docs for backend tooling and systems work.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_go_2026-01.zim",
               "size_mb": 2
+            },
+            {
+              "id": "devdocs_en_rust",
+              "version": "2026-01",
+              "title": "Rust Docs",
+              "description": "Rust reference and library docs for lower-level tooling, performance work, and safer systems code.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_rust_2026-01.zim",
+              "size_mb": 6
+            },
+            {
+              "id": "devdocs_en_kubernetes",
+              "version": "2026-01",
+              "title": "Kubernetes Docs",
+              "description": "A lightweight offline reference for cluster concepts, objects, and day-to-day Kubernetes operations.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_kubernetes_2026-01.zim",
+              "size_mb": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Machine Learning & Data Science",
+      "slug": "machine-learning",
+      "icon": "IconBrain",
+      "description": "Statistics, model-building references, and practical ML coursework mirrored into RoachNet as individual installable course apps.",
+      "language": "en",
+      "tiers": [
+        {
+          "name": "Essential",
+          "slug": "machine-learning-essential",
+          "description": "Start with statistics and data-handling fundamentals before you pull the heavier model packs.",
+          "recommended": true,
+          "resources": [
+            {
+              "id": "learningstatistics_en_all",
+              "version": "2026-02",
+              "title": "Learning Statistics",
+              "description": "A concise statistics course covering probability, inference, and the math you need before model work.",
+              "url": "https://download.kiwix.org/zim/zimit/learningstatistics_en_all_2026-02.zim",
+              "size_mb": 32
+            },
+            {
+              "id": "devdocs_en_numpy",
+              "version": "2026-01",
+              "title": "NumPy Docs",
+              "description": "Array computing, vectorized math, and the core Python numerical toolkit mirrored offline.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_numpy_2026-01.zim",
+              "size_mb": 5
+            },
+            {
+              "id": "devdocs_en_pandas",
+              "version": "2026-01",
+              "title": "Pandas Docs",
+              "description": "Dataframe workflows, cleaning, reshaping, and analysis reference for everyday ML preparation.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_pandas_2026-01.zim",
+              "size_mb": 5
+            }
+          ]
+        },
+        {
+          "name": "Standard",
+          "slug": "machine-learning-standard",
+          "description": "Layer in the practical model-tool docs most people actually use. Includes Essential.",
+          "includesTier": "machine-learning-essential",
+          "resources": [
+            {
+              "id": "devdocs_en_scikit-learn",
+              "version": "2026-01",
+              "title": "scikit-learn Docs",
+              "description": "A practical offline reference for classical machine-learning models, pipelines, metrics, and preprocessing.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_scikit-learn_2026-01.zim",
+              "size_mb": 54
+            },
+            {
+              "id": "devdocs_en_pytorch",
+              "version": "2025-04",
+              "title": "PyTorch Docs",
+              "description": "Offline PyTorch reference for tensors, modules, training loops, and model implementation details.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_pytorch_2025-04.zim",
+              "size_mb": 3
+            },
+            {
+              "id": "devdocs_en_tensorflow",
+              "version": "2026-02",
+              "title": "TensorFlow Docs",
+              "description": "TensorFlow API docs and guides for model building, serving, and deployment reference.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_tensorflow_2026-02.zim",
+              "size_mb": 6
+            }
+          ]
+        },
+        {
+          "name": "Comprehensive",
+          "slug": "machine-learning-comprehensive",
+          "description": "Pull the heavier video shelf once you want a deeper offline ML course library. Includes Standard.",
+          "includesTier": "machine-learning-standard",
+          "resources": [
+            {
+              "id": "ted_mul_machine-learning",
+              "version": "2026-01",
+              "title": "TED: Machine Learning",
+              "description": "A large offline video collection exploring machine learning, AI applications, and the social questions around them.",
+              "url": "https://download.kiwix.org/zim/ted/ted_mul_machine-learning_2026-01.zim",
+              "size_mb": 1281
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Music Production & Audio",
+      "slug": "music-audio",
+      "icon": "IconWaveform",
+      "description": "Music theory, production context, and sound-focused learning packs for users building tracks, scores, and audio-heavy projects.",
+      "language": "en",
+      "tiers": [
+        {
+          "name": "Essential",
+          "slug": "music-audio-essential",
+          "description": "Start with the practical music-theory shelf before pulling the large video archives.",
+          "recommended": true,
+          "resources": [
+            {
+              "id": "openmusictheory.com_en_all",
+              "version": "2026-03",
+              "title": "Open Music Theory",
+              "description": "A well-structured open music-theory course covering harmony, rhythm, notation, and ear-training fundamentals.",
+              "url": "https://download.kiwix.org/zim/zimit/openmusictheory.com_en_all_2026-03.zim",
+              "size_mb": 78
+            },
+            {
+              "id": "music.dalitio.de_en_all",
+              "version": "2026-02",
+              "title": "Dalitio Music Theory",
+              "description": "Compact lessons on chord construction, scales, intervals, and the theory you keep revisiting while producing.",
+              "url": "https://download.kiwix.org/zim/zimit/music.dalitio.de_en_all_2026-02.zim",
+              "size_mb": 37
+            }
+          ]
+        },
+        {
+          "name": "Standard",
+          "slug": "music-audio-standard",
+          "description": "Bring in sound-focused talks and listening material for production and audio-thinking. Includes Essential.",
+          "includesTier": "music-audio-essential",
+          "resources": [
+            {
+              "id": "ted_mul_sound",
+              "version": "2026-02",
+              "title": "TED: Sound",
+              "description": "Talks and lessons about acoustics, sound design, listening, and how audio changes the way we experience media.",
+              "url": "https://download.kiwix.org/zim/ted/ted_mul_sound_2026-02.zim",
+              "size_mb": 411
+            }
+          ]
+        },
+        {
+          "name": "Comprehensive",
+          "slug": "music-audio-comprehensive",
+          "description": "The large music shelf for deeper study, inspiration, and long-lived offline reference. Includes Standard.",
+          "includesTier": "music-audio-standard",
+          "resources": [
+            {
+              "id": "ted_mul_music",
+              "version": "2026-01",
+              "title": "TED: Music",
+              "description": "A broad music-focused talk archive covering composition, performance, listening, creativity, and the craft around making records.",
+              "url": "https://download.kiwix.org/zim/ted/ted_mul_music_2026-01.zim",
+              "size_mb": 3911
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IT & Infrastructure",
+      "slug": "it-infrastructure",
+      "icon": "IconServer",
+      "description": "Linux operations, networking, web infrastructure, and security learning packs for users treating RoachNet like a portable workstation.",
+      "language": "en",
+      "tiers": [
+        {
+          "name": "Essential",
+          "slug": "it-infrastructure-essential",
+          "description": "Start with the operating-system and shell references most people need first.",
+          "recommended": true,
+          "resources": [
+            {
+              "id": "archlinux_en_all_maxi",
+              "version": "2025-09",
+              "title": "Arch Linux Docs",
+              "description": "A compact offline mirror of Arch Linux docs and operational reference material.",
+              "url": "https://download.kiwix.org/zim/other/archlinux_en_all_maxi_2025-09.zim",
+              "size_mb": 30
+            },
+            {
+              "id": "alpinelinux_en_all_maxi",
+              "version": "2026-01",
+              "title": "Alpine Linux Docs",
+              "description": "A lean Linux admin reference for container-first systems and lightweight hosts.",
+              "url": "https://download.kiwix.org/zim/other/alpinelinux_en_all_maxi_2026-01.zim",
+              "size_mb": 3
             },
             {
               "id": "devdocs_en_bash",
               "version": "2026-01",
-              "title": "Linux Documentation",
-              "description": "Linux command reference and system administration",
+              "title": "Bash Docs",
+              "description": "Shell reference for command-line workflows, scripting, and quick ops work inside RoachNet.",
               "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_bash_2026-01.zim",
               "size_mb": 1
+            }
+          ]
+        },
+        {
+          "name": "Standard",
+          "slug": "it-infrastructure-standard",
+          "description": "Add web and edge-infrastructure learning once the Linux base shelf is in place. Includes Essential.",
+          "includesTier": "it-infrastructure-essential",
+          "resources": [
+            {
+              "id": "cloudflare.com_en_learning-center",
+              "version": "2025-12",
+              "title": "Cloudflare Learning Center",
+              "description": "A practical offline edge, networking, and web-security knowledge base for infrastructure work.",
+              "url": "https://download.kiwix.org/zim/zimit/cloudflare.com_en_learning-center_2025-12.zim",
+              "size_mb": 182
+            },
+            {
+              "id": "devdocs_en_apache-http-server",
+              "version": "2026-01",
+              "title": "Apache HTTP Server Docs",
+              "description": "A lightweight offline reference for Apache HTTP Server configuration, modules, and hosting basics.",
+              "url": "https://download.kiwix.org/zim/devdocs/devdocs_en_apache-http-server_2026-01.zim",
+              "size_mb": 1
+            }
+          ]
+        },
+        {
+          "name": "Comprehensive",
+          "slug": "it-infrastructure-comprehensive",
+          "description": "Pull in the broader security shelf once you want more context around threat models and defensive ops. Includes Standard.",
+          "includesTier": "it-infrastructure-standard",
+          "resources": [
+            {
+              "id": "ted_mul_cyber-security",
+              "version": "2026-01",
+              "title": "TED: Cyber Security",
+              "description": "A security-focused talk archive covering privacy, defense, online trust, and the real-world impact of bad infrastructure decisions.",
+              "url": "https://download.kiwix.org/zim/ted/ted_mul_cyber-security_2026-01.zim",
+              "size_mb": 193
             }
           ]
         }

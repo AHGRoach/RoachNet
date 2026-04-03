@@ -527,6 +527,27 @@ public actor ManagedAppRuntimeBridge {
         return response.message ?? "Education content queued."
     }
 
+    public func downloadEducationResource(
+        using config: RoachNetInstallerConfig,
+        categorySlug: String,
+        resourceId: String
+    ) async throws -> String {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let categorySlug: String
+            let resourceId: String
+        }
+
+        let response: ActionResponse = try await post(
+            "/api/zim/download-category-resource",
+            baseURL: baseURL,
+            body: Payload(categorySlug: categorySlug, resourceId: resourceId)
+        )
+        return response.message ?? "Education course queued."
+    }
+
     public func selectWikipedia(
         using config: RoachNetInstallerConfig,
         optionId: String

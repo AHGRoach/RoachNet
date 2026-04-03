@@ -207,6 +207,7 @@ router
     router.get('/curated-categories', [ZimController, 'listCuratedCategories'])
     router.post('/download-remote', [ZimController, 'downloadRemote'])
     router.post('/download-category-tier', [ZimController, 'downloadCategoryTier'])
+    router.post('/download-category-resource', [ZimController, 'downloadCategoryResource'])
 
     router.get('/wikipedia', [ZimController, 'getWikipediaState'])
     router.post('/wikipedia/select', [ZimController, 'selectWikipedia'])

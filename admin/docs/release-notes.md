@@ -525,6 +525,20 @@
 - **Native Install Handoff**: Added a packaged `roachnet://install-content` URL scheme so website install buttons can open the native app and queue map packs, knowledge packs, Wikipedia bundles, and contained RoachClaw model installs.
 - **macOS Packaging**: Updated the native bundle metadata for the new URL scheme so the website-to-app install path survives the packaged `.app` and DMG flow.
 
+## Version 1.4 - April 3, 2026
+
+### 🚀 New Features
+
+- **Dev Studio**: Expanded the native Dev lane with richer project bootstraps, grouped secret templates, inline code suggestions, contextual shell commands, and a direct path to insert RoachClaw responses back into the active document.
+- **Command Bar**: Added a detached global launcher on `Shift-Command-R` so RoachNet can surface a compact command bar while the app is in the background instead of yanking the full shell to the front.
+- **Apps Catalog**: Expanded the website-backed Apps shelf into per-region maps, per-course education downloads, Wikipedia bundles, and contained RoachClaw model packs backed by the same native install manifest lane.
+
+### ✨ Improvements
+
+- **Website**: Refined `roachnet.org` and `apps.roachnet.org` copy to tell the same local-first product story and updated the public download surfaces to the `v1.4` release line.
+- **Screens Gallery**: Added a consistent white matte behind every native screenshot on the website so the screens read as one cohesive set.
+- **Release Plumbing**: Moved the packaged versioning and fallback release metadata onto the `1.4.x` line while preserving the current GitHub Actions packaging path.
+
 ## Version 1.30.9 - April 3, 2026
 
 ### 🐛 Bug Fixes

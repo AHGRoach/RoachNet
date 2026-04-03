@@ -1,6 +1,7 @@
 import { ZimService } from '#services/zim_service'
 import {
   assertNotPrivateUrl,
+  downloadCategoryResourceValidator,
   downloadCategoryTierValidator,
   filenameParamValidator,
   remoteDownloadWithMetadataValidator,
@@ -53,6 +54,21 @@ export default class ZimController {
       categorySlug: payload.categorySlug,
       tierSlug: payload.tierSlug,
       resources,
+    }
+  }
+
+  async downloadCategoryResource({ request }: HttpContext) {
+    const payload = await request.validateUsing(downloadCategoryResourceValidator)
+    const filename = await this.zimService.downloadCategoryResource(
+      payload.categorySlug,
+      payload.resourceId
+    )
+
+    return {
+      message: 'Download started successfully',
+      categorySlug: payload.categorySlug,
+      resourceId: payload.resourceId,
+      filename,
     }
   }
 

@@ -2,8 +2,29 @@
 
 ## Unreleased
 
-- Added a repo-native Apple release secret bootstrapper at `scripts/configure-apple-release-secrets.sh` plus an `npm run release:apple-secrets` wrapper so Developer ID and notarization credentials can be loaded into GitHub with one repeatable command.
-- Expanded the native macOS README with the exact environment variables and command sequence needed to wire the `Native Packages` workflow for a real Gatekeeper-safe notarized build.
+- No unreleased changes.
+
+## v1.4 - 2026-04-03
+
+### Dev Studio and command bar
+
+- Expanded the native `Dev` lane with richer project bootstraps, grouped secret templates, inline code suggestions, contextual shell commands, and one-tap insertion of RoachClaw responses back into the active document.
+- Added a detached global command bar on `Shift-Command-R` so RoachNet can surface a compact launcher panel over the desktop without pulling the full shell forward when the app is not active.
+
+### Apps catalog and install handoff
+
+- Rebuilt the public Apps catalog around install-ready map regions, per-course education downloads, Wikipedia bundles, and RoachClaw model packs backed by the same manifest lane the native app can consume.
+- Wired the website install actions to the packaged `roachnet://install-content` handoff path so clicking `Install to RoachNet` can open the native shell and queue the selected content in the correct module instead of dropping the user into a raw download list.
+
+### Website polish
+
+- Refined the `roachnet.org` copy around the local-first command-center story, aligned `apps.roachnet.org` to the same tone, and updated the download surfaces to the `v1.4` release.
+- Added a consistent white matte behind every website screen capture so the native screenshots read as one cohesive gallery instead of a mixed set of transparent and dark-edge assets.
+
+### Release plumbing
+
+- Updated package and installer versioning to the `1.4.x` line while keeping the existing native build and GitHub Actions packaging flow intact.
+- Kept the Apple signing/notarization bootstrap script in place so the repository can still be wired for a future Gatekeeper-safe notarized release once those secrets are present in GitHub Actions.
 
 ## v1.30.8 - 2026-04-02
 

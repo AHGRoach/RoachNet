@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AVKit
+import Carbon
 import WebKit
 import RoachNetCore
 import RoachNetDesign
@@ -100,6 +101,7 @@ private enum CommandPaletteTarget: Hashable {
     case service(serviceName: String)
     case refreshRuntime
     case launchGuide
+    case externalURL(String)
 }
 
 private enum HomeMenuSection: String, CaseIterable, Identifiable {
@@ -116,6 +118,68 @@ private struct CommandPaletteEntry: Identifiable, Hashable {
     let detail: String
     let systemImage: String
     let target: CommandPaletteTarget
+    let keywords: [String]
+
+    init(
+        id: String,
+        title: String,
+        detail: String,
+        systemImage: String,
+        target: CommandPaletteTarget,
+        keywords: [String] = []
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.systemImage = systemImage
+        self.target = target
+        self.keywords = keywords
+    }
+}
+
+private extension Notification.Name {
+    static let roachNetOpenCommandPalette = Notification.Name("roachnet.open-command-palette")
+    static let roachNetOpenDetachedCommandPalette = Notification.Name("roachnet.open-detached-command-palette")
+}
+
+private enum RoachNetGlobalHotKey {
+    static let commandPaletteID: UInt32 = 1
+    static let keyCode: UInt32 = UInt32(kVK_ANSI_R)
+    static let modifiers: UInt32 = UInt32(cmdKey) | UInt32(shiftKey)
+    static let hint = "Shift-Command-R"
+}
+
+private func roachNetFourCharCode(_ value: String) -> OSType {
+    value.utf8.prefix(4).reduce(0) { partial, byte in
+        (partial << 8) + OSType(byte)
+    }
+}
+
+private func filteredCommandPaletteEntries(
+    from entries: [CommandPaletteEntry],
+    query: String
+) -> [CommandPaletteEntry] {
+    let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedQuery.isEmpty else {
+        return entries
+    }
+
+    let normalizedQuery = trimmedQuery.lowercased()
+    return entries.filter { entry in
+        let haystack = "\(entry.title) \(entry.detail) \(entry.keywords.joined(separator: " "))".lowercased()
+        return haystack.contains(normalizedQuery)
+    }
+}
+
+private extension CommandPaletteTarget {
+    var activatesMainShellWhenSelectedFromDetachedPalette: Bool {
+        switch self {
+        case .externalURL:
+            return false
+        case .pane, .route, .service, .refreshRuntime, .launchGuide:
+            return true
+        }
+    }
 }
 
 private struct NativeWebView: NSViewRepresentable {
@@ -231,15 +295,7 @@ private struct CommandPaletteSheet: View {
     @FocusState private var queryFocused: Bool
 
     private var filteredEntries: [CommandPaletteEntry] {
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else {
-            return entries
-        }
-
-        return entries.filter { entry in
-            let haystack = "\(entry.title) \(entry.detail)".lowercased()
-            return haystack.contains(trimmedQuery.lowercased())
-        }
+        filteredCommandPaletteEntries(from: entries, query: query)
     }
 
     var body: some View {
@@ -260,6 +316,9 @@ private struct CommandPaletteSheet: View {
                                     Text("Jump through the command deck without hunting through the shell.")
                                         .font(.system(size: 14, weight: .medium))
                                         .foregroundStyle(RoachPalette.muted)
+                                    Text("Cmd-K inside RoachNet · \(RoachNetGlobalHotKey.hint) from anywhere on your Mac")
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(RoachPalette.green)
                                 }
 
                                 Spacer()
@@ -278,6 +337,9 @@ private struct CommandPaletteSheet: View {
                                     Text("Jump through the command deck without hunting through the shell.")
                                         .font(.system(size: 14, weight: .medium))
                                         .foregroundStyle(RoachPalette.muted)
+                                    Text("Cmd-K inside RoachNet · \(RoachNetGlobalHotKey.hint) from anywhere on your Mac")
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(RoachPalette.green)
                                 }
 
                                 Button("Close") {
@@ -288,15 +350,20 @@ private struct CommandPaletteSheet: View {
                         }
 
                         RoachInsetPanel {
-                            HStack(spacing: 12) {
-                                Image(systemName: "magnifyingglass")
-                                    .foregroundStyle(RoachPalette.green)
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "magnifyingglass")
+                                        .foregroundStyle(RoachPalette.green)
 
-                                TextField("Search commands, views, tools, and modules", text: $query)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(RoachPalette.text)
-                                    .focused($queryFocused)
+                                    TextField("Search commands, views, tools, modules, and routes", text: $query)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundStyle(RoachPalette.text)
+                                        .focused($queryFocused)
+                                }
+                                Text("Showing \(min(filteredEntries.count, 18)) of \(entries.count) commands")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.muted)
                             }
                             .padding(.horizontal, 4)
                         }
@@ -355,6 +422,246 @@ private struct CommandPaletteSheet: View {
         .onAppear {
             queryFocused = true
         }
+        .onExitCommand {
+            onDismiss()
+        }
+    }
+}
+
+private struct DetachedCommandPaletteView: View {
+    let entries: [CommandPaletteEntry]
+    let onSelect: (CommandPaletteEntry) -> Void
+    let onDismiss: () -> Void
+
+    @State private var query = ""
+    @FocusState private var queryFocused: Bool
+
+    private var filteredEntries: [CommandPaletteEntry] {
+        filteredCommandPaletteEntries(from: entries, query: query)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                RoachPanel {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(alignment: .center, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("RoachNet Command Bar")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(RoachPalette.text)
+                                Text("Quick-launch commands without bringing the full shell forward.")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(RoachPalette.muted)
+                            }
+
+                            Spacer()
+
+                            Text(RoachNetGlobalHotKey.hint)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(RoachPalette.green)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(RoachPalette.panelGlass)
+                                )
+                        }
+
+                        RoachInsetPanel {
+                            HStack(spacing: 12) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.green)
+
+                                TextField("Search commands, modules, routes, and installs", text: $query)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(RoachPalette.text)
+                                    .focused($queryFocused)
+                            }
+                            .padding(.horizontal, 4)
+                        }
+
+                        Text("Showing \(min(filteredEntries.count, 8)) of \(entries.count) commands")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+
+                        ScrollView(showsIndicators: false) {
+                            VStack(spacing: 10) {
+                                ForEach(filteredEntries.prefix(8)) { entry in
+                                    Button {
+                                        onSelect(entry)
+                                    } label: {
+                                        RoachInsetPanel {
+                                            HStack(spacing: 12) {
+                                                Image(systemName: entry.systemImage)
+                                                    .font(.system(size: 14, weight: .semibold))
+                                                    .foregroundStyle(RoachPalette.green)
+                                                    .frame(width: 28, height: 28)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                            .fill(RoachPalette.panelGlass)
+                                                    )
+
+                                                VStack(alignment: .leading, spacing: 3) {
+                                                    Text(entry.title)
+                                                        .font(.system(size: 14, weight: .semibold))
+                                                        .foregroundStyle(RoachPalette.text)
+                                                    Text(entry.detail)
+                                                        .font(.system(size: 12, weight: .medium))
+                                                        .foregroundStyle(RoachPalette.muted)
+                                                        .lineLimit(2)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                }
+
+                                                Spacer()
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                    .buttonStyle(RoachCardButtonStyle())
+                                }
+
+                                if filteredEntries.isEmpty {
+                                    RoachInsetPanel {
+                                        Text("No commands matched that search yet.")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(RoachPalette.muted)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(
+                    width: min(proxy.size.width - 32, 680),
+                    height: min(proxy.size.height - 40, 420)
+                )
+                .padding(.top, 22)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.horizontal, 16)
+        }
+        .onAppear {
+            queryFocused = true
+        }
+        .onExitCommand {
+            onDismiss()
+        }
+    }
+}
+
+private final class DetachedCommandPalettePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+@MainActor
+private final class DetachedCommandPaletteCoordinator: ObservableObject {
+    private var windowController: DetachedCommandPaletteWindowController?
+
+    func present(
+        entries: [CommandPaletteEntry],
+        onSelect: @escaping (CommandPaletteEntry) -> Void
+    ) {
+        dismiss()
+
+        let controller = DetachedCommandPaletteWindowController(entries: entries) { [weak self] entry in
+            self?.dismiss()
+            onSelect(entry)
+        } onClose: { [weak self] in
+            self?.windowController = nil
+        }
+
+        windowController = controller
+        controller.showPalette()
+    }
+
+    func dismiss() {
+        windowController?.close()
+        windowController = nil
+    }
+}
+
+private final class DetachedCommandPaletteWindowController: NSWindowController, NSWindowDelegate {
+    private let onClose: () -> Void
+
+    init(
+        entries: [CommandPaletteEntry],
+        onSelect: @escaping (CommandPaletteEntry) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.onClose = onClose
+
+        let window = DetachedCommandPalettePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .statusBar
+        window.isFloatingPanel = true
+        window.isMovableByWindowBackground = false
+        window.hidesOnDeactivate = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace, .transient]
+        window.animationBehavior = .utilityWindow
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isReleasedWhenClosed = false
+
+        super.init(window: window)
+
+        let rootView = DetachedCommandPaletteView(
+            entries: entries,
+            onSelect: { [weak self] entry in
+                onSelect(entry)
+                self?.close()
+            },
+            onDismiss: { [weak self] in
+                self?.close()
+            }
+        )
+
+        window.contentViewController = NSHostingController(rootView: rootView)
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func showPalette() {
+        guard let window else { return }
+
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let frame = screen.visibleFrame
+            let width: CGFloat = 720
+            let height: CGFloat = 460
+            let origin = NSPoint(
+                x: frame.midX - (width / 2),
+                y: max(frame.minY + 40, frame.maxY - height - 88)
+            )
+            window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: false)
+        }
+
+        window.orderFrontRegardless()
+        window.makeKey()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose()
     }
 }
 
@@ -916,6 +1223,16 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    func downloadEducationResource(categorySlug: String, resourceId: String) async {
+        await runAction("education-resource-\(resourceId)", status: "Queueing course install.") {
+            _ = try await ManagedAppRuntimeBridge.shared.downloadEducationResource(
+                using: self.config,
+                categorySlug: categorySlug,
+                resourceId: resourceId
+            )
+        }
+    }
+
     func applyWikipediaSelection() async {
         let optionId = selectedWikipediaOptionId
         await runAction("wikipedia-\(optionId)", status: "Updating Wikipedia selection.") {
@@ -1008,6 +1325,17 @@ final class WorkspaceModel: ObservableObject {
             }
             selectedPane = .education
             await downloadEducationTier(categorySlug: categorySlug, tierSlug: tierSlug)
+        case "education-resource":
+            guard
+                let categorySlug = queryValue("category", in: components),
+                let resourceId = queryValue("resource", in: components) ?? queryValue("resourceId", in: components)
+            else {
+                errorLine = "RoachNet couldn't tell which course to install."
+                statusLine = "Install link incomplete."
+                return
+            }
+            selectedPane = .education
+            await downloadEducationResource(categorySlug: categorySlug, resourceId: resourceId)
         case "wikipedia-option":
             guard let optionId = queryValue("option", in: components) ?? queryValue("optionId", in: components) else {
                 errorLine = "RoachNet couldn't tell which Wikipedia pack to install."
@@ -1785,6 +2113,7 @@ private struct RootWorkspaceView: View {
     @ObservedObject var model: WorkspaceModel
     @AppStorage("hasSeenLaunchGuide") private var hasSeenLaunchGuide = false
     @Namespace private var sidebarMotion
+    @StateObject private var detachedPaletteCoordinator = DetachedCommandPaletteCoordinator()
     @State private var showLaunchGuide = false
     @State private var showCommandPalette = false
     @State private var sidebarCollapsed = false
@@ -1875,6 +2204,13 @@ private struct RootWorkspaceView: View {
                 try? await Task.sleep(for: .milliseconds(450))
                 showLaunchGuide = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roachNetOpenCommandPalette)) { _ in
+            detachedPaletteCoordinator.dismiss()
+            showCommandPalette = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roachNetOpenDetachedCommandPalette)) { _ in
+            presentDetachedCommandPalette()
         }
         .sheet(
             isPresented: Binding(
@@ -2230,8 +2566,8 @@ private struct RootWorkspaceView: View {
             RoachCommandTray(
                 label: "Command Bar",
                 prompt: isTight
-                    ? "Jump between maps, models, runtime, downloads, and modules from one place."
-                    : "Jump between maps, education, archives, models, runtime, and sources from one place."
+                    ? "Jump the shell from one place. Cmd-K here, \(RoachNetGlobalHotKey.hint) from anywhere."
+                    : "Jump between maps, education, archives, models, runtime, and sources from one place. Cmd-K here, \(RoachNetGlobalHotKey.hint) system-wide."
             )
         }
         .buttonStyle(RoachCardButtonStyle())
@@ -3306,7 +3642,8 @@ private struct RootWorkspaceView: View {
                 title: pane.rawValue,
                 detail: pane.subtitle,
                 systemImage: pane.icon,
-                target: .pane(pane)
+                target: .pane(pane),
+                keywords: [pane.rawValue, pane.subtitle, "module", "pane"]
             )
         }
 
@@ -3316,7 +3653,8 @@ private struct RootWorkspaceView: View {
                 title: item.title,
                 detail: item.detail,
                 systemImage: item.systemImage,
-                target: .route(title: item.title, path: item.routePath)
+                target: .route(title: item.title, path: item.routePath),
+                keywords: [item.title, item.detail, item.routePath]
             )
         }
 
@@ -3326,7 +3664,8 @@ private struct RootWorkspaceView: View {
                 title: item.title,
                 detail: item.detail,
                 systemImage: item.systemImage,
-                target: .service(serviceName: item.id)
+                target: .service(serviceName: item.id),
+                keywords: [item.title, item.detail, item.id, "service"]
             )
         }
 
@@ -3339,20 +3678,51 @@ private struct RootWorkspaceView: View {
                     title: "Refresh Runtime",
                     detail: "Pull a fresh native snapshot and recheck the local services.",
                     systemImage: "arrow.clockwise",
-                    target: .refreshRuntime
+                    target: .refreshRuntime,
+                    keywords: ["health", "services", "reload", "snapshot"]
                 ),
                 CommandPaletteEntry(
                     id: "action-launch-guide",
                     title: "Open Guided Tour",
                     detail: "Replay the first-launch walkthrough for the command deck.",
                     systemImage: "play.rectangle.fill",
-                    target: .launchGuide
+                    target: .launchGuide,
+                    keywords: ["guide", "tour", "help", "walkthrough"]
+                ),
+                CommandPaletteEntry(
+                    id: "action-open-model-store",
+                    title: "Open Model Store",
+                    detail: "Jump straight into RoachClaw's local and cloud model shelf.",
+                    systemImage: "shippingbox.fill",
+                    target: .route(title: "Model Store", path: "/settings/models"),
+                    keywords: ["models", "ollama", "cloud", "store", "ai"]
+                ),
+                CommandPaletteEntry(
+                    id: "action-open-apps-store",
+                    title: "Open Apps Store",
+                    detail: "Open apps.roachnet.org for direct install handoffs into the native app.",
+                    systemImage: "square.grid.2x2",
+                    target: .externalURL("https://apps.roachnet.org"),
+                    keywords: ["apps", "catalog", "store", "install", "downloads"]
+                ),
+                CommandPaletteEntry(
+                    id: "action-open-runtime-health",
+                    title: "Open Runtime Health",
+                    detail: "Jump to the runtime settings and service-health lane.",
+                    systemImage: "stethoscope",
+                    target: .route(title: "Runtime Health", path: "/settings/system"),
+                    keywords: ["runtime", "health", "services", "diagnostics"]
                 ),
             ]
     }
 
-    private func performCommand(_ entry: CommandPaletteEntry) {
+    private func performCommand(_ entry: CommandPaletteEntry, fromDetachedPalette: Bool = false) {
         showCommandPalette = false
+
+        if fromDetachedPalette, entry.target.activatesMainShellWhenSelectedFromDetachedPalette {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows.first(where: { $0.canBecomeKey })?.makeKeyAndOrderFront(nil)
+        }
 
         switch entry.target {
         case let .pane(pane):
@@ -3373,6 +3743,17 @@ private struct RootWorkspaceView: View {
             Task { await model.refreshRuntimeState() }
         case .launchGuide:
             showLaunchGuide = true
+        case let .externalURL(urlString):
+            if let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    private func presentDetachedCommandPalette() {
+        showCommandPalette = false
+        detachedPaletteCoordinator.present(entries: commandPaletteEntries) { entry in
+            performCommand(entry, fromDetachedPalette: true)
         }
     }
 
@@ -4062,6 +4443,16 @@ final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
     }
     private var isHandlingTermination = false
     private var pendingURLs: [URL] = []
+    private var commandPaletteHotKeyRef: EventHotKeyRef?
+    private var commandPaletteHotKeyHandler: EventHandlerRef?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        registerCommandPaletteHotKey()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        unregisterCommandPaletteHotKey()
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -4096,6 +4487,82 @@ final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         pendingURLs.append(contentsOf: urls)
         flushPendingURLsIfNeeded()
+    }
+
+    private func registerCommandPaletteHotKey() {
+        guard commandPaletteHotKeyRef == nil else { return }
+
+        var eventSpec = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: OSType(kEventHotKeyPressed)
+        )
+
+        let callback: EventHandlerUPP = { _, eventRef, userData in
+            guard let eventRef, let userData else { return noErr }
+
+            var hotKeyID = EventHotKeyID()
+            let status = GetEventParameter(
+                eventRef,
+                EventParamName(kEventParamDirectObject),
+                EventParamType(typeEventHotKeyID),
+                nil,
+                MemoryLayout<EventHotKeyID>.size,
+                nil,
+                &hotKeyID
+            )
+
+            guard status == noErr else { return status }
+
+            let delegate = Unmanaged<RoachNetMacAppDelegate>.fromOpaque(userData).takeUnretainedValue()
+            delegate.handleHotKeyPress(hotKeyID: hotKeyID)
+            return noErr
+        }
+
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            callback,
+            1,
+            &eventSpec,
+            UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            &commandPaletteHotKeyHandler
+        )
+
+        let hotKeyID = EventHotKeyID(
+            signature: roachNetFourCharCode("RNCP"),
+            id: RoachNetGlobalHotKey.commandPaletteID
+        )
+
+        RegisterEventHotKey(
+            RoachNetGlobalHotKey.keyCode,
+            RoachNetGlobalHotKey.modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &commandPaletteHotKeyRef
+        )
+    }
+
+    private func unregisterCommandPaletteHotKey() {
+        if let commandPaletteHotKeyRef {
+            UnregisterEventHotKey(commandPaletteHotKeyRef)
+            self.commandPaletteHotKeyRef = nil
+        }
+
+        if let commandPaletteHotKeyHandler {
+            RemoveEventHandler(commandPaletteHotKeyHandler)
+            self.commandPaletteHotKeyHandler = nil
+        }
+    }
+
+    private func handleHotKeyPress(hotKeyID: EventHotKeyID) {
+        guard hotKeyID.id == RoachNetGlobalHotKey.commandPaletteID else { return }
+
+        DispatchQueue.main.async {
+            let notificationName: Notification.Name = NSApp.isActive
+                ? .roachNetOpenCommandPalette
+                : .roachNetOpenDetachedCommandPalette
+            NotificationCenter.default.post(name: notificationName, object: nil)
+        }
     }
 
     private func flushPendingURLsIfNeeded() {

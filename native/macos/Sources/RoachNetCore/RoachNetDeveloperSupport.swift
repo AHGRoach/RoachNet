@@ -128,6 +128,13 @@ public enum RoachNetSecretsCatalogStore {
             notes: "Used for repo operations, release tooling, and future in-app code assistance."
         ),
         .init(
+            id: "hugging-face-token",
+            label: "Hugging Face Token",
+            key: "HUGGINGFACE_TOKEN",
+            scope: "AI / Models",
+            notes: "Lets RoachNet pull gated model metadata, Spaces, and future Hub-backed coding or ML workflows."
+        ),
+        .init(
             id: "netlify-auth-token",
             label: "Netlify Auth Token",
             key: "NETLIFY_AUTH_TOKEN",
@@ -140,6 +147,34 @@ public enum RoachNetSecretsCatalogStore {
             key: "NETLIFY_SITE_ID",
             scope: "Deployments",
             notes: "Optional target selector for roachnet.org deploy workflows."
+        ),
+        .init(
+            id: "netlify-apps-site-id",
+            label: "Netlify Apps Site ID",
+            key: "NETLIFY_APPS_SITE_ID",
+            scope: "Deployments",
+            notes: "Optional target selector for the apps.roachnet.org App Store deployment lane."
+        ),
+        .init(
+            id: "cloudflare-api-token",
+            label: "Cloudflare API Token",
+            key: "CLOUDFLARE_API_TOKEN",
+            scope: "Edge / Infra",
+            notes: "Useful for DNS, edge routing, and future RoachNet edge workflows without storing the token in dotfiles."
+        ),
+        .init(
+            id: "cloudflare-account-id",
+            label: "Cloudflare Account ID",
+            key: "CLOUDFLARE_ACCOUNT_ID",
+            scope: "Edge / Infra",
+            notes: "Pairs with the Cloudflare API token when the project needs Workers, DNS, or storage automation."
+        ),
+        .init(
+            id: "paypal-client-id",
+            label: "PayPal Client ID",
+            key: "PAYPAL_CLIENT_ID",
+            scope: "Payments",
+            notes: "Keeps donation or checkout surfaces configurable without leaving payment credentials in workspace files."
         ),
     ]
 

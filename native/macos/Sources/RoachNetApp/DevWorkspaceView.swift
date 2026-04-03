@@ -24,6 +24,19 @@ struct DeveloperDocument: Identifiable, Hashable {
     var isDirty: Bool
 }
 
+struct SecretScopeSummary: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let count: Int
+}
+
+struct DeveloperInlineSuggestion: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let detail: String
+    let snippet: String
+}
+
 @MainActor
 final class DevWorkspaceModel: ObservableObject {
     @Published var workspaceRootPath = ""
@@ -68,6 +81,19 @@ final class DevWorkspaceModel: ObservableObject {
         RoachNetSecretsCatalogStore.suggestedTemplates
     }
 
+    var secretScopeSummary: [SecretScopeSummary] {
+        Dictionary(grouping: suggestedTemplates, by: \.scope)
+            .map { scope, templates in
+                SecretScopeSummary(id: scope, title: scope, count: templates.count)
+            }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.count > rhs.count
+            }
+    }
+
     var currentProjectName: String {
         if let firstSegment = activeDocument?.relativePath.split(separator: "/").first {
             return String(firstSegment)
@@ -107,6 +133,281 @@ final class DevWorkspaceModel: ObservableObject {
         }
     }
 
+    var inlineSuggestions: [DeveloperInlineSuggestion] {
+        guard let activeDocument else { return [] }
+
+        let pathExtension = activeDocument.url.pathExtension.lowercased()
+        let fileName = activeDocument.url.deletingPathExtension().lastPathComponent
+        let identifier = swiftIdentifier(from: fileName)
+
+        switch pathExtension {
+        case "swift":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "swift-task",
+                    title: "Insert async task",
+                    detail: "Drop in an async entry point you can wire immediately.",
+                    snippet: """
+
+                    Task {
+                        do {
+                            try await Task.sleep(for: .milliseconds(250))
+                        } catch {
+                            print(error.localizedDescription)
+                        }
+                    }
+                    """
+                ),
+                DeveloperInlineSuggestion(
+                    id: "swift-struct",
+                    title: "Insert typed scaffold",
+                    detail: "A small typed unit for the active file.",
+                    snippet: """
+
+                    struct \(identifier)State {
+                        var title = "\(fileName)"
+                        var updatedAt = Date()
+                    }
+                    """
+                ),
+            ]
+        case "ts", "tsx":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "ts-async",
+                    title: "Insert async function",
+                    detail: "Drop in an async implementation stub.",
+                    snippet: """
+
+                    export async function \(identifier.prefix(1).lowercased() + identifier.dropFirst())Action(): Promise<void> {
+                      console.log('\(fileName) action ready')
+                    }
+                    """
+                ),
+                DeveloperInlineSuggestion(
+                    id: "ts-test",
+                    title: "Insert test outline",
+                    detail: "A focused test block for the current module.",
+                    snippet: """
+
+                    describe('\(fileName)', () => {
+                      it('stays ready for the next implementation pass', () => {
+                        expect(true).toBe(true)
+                      })
+                    })
+                    """
+                ),
+            ]
+        case "js", "jsx":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "js-async",
+                    title: "Insert async function",
+                    detail: "A clean async helper for the current file.",
+                    snippet: """
+
+                    export async function ${fileName}Action() {
+                      console.log('\(fileName) action ready')
+                    }
+                    """.replacingOccurrences(of: "${fileName}", with: fileName.replacingOccurrences(of: "-", with: "_"))
+                ),
+                DeveloperInlineSuggestion(
+                    id: "js-cli",
+                    title: "Insert CLI guard",
+                    detail: "Useful for scripts that should run directly.",
+                    snippet: """
+
+                    if (import.meta.url === `file://${process.argv[1]}`) {
+                      console.log('\(fileName) is running directly')
+                    }
+                    """
+                ),
+            ]
+        case "py":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "py-main",
+                    title: "Insert main guard",
+                    detail: "A direct-run entry point for the active Python file.",
+                    snippet: """
+
+                    def main() -> None:
+                        print("\(fileName) is ready.")
+
+
+                    if __name__ == "__main__":
+                        main()
+                    """
+                ),
+                DeveloperInlineSuggestion(
+                    id: "py-test",
+                    title: "Insert pytest check",
+                    detail: "A tiny first test you can build from.",
+                    snippet: """
+
+                    def test_\(fileName.replacingOccurrences(of: "-", with: "_"))_stays_ready() -> None:
+                        assert True
+                    """
+                ),
+            ]
+        case "go":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "go-func",
+                    title: "Insert helper function",
+                    detail: "A small helper you can wire into main immediately.",
+                    snippet: """
+
+                    func \(identifier.prefix(1).lowercased() + identifier.dropFirst())Status() string {
+                        return "\(fileName) is ready."
+                    }
+                    """
+                ),
+                DeveloperInlineSuggestion(
+                    id: "go-test",
+                    title: "Insert test outline",
+                    detail: "A starter test block for the active package.",
+                    snippet: """
+
+                    func Test\(identifier)(t *testing.T) {
+                        if got := \(identifier.prefix(1).lowercased() + identifier.dropFirst())Status(); got == "" {
+                            t.Fatal("expected a non-empty status")
+                        }
+                    }
+                    """
+                ),
+            ]
+        case "rs":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "rs-func",
+                    title: "Insert helper function",
+                    detail: "A small Rust helper for the active file.",
+                    snippet: """
+
+                    fn \(fileName.replacingOccurrences(of: "-", with: "_"))_status() -> &'static str {
+                        "\(fileName) is ready."
+                    }
+                    """
+                ),
+                DeveloperInlineSuggestion(
+                    id: "rs-test",
+                    title: "Insert test module",
+                    detail: "A starter unit test for the current file.",
+                    snippet: """
+
+                    #[cfg(test)]
+                    mod tests {
+                        use super::*;
+
+                        #[test]
+                        fn status_is_not_empty() {
+                            assert!(!\(fileName.replacingOccurrences(of: "-", with: "_"))_status().is_empty());
+                        }
+                    }
+                    """
+                ),
+            ]
+        case "cs":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "cs-method",
+                    title: "Insert method stub",
+                    detail: "A simple C# method for the active program.",
+                    snippet: """
+
+                    static string \(identifier)Status()
+                    {
+                        return "\(fileName) is ready.";
+                    }
+                    """
+                ),
+            ]
+        case "sh", "zsh":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "sh-safety",
+                    title: "Insert safety header",
+                    detail: "Keep shell scripts predictable from the start.",
+                    snippet: """
+
+                    set -euo pipefail
+                    IFS=$'\\n\\t'
+                    """
+                ),
+                DeveloperInlineSuggestion(
+                    id: "sh-usage",
+                    title: "Insert usage block",
+                    detail: "Add a compact CLI usage path.",
+                    snippet: """
+
+                    usage() {
+                      echo "usage: $0 [args]"
+                    }
+                    """
+                ),
+            ]
+        case "md":
+            return [
+                DeveloperInlineSuggestion(
+                    id: "md-checklist",
+                    title: "Insert next-step checklist",
+                    detail: "Keep the active note actionable.",
+                    snippet: """
+
+                    ## Next Steps
+
+                    - Confirm the implementation path
+                    - Record the runtime assumptions
+                    - Add the verification command before release
+                    """
+                ),
+            ]
+        default:
+            return [
+                DeveloperInlineSuggestion(
+                    id: "plain-next-step",
+                    title: "Insert next-step block",
+                    detail: "A compact planning block for the current file.",
+                    snippet: """
+
+                    // Next step:
+                    // - Define the next concrete change
+                    // - Record the verification command
+                    """
+                ),
+            ]
+        }
+    }
+
+    var contextualTerminalCommands: [String] {
+        guard let activeDocument else {
+            return terminalPresets
+        }
+
+        let pathExtension = activeDocument.url.pathExtension.lowercased()
+        let fileName = activeDocument.url.lastPathComponent
+
+        switch pathExtension {
+        case "swift":
+            return ["swift build", "swift test", "swift run"]
+        case "ts", "tsx", "js", "jsx":
+            return ["npm install", "npm test", "npm run dev"]
+        case "py":
+            return ["python \(fileName)", "python -m pytest", "ruff check ."]
+        case "go":
+            return ["go run .", "go test ./...", "go fmt ./..."]
+        case "rs":
+            return ["cargo run", "cargo test", "cargo fmt"]
+        case "cs":
+            return ["dotnet build", "dotnet run", "dotnet test"]
+        case "sh", "zsh":
+            return ["bash \(fileName)", "shellcheck \(fileName)", "chmod +x \(fileName)"]
+        default:
+            return ["git status --short", "ls -la", "pwd"]
+        }
+    }
+
     var filteredFileTree: [DeveloperFileNode] {
         let query = fileSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return fileTree }
@@ -118,6 +419,9 @@ final class DevWorkspaceModel: ObservableObject {
         "Explain this code path in plain English and call out risk.",
         "Write a focused test plan for the open file.",
         "Propose a refactor that improves readability without changing behavior.",
+        "Suggest the next implementation step and include the shell commands to verify it.",
+        "Draft a clean commit message and release note summary from the current file changes.",
+        "Point out the missing secrets, env values, or deploy assumptions for this project.",
     ]
 
     let terminalPresets: [String] = [
@@ -126,6 +430,20 @@ final class DevWorkspaceModel: ObservableObject {
         "ls -la",
         "swift test",
         "npm test",
+        "pnpm test",
+        "python -m pytest",
+        "cargo test",
+    ]
+
+    let starterProjectLanguages: [String] = [
+        "Swift",
+        "TypeScript",
+        "JavaScript",
+        "Python",
+        "Go",
+        "Rust",
+        "C#",
+        "Shell",
     ]
 
     func configure(storagePath: String, installPath: String) {
@@ -210,18 +528,28 @@ final class DevWorkspaceModel: ObservableObject {
 
         let alert = NSAlert()
         alert.messageText = "New RoachNet Project"
-        alert.informativeText = "Create a project folder inside the RoachNet vault."
+        alert.informativeText = "Create a project folder inside the RoachNet vault and seed it with a starter language."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Create")
         alert.addButton(withTitle: "Cancel")
 
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
         input.placeholderString = "project-name"
-        alert.accessoryView = input
+
+        let languagePicker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 28), pullsDown: false)
+        starterProjectLanguages.forEach(languagePicker.addItem(withTitle:))
+        languagePicker.selectItem(withTitle: "Swift")
+
+        let accessoryStack = NSStackView(views: [input, languagePicker])
+        accessoryStack.orientation = .vertical
+        accessoryStack.alignment = .leading
+        accessoryStack.spacing = 10
+        alert.accessoryView = accessoryStack
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         let projectName = normalizedProjectName(input.stringValue)
+        let selectedLanguage = languagePicker.titleOfSelectedItem ?? "Swift"
         guard !projectName.isEmpty else {
             lastError = "Enter a project name before creating the workspace."
             importStatus = "Project creation failed."
@@ -245,10 +573,15 @@ final class DevWorkspaceModel: ObservableObject {
             try fileManager.createDirectory(at: sourceURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: notesURL, withIntermediateDirectories: true)
 
+            let starter = projectStarter(projectName: projectName, language: selectedLanguage)
+
             try """
             # \(projectName)
 
             Created inside RoachNet Dev Studio.
+
+            Starter lane:
+            - \(selectedLanguage)
 
             - Keep source in `src/`
             - Keep specs, notes, and prompts in `notes/`
@@ -259,17 +592,8 @@ final class DevWorkspaceModel: ObservableObject {
                 encoding: .utf8
             )
 
-            try """
-            import Foundation
-
-            @main
-            enum \(swiftIdentifier(from: projectName)) {
-                static func main() {
-                    print("RoachNet project \(projectName) is ready.")
-                }
-            }
-            """.write(
-                to: sourceURL.appendingPathComponent("main.swift"),
+            try starter.contents.write(
+                to: sourceURL.appendingPathComponent(starter.fileName),
                 atomically: true,
                 encoding: .utf8
             )
@@ -277,6 +601,7 @@ final class DevWorkspaceModel: ObservableObject {
             try """
             Goal:
             - Define the first feature, command flow, and tests here.
+            - Record the runtime, secrets, and release assumptions before the first deploy.
             """.write(
                 to: notesURL.appendingPathComponent("plan.md"),
                 atomically: true,
@@ -724,6 +1049,39 @@ final class DevWorkspaceModel: ObservableObject {
         importStatus = "Copied RoachClaw response."
     }
 
+    func insertInlineSuggestion(_ suggestion: DeveloperInlineSuggestion) {
+        guard let activeDocumentID, let index = openDocuments.firstIndex(where: { $0.id == activeDocumentID }) else {
+            lastError = "Open a file before inserting an inline suggestion."
+            importStatus = "Inline suggestion skipped."
+            return
+        }
+
+        let existing = openDocuments[index].text
+        let separator = existing.hasSuffix("\n") ? "\n" : "\n\n"
+        openDocuments[index].text += separator + suggestion.snippet.trimmingCharacters(in: .newlines) + "\n"
+        openDocuments[index].isDirty = true
+        importStatus = "Inserted \(suggestion.title.lowercased()) into \(openDocuments[index].relativePath)."
+        lastError = nil
+    }
+
+    func insertAssistantResponseIntoActiveDocument() {
+        guard !aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let activeDocumentID, let index = openDocuments.firstIndex(where: { $0.id == activeDocumentID }) else {
+            lastError = "Open a file before inserting the RoachClaw response."
+            importStatus = "Assistant insert skipped."
+            return
+        }
+
+        let extensionName = openDocuments[index].url.pathExtension.lowercased()
+        let responseBlock = formattedAssistantInsertion(aiResponse, fileExtension: extensionName)
+        let existing = openDocuments[index].text
+        let separator = existing.hasSuffix("\n") ? "\n" : "\n\n"
+        openDocuments[index].text += separator + responseBlock + "\n"
+        openDocuments[index].isDirty = true
+        importStatus = "Inserted the RoachClaw response into \(openDocuments[index].relativePath)."
+        lastError = nil
+    }
+
     private func loadSecretDraft(from record: RoachNetSecretRecord) {
         secretLabelDraft = record.label
         secretKeyDraft = record.key
@@ -768,6 +1126,39 @@ final class DevWorkspaceModel: ObservableObject {
     private func appendTerminalOutput(_ chunk: String) {
         let combined = terminalOutput + chunk
         terminalOutput = String(combined.suffix(40_000))
+    }
+
+    private func formattedAssistantInsertion(_ response: String, fileExtension: String) -> String {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = trimmed.components(separatedBy: .newlines)
+
+        let prefix: String
+        switch fileExtension {
+        case "swift", "ts", "tsx", "js", "jsx", "go", "rs", "cs":
+            prefix = "// "
+        case "py", "sh", "zsh", "rb":
+            prefix = "# "
+        case "html":
+            return """
+            <!-- RoachClaw assist
+            \(trimmed)
+            -->
+            """
+        case "css":
+            return """
+            /* RoachClaw assist
+            \(trimmed)
+            */
+            """
+        default:
+            prefix = ""
+        }
+
+        if prefix.isEmpty {
+            return trimmed
+        }
+
+        return ([prefix + "RoachClaw assist"] + lines.map { prefix + $0 }).joined(separator: "\n")
     }
 
     private func seedWorkspaceIfNeeded() throws {
@@ -904,6 +1295,12 @@ final class DevWorkspaceModel: ObservableObject {
                 }
             }
             """
+        case "js":
+            return """
+            export function main() {
+              console.log('\(relativePath) is ready.')
+            }
+            """
         case "ts":
             return """
             export function main(): void {
@@ -916,6 +1313,69 @@ final class DevWorkspaceModel: ObservableObject {
 
             export function \(swiftIdentifier(from: url.deletingPathExtension().lastPathComponent))(): JSX.Element {
               return <div>\(relativePath) is ready.</div>
+            }
+            """
+        case "py":
+            return """
+            def main() -> None:
+                print("\(relativePath) is ready.")
+
+
+            if __name__ == "__main__":
+                main()
+            """
+        case "go":
+            return """
+            package main
+
+            import "fmt"
+
+            func main() {
+                fmt.Println("\(relativePath) is ready.")
+            }
+            """
+        case "rs":
+            return """
+            fn main() {
+                println!(\"\(relativePath) is ready.\");
+            }
+            """
+        case "cs":
+            return """
+            using System;
+
+            Console.WriteLine("\(relativePath) is ready.");
+            """
+        case "sh", "zsh":
+            return """
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            echo "\(relativePath) is ready."
+            """
+        case "html":
+            return """
+            <!doctype html>
+            <html lang="en">
+              <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>\(url.deletingPathExtension().lastPathComponent)</title>
+              </head>
+              <body>
+                <main>\(relativePath) is ready.</main>
+              </body>
+            </html>
+            """
+        case "css":
+            return """
+            :root {
+              color-scheme: dark;
+            }
+
+            body {
+              margin: 0;
+              font-family: system-ui, sans-serif;
             }
             """
         case "md":
@@ -933,6 +1393,96 @@ final class DevWorkspaceModel: ObservableObject {
             """
         default:
             return ""
+        }
+    }
+
+    private func projectStarter(projectName: String, language: String) -> (fileName: String, contents: String) {
+        switch language {
+        case "TypeScript":
+            return (
+                "main.ts",
+                """
+                export function main(): void {
+                  console.log('RoachNet project \(projectName) is ready.');
+                }
+                """
+            )
+        case "JavaScript":
+            return (
+                "main.js",
+                """
+                export function main() {
+                  console.log('RoachNet project \(projectName) is ready.')
+                }
+                """
+            )
+        case "Python":
+            return (
+                "main.py",
+                """
+                def main() -> None:
+                    print("RoachNet project \(projectName) is ready.")
+
+
+                if __name__ == "__main__":
+                    main()
+                """
+            )
+        case "Go":
+            return (
+                "main.go",
+                """
+                package main
+
+                import "fmt"
+
+                func main() {
+                    fmt.Println("RoachNet project \(projectName) is ready.")
+                }
+                """
+            )
+        case "Rust":
+            return (
+                "main.rs",
+                """
+                fn main() {
+                    println!("RoachNet project \(projectName) is ready.");
+                }
+                """
+            )
+        case "C#":
+            return (
+                "Program.cs",
+                """
+                using System;
+
+                Console.WriteLine("RoachNet project \(projectName) is ready.");
+                """
+            )
+        case "Shell":
+            return (
+                "main.sh",
+                """
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                echo "RoachNet project \(projectName) is ready."
+                """
+            )
+        default:
+            return (
+                "main.swift",
+                """
+                import Foundation
+
+                @main
+                enum \(swiftIdentifier(from: projectName)) {
+                    static func main() {
+                        print("RoachNet project \(projectName) is ready.")
+                    }
+                }
+                """
+            )
         }
     }
 
@@ -1252,6 +1802,47 @@ struct DevWorkspaceView: View {
                                 .foregroundStyle(RoachPalette.green)
                         }
 
+                        if !devModel.inlineSuggestions.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Inline Suggestions")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .tracking(1.1)
+                                    .foregroundStyle(RoachPalette.muted)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(devModel.inlineSuggestions) { suggestion in
+                                            Button {
+                                                devModel.insertInlineSuggestion(suggestion)
+                                            } label: {
+                                                VStack(alignment: .leading, spacing: 4) {
+                                                    Text(suggestion.title)
+                                                        .font(.system(size: 12, weight: .semibold))
+                                                        .foregroundStyle(RoachPalette.text)
+                                                    Text(suggestion.detail)
+                                                        .font(.system(size: 10, weight: .medium))
+                                                        .foregroundStyle(RoachPalette.muted)
+                                                        .multilineTextAlignment(.leading)
+                                                }
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 10)
+                                                .frame(width: 190, alignment: .leading)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                        .fill(RoachPalette.panelRaised.opacity(0.56))
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                        .stroke(RoachPalette.border, lineWidth: 1)
+                                                )
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         TextEditor(text: Binding(
                             get: { devModel.activeDocument?.text ?? "" },
                             set: { devModel.updateActiveDocumentText($0) }
@@ -1403,10 +1994,18 @@ struct DevWorkspaceView: View {
                     }
 
                     if !devModel.aiResponse.isEmpty {
-                        Button("Copy Response") {
-                            devModel.copyAssistantResponse()
+                        HStack(spacing: 10) {
+                            Button("Copy Response") {
+                                devModel.copyAssistantResponse()
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+
+                            Button("Insert in File") {
+                                devModel.insertAssistantResponseIntoActiveDocument()
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                            .disabled(devModel.activeDocument == nil)
                         }
-                        .buttonStyle(RoachSecondaryButtonStyle())
                     }
                 }
             }
@@ -1421,6 +2020,32 @@ struct DevWorkspaceView: View {
                         Text("\(devModel.secretRecords.count)")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(RoachPalette.muted)
+                    }
+
+                    if !devModel.secretScopeSummary.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(devModel.secretScopeSummary) { summary in
+                                    HStack(spacing: 6) {
+                                        Text(summary.title)
+                                            .lineLimit(1)
+                                        Text("\(summary.count)")
+                                            .foregroundStyle(RoachPalette.green)
+                                    }
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(RoachPalette.panel.opacity(0.9))
+                                    )
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(RoachPalette.border, lineWidth: 1)
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -1445,6 +2070,10 @@ struct DevWorkspaceView: View {
                             }
                         }
                     }
+
+                    Text("Templates stage the label, key, and scope fields. Values stay in the RoachNet Keychain lane until you reveal or rotate them.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
 
                     if !devModel.secretRecords.isEmpty {
                         Picker("Secret", selection: Binding(
@@ -1609,6 +2238,29 @@ struct DevWorkspaceView: View {
                                     .stroke(RoachPalette.border, lineWidth: 1)
                             )
                             .foregroundStyle(RoachPalette.text)
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        }
+                    }
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(devModel.contextualTerminalCommands, id: \.self) { command in
+                            Button(command) {
+                                devModel.terminalCommand = command
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(RoachPalette.panelSoft.opacity(0.56))
+                            )
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                            )
+                            .foregroundStyle(RoachPalette.green)
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         }
                     }
