@@ -268,16 +268,21 @@ final class SetupController: ObservableObject {
             isBusy = false
         }
 
+        let hasPreparedWorkspace = state.installLooksReady || state.config.setupCompletedAt != nil
         let installCompleted =
             state.lastCompletedTask?.status == "completed"
-            || state.nativeApp.installed
-            || state.config.setupCompletedAt != nil
+            || (state.nativeApp.installed && hasPreparedWorkspace)
+        let canAdvanceToFinishFromCurrentStage = stage.rawValue >= SetupStage.roachClaw.rawValue
 
-        if installCompleted, allowAutomaticFinishAdvance {
+        if installCompleted, allowAutomaticFinishAdvance, canAdvanceToFinishFromCurrentStage {
             stage = .finish
             if state.lastCompletedTask?.status == "completed" {
                 statusLine = "Install complete."
+            } else if state.nativeApp.installed {
+                statusLine = "RoachNet is already installed."
             }
+        } else if stage == .finish && !installCompleted {
+            stage = .roachClaw
         }
     }
 
@@ -596,7 +601,6 @@ struct RoachNetSetupApp: App {
                     appDelegate.controller = controller
                 }
         }
-        .windowStyle(.hiddenTitleBar)
     }
 }
 
@@ -672,20 +676,30 @@ private struct SetupRootView: View {
 
     private var mainCard: some View {
         RoachPanel {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 24) {
-                    progressHeader
-                    stageHero
-                    stageContent
+            VStack(alignment: .leading, spacing: 0) {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        progressHeader
+                        stageHero
+                        stageContent
 
-                    if showStatusSection {
-                        statusSection
+                        if showStatusSection {
+                            statusSection
+                        }
                     }
-
-                    footer
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                Rectangle()
+                    .fill(RoachPalette.border.opacity(0.72))
+                    .frame(height: 1)
+                    .padding(.top, 18)
+                    .padding(.bottom, 18)
+                    .allowsHitTesting(false)
+
+                footer
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -795,26 +809,23 @@ private struct SetupRootView: View {
                     )
                 }
 
+                VStack(alignment: .leading, spacing: 12) {
+                    SetupNativeButton(title: "Choose Content Folder", role: .secondary) {
+                        controller.chooseStorageFolder()
+                    }
+
+                    Text("You can change this later from RoachNet Runtime too.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
                     ForEach(machineRows, id: \.title) { row in
                         RoachInsetPanel {
                             RoachStatusRow(title: row.title, value: row.value, accent: row.accent)
                         }
                     }
-                }
-
-                responsiveBar {
-                    EmptyView()
-                } actions: {
-                    Button("Choose Content Folder") {
-                        controller.chooseStorageFolder()
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-
-                    Text("You can change this later from RoachNet Runtime too.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -831,11 +842,9 @@ private struct SetupRootView: View {
                     )
                 }
 
-                Button("Start Runtime Now") {
+                SetupNativeButton(title: "Start Runtime Now", role: .secondary, isEnabled: !controller.isBusy) {
                     Task { await controller.startRuntimeAction() }
                 }
-                .buttonStyle(RoachSecondaryButtonStyle())
-                .disabled(controller.isBusy)
             }
 
         case .roachClaw:
@@ -912,19 +921,22 @@ private struct SetupRootView: View {
     }
 
     private var footer: some View {
-        responsiveBar {
-            Button("Back") {
+        HStack(spacing: 12) {
+            SetupNativeButton(title: "Back", role: .secondary, isEnabled: controller.canGoBack) {
                 controller.back()
             }
-            .buttonStyle(RoachSecondaryButtonStyle())
-            .disabled(!controller.canGoBack)
-        } actions: {
-            Button(primaryTitle) {
+
+            Spacer(minLength: 12)
+
+            SetupNativeButton(
+                title: primaryTitle,
+                role: .primary,
+                isEnabled: !(controller.isBooting || controller.isBusy),
+                isDefaultAction: true,
+                minWidth: 138
+            ) {
                 Task { await controller.primaryAction() }
             }
-            .buttonStyle(RoachPrimaryButtonStyle())
-            .keyboardShortcut(.defaultAction)
-            .disabled(controller.isBooting || controller.isBusy)
         }
     }
 
@@ -1028,27 +1040,6 @@ private struct SetupRootView: View {
         }
     }
 
-    private func responsiveBar<HeaderContent: View, ActionsContent: View>(
-        @ViewBuilder header: () -> HeaderContent,
-        @ViewBuilder actions: () -> ActionsContent
-    ) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 12) {
-                header()
-                Spacer(minLength: 12)
-                HStack(spacing: 12) {
-                    actions()
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 14) {
-                header()
-                HStack(spacing: 12) {
-                    actions()
-                }
-            }
-        }
-    }
 }
 
 private struct SetupWindowConfigurator: NSViewRepresentable {
@@ -1061,8 +1052,8 @@ private struct SetupWindowConfigurator: NSViewRepresentable {
             let minimumSize = NSSize(width: 760, height: 580)
             let preferredSize = NSSize(width: 980, height: 740)
             window.minSize = minimumSize
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .visible
+            window.titlebarAppearsTransparent = false
             window.tabbingMode = .disallowed
             window.isMovableByWindowBackground = false
             window.isRestorable = false
@@ -1084,4 +1075,63 @@ private struct SetupWindowConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private enum SetupNativeButtonRole {
+    case primary
+    case secondary
+}
+
+private struct SetupNativeButton: NSViewRepresentable {
+    let title: String
+    let role: SetupNativeButtonRole
+    var isEnabled: Bool = true
+    var isDefaultAction: Bool = false
+    var minWidth: CGFloat = 112
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.handlePress(_:)))
+        button.setButtonType(.momentaryPushIn)
+        button.bezelStyle = .rounded
+        button.controlSize = .large
+        button.focusRingType = .default
+        button.refusesFirstResponder = false
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth).isActive = true
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        button.title = title
+        button.isEnabled = isEnabled
+        button.alphaValue = isEnabled ? 1.0 : 0.62
+        button.keyEquivalent = isDefaultAction ? "\r" : ""
+        button.keyEquivalentModifierMask = []
+        button.font = .systemFont(ofSize: 13, weight: role == .primary ? .semibold : .medium)
+        button.contentTintColor = role == .primary ? .white : .labelColor
+
+        if #available(macOS 11.0, *) {
+            button.bezelColor = role == .primary
+                ? NSColor.systemGreen.withAlphaComponent(0.92)
+                : NSColor.controlAccentColor.withAlphaComponent(0.18)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func handlePress(_ sender: NSButton) {
+            action()
+        }
+    }
 }

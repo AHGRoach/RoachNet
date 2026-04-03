@@ -3,27 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RoachNet App Store</title>
+    <title>RoachNet Apps</title>
     <meta
       name="description"
-      content="The RoachNet App Store catalog for mirrored maps, archives, model packs, dev toolchains, and contained downloads backed by roachnet.org."
+      content="RoachNet Apps is the catalog for mirrored maps, archives, model packs, dev toolchains, and contained downloads backed by roachnet.org."
     />
     <meta name="theme-color" content="#0b1016" />
-    <link rel="canonical" href="https://roachnet.org/app-store.html" />
+    <link rel="canonical" href="https://roachnet.org/apps" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="RoachNet App Store" />
+    <meta property="og:title" content="RoachNet Apps" />
     <meta
       property="og:description"
       content="Mirror-backed content and contained downloads for the RoachNet native app."
     />
-    <meta property="og:url" content="https://roachnet.org/app-store.html" />
+    <meta property="og:url" content="https://roachnet.org/apps" />
     <meta property="og:image" content="https://roachnet.org/assets/screens/roachnet-native-home.jpg" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="RoachNet App Store" />
+    <meta name="twitter:title" content="RoachNet Apps" />
     <meta
       name="twitter:description"
       content="Mirror-backed maps, archives, tools, and model packs for the RoachNet native app."
@@ -31,7 +31,7 @@
     <meta name="twitter:image" content="https://roachnet.org/assets/screens/roachnet-native-home.jpg" />
     <link rel="stylesheet" href="./app.css" />
   </head>
-  <body>
+  <body data-page="apps">
     <div class="bg-glow bg-glow--blue" aria-hidden="true"></div>
     <div class="bg-glow bg-glow--green" aria-hidden="true"></div>
 
@@ -40,7 +40,7 @@
         <img class="brand-mark" src="./assets/roachnet-logo.png" alt="RoachNet logo" />
         <div class="brand-copy">
           <span class="brand-kicker">Mirror-backed content lane</span>
-          <strong>RoachNet App Store</strong>
+          <strong>RoachNet Apps</strong>
         </div>
       </a>
 
@@ -56,10 +56,10 @@
     <main id="top" class="page-shell">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">RoachNet App Store</p>
-          <h1>One catalog for the native app and the web.</h1>
+          <p class="eyebrow">RoachNet Apps</p>
+          <h1>RoachNet Apps feels like a real store, not a download dump.</h1>
           <p class="hero-body">
-            RoachNet is moving extra content behind its own manifests so the app can install maps, archives, toolkits, dev surfaces, and model packs without depending on scattered upstream links.
+            Browse mirrored map packs, knowledge libraries, and contained RoachClaw models through one editorial catalog. Every install button can hand the selection straight into the native app.
           </p>
 
           <div class="hero-actions">
@@ -67,7 +67,7 @@
             <a class="cta cta--ghost" href="./index.html#screens">See actual app screens</a>
           </div>
 
-          <p class="hero-footnote">The native app uses the same catalog lane served from <code>roachnet.org/app-store-catalog.json</code> and the collection manifests under <code>roachnet.org/collections</code>.</p>
+          <p class="hero-footnote">The native app uses the same catalog lane served from <code>roachnet.org/app-store-catalog.json</code>. The dedicated <code>/apps</code> route stays separate from the landing page and is ready for an <code>apps.roachnet.org</code> host alias once Netlify accepts it cleanly.</p>
           <p class="download-meta" id="download-meta">Starts with RoachNet Setup · RoachNet-Setup-macOS.dmg</p>
 
           <div class="hero-status" aria-label="RoachNet status row">
@@ -87,10 +87,10 @@
             />
           </div>
           <div class="screen-chip-row">
-            <span class="screen-chip">Contained AI</span>
-            <span class="screen-chip">Mirror Catalog</span>
+            <span class="screen-chip">Today</span>
+            <span class="screen-chip">Curated</span>
             <span class="screen-chip">RoachClaw</span>
-            <span class="screen-chip">Downloads</span>
+            <span class="screen-chip">Install in App</span>
           </div>
         </div>
       </section>
@@ -98,21 +98,34 @@
       <section class="content-section" id="catalog">
         <div class="section-head">
           <p class="eyebrow">Catalog</p>
-          <h2>Manifest-backed content lanes.</h2>
-          <p>The public catalog below is the same direction the native app is wired toward: RoachNet-owned manifests, resumable downloads, and contained installs instead of live upstream dependency drift.</p>
+          <h2>Today, shelves, and install-ready detail sheets.</h2>
+          <p>The public catalog below is the same direction the native app is wired toward: RoachNet-owned manifests, resumable downloads, contained installs, and a calmer storefront that feels intentional instead of utilitarian.</p>
         </div>
 
-        <div class="split-highlight split-highlight--store">
-          <article class="spotlight-card">
-            <strong>Install from the native app or pull directly from the site.</strong>
-            <p>The website exposes the manifests and primary downloads, while the native app uses the same backend to recommend packs, install them into the right lane, and keep the local workspace aligned.</p>
+        <div class="apps-catalog-stage">
+          <aside class="apps-toolbar" aria-label="Apps browsing controls">
+            <div class="apps-toolbar__copy">
+              <span class="eyebrow">Browse</span>
+              <h3>Filter the RoachNet catalog like a real store shelf.</h3>
+              <p>Use the category rail, search, and Preview sheet to browse before you hand installs into the native app.</p>
+            </div>
             <div class="app-store-meta">
               <span class="app-store-meta__pill" id="app-store-updated">Checking catalog…</span>
-              <span>Designed for mirrored maps, archives, toolkits, and model packs.</span>
+              <span>Install buttons open RoachNet and queue the selected pack inside the correct native lane.</span>
             </div>
-          </article>
+            <div class="app-store-filter-bar" id="app-store-filter-bar" aria-label="Apps sections"></div>
+            <label class="app-store-search" for="app-store-search">
+              <span>Search the catalog</span>
+              <input id="app-store-search" type="search" placeholder="Maps, offline docs, RoachClaw, Wikipedia…" autocomplete="off" />
+            </label>
+            <p class="apps-toolbar__note">The store stays on its own page. The landing page only links here.</p>
+          </aside>
 
-          <div class="app-store-grid" id="app-store-grid" aria-live="polite"></div>
+          <div class="app-store-catalog-shell">
+            <div class="app-store-results" id="app-store-results" aria-live="polite">Loading catalog…</div>
+            <div class="app-store-featured" id="app-store-featured" aria-live="polite"></div>
+            <div class="app-store-grid" id="app-store-grid" data-store-mode="full" aria-live="polite"></div>
+          </div>
         </div>
       </section>
 
@@ -166,7 +179,7 @@
 
     <footer class="site-footer">
       <div class="site-footer__copy">
-        <strong>RoachNet App Store</strong>
+        <strong>RoachNet Apps</strong>
         <span>One catalog backend for the native app, the mirror, and direct downloads.</span>
       </div>
       <nav class="site-footer__nav" aria-label="Footer">
@@ -195,6 +208,13 @@
         </a>
       </div>
     </footer>
+
+    <div class="app-detail-overlay" id="app-detail-overlay" hidden>
+      <div class="app-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="app-detail-title">
+        <button class="app-detail-sheet__close" id="app-detail-close" type="button" aria-label="Close app preview">Close</button>
+        <div id="app-detail-content"></div>
+      </div>
+    </div>
 
     <script src="./app.js" type="module"></script>
   </body>

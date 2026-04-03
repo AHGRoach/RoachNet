@@ -518,6 +518,13 @@
 
 ---
 
+## Version 1.30.10 - April 3, 2026
+
+- **Setup Fixes**: Stopped the setup app from jumping straight to the finish stage on stale persisted state, restored reliable Back and Continue clicks in the packaged wizard, and moved the content-folder chooser onto the visible Machine step layout instead of burying it below the fold.
+- **Website Apps Page**: Rebuilt the Apps catalog into installable app-style entries with RoachNet-branded icons, grouped shelves, and direct `roachnet://` handoff buttons instead of raw manifest links, while removing the catalog embed from the landing page.
+- **Native Install Handoff**: Added a packaged `roachnet://install-content` URL scheme so website install buttons can open the native app and queue map packs, knowledge packs, Wikipedia bundles, and contained RoachClaw model installs.
+- **macOS Packaging**: Updated the native bundle metadata for the new URL scheme so the website-to-app install path survives the packaged `.app` and DMG flow.
+
 ## Version 1.30.9 - April 3, 2026
 
 ### 🐛 Bug Fixes

@@ -144,7 +144,11 @@ public struct RoachPanel<Content: View>: View {
         content
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .allowsHitTesting(false)
+            )
             .background(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
                     .fill(
@@ -157,10 +161,12 @@ public struct RoachPanel<Content: View>: View {
                             endPoint: .bottomTrailing
                         )
                     )
+                    .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
                     .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                    .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
@@ -176,11 +182,13 @@ public struct RoachPanel<Content: View>: View {
                         )
                     )
                     .blendMode(.screen)
+                    .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 26, style: .continuous)
                     .inset(by: 1)
                     .stroke(Color.white.opacity(0.025), lineWidth: 1)
+                    .allowsHitTesting(false)
             )
             .shadow(color: RoachPalette.shadow.opacity(0.88), radius: 30, x: 0, y: 16)
     }
@@ -667,10 +675,12 @@ public struct RoachInlineField: View {
                                 endPoint: .bottomTrailing
                             )
                         )
+                        .allowsHitTesting(false)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                        .allowsHitTesting(false)
                 )
         }
     }
@@ -977,13 +987,15 @@ public struct RoachInsetPanel<Content: View>: View {
                             RoachPalette.panel.opacity(0.80),
                         ],
                         startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
+                .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                .allowsHitTesting(false)
             )
             .shadow(color: RoachPalette.shadow.opacity(0.14), radius: 16, x: 0, y: 8)
     }

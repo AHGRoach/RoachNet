@@ -1,6 +1,21 @@
 [build]
 publish = "website"
 
+[[redirects]]
+from = "/apps"
+to = "/app-store.html"
+status = 200
+
+[[redirects]]
+from = "/apps/*"
+to = "/app-store.html"
+status = 200
+
+[[redirects]]
+from = "https://apps.roachnet.org/*"
+to = "/app-store.html"
+status = 200
+
 [[headers]]
 for = "/*"
 

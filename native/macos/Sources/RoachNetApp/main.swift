@@ -385,6 +385,7 @@ final class WorkspaceModel: ObservableObject {
     private var refreshInFlight = false
     private var queuedRefreshRequested = false
     private var queuedRefreshSilent = true
+    private var lastHandledIncomingURL: (value: String, date: Date)?
 
     var setupCompleted: Bool { config.setupCompletedAt != nil }
     var installPath: String { config.installPath.isEmpty ? RoachNetRepositoryLocator.defaultInstallPath() : config.installPath }
@@ -779,6 +780,36 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    func handleIncomingURL(_ url: URL) async {
+        guard url.scheme?.lowercased() == "roachnet" else { return }
+
+        let dedupeWindow: TimeInterval = 1.0
+        if
+            let lastHandledIncomingURL,
+            lastHandledIncomingURL.value == url.absoluteString,
+            Date().timeIntervalSince(lastHandledIncomingURL.date) < dedupeWindow
+        {
+            return
+        }
+        lastHandledIncomingURL = (url.absoluteString, Date())
+
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            errorLine = "RoachNet couldn't read that App Store install link."
+            return
+        }
+
+        let route = (url.host ?? url.path.replacingOccurrences(of: "/", with: "")).lowercased()
+        switch route {
+        case "install-content":
+            await handleInstallContentURL(components)
+        case "open-pane":
+            handleOpenPaneURL(components)
+        default:
+            errorLine = "RoachNet didn't recognize that install link."
+            statusLine = "Unknown App Store link."
+        }
+    }
+
     func openService(_ service: ManagedSystemService) async {
         guard let location = service.ui_location, !location.isEmpty else {
             errorLine = "This service does not expose a UI location yet."
@@ -892,6 +923,34 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    func queueRoachClawModel(_ modelName: String) async {
+        let trimmedModel = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedModel.isEmpty else {
+            errorLine = "RoachNet didn't receive a model name for that App Store install link."
+            return
+        }
+
+        if snapshot == nil {
+            await refreshRuntimeState(silently: true)
+        }
+
+        do {
+            var updatedConfig = config
+            updatedConfig.installRoachClaw = true
+            updatedConfig.pendingRoachClawSetup = true
+            updatedConfig.roachClawDefaultModel = trimmedModel
+            try RoachNetRepositoryLocator.writeConfig(updatedConfig)
+            config = updatedConfig
+            selectedChatModel = trimmedModel
+            attemptedRoachClawBootstrap = false
+            statusLine = "Queueing \(trimmedModel) for RoachClaw."
+            await applyRoachClawDefaults()
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "Model queue failed."
+        }
+    }
+
     private func runAction(
         _ actionID: String,
         status: String,
@@ -914,6 +973,91 @@ final class WorkspaceModel: ObservableObject {
         }
 
         activeActions.remove(actionID)
+    }
+
+    private func handleInstallContentURL(_ components: URLComponents) async {
+        guard setupCompleted else {
+            selectedPane = .home
+            errorLine = "Finish setup before installing App Store content from roachnet.org."
+            statusLine = "Setup still required."
+            return
+        }
+
+        let action = queryValue("action", in: components) ?? queryValue("type", in: components) ?? ""
+
+        switch action {
+        case "base-map-assets":
+            selectedPane = .maps
+            await downloadBaseMapAssets()
+        case "map-collection":
+            guard let slug = queryValue("slug", in: components) else {
+                errorLine = "RoachNet couldn't tell which map collection to install."
+                statusLine = "Install link incomplete."
+                return
+            }
+            selectedPane = .maps
+            await downloadMapCollection(slug)
+        case "education-tier":
+            guard
+                let categorySlug = queryValue("category", in: components),
+                let tierSlug = queryValue("tier", in: components)
+            else {
+                errorLine = "RoachNet couldn't tell which education pack to install."
+                statusLine = "Install link incomplete."
+                return
+            }
+            selectedPane = .education
+            await downloadEducationTier(categorySlug: categorySlug, tierSlug: tierSlug)
+        case "wikipedia-option":
+            guard let optionId = queryValue("option", in: components) ?? queryValue("optionId", in: components) else {
+                errorLine = "RoachNet couldn't tell which Wikipedia pack to install."
+                statusLine = "Install link incomplete."
+                return
+            }
+            selectedPane = .education
+            selectedWikipediaOptionId = optionId
+            await applyWikipediaSelection()
+        case "roachclaw-model":
+            guard let modelName = queryValue("model", in: components) else {
+                errorLine = "RoachNet couldn't tell which RoachClaw model to install."
+                statusLine = "Install link incomplete."
+                return
+            }
+            selectedPane = .roachClaw
+            await queueRoachClawModel(modelName)
+        default:
+            errorLine = "RoachNet didn't recognize that App Store install action."
+            statusLine = "Unknown install action."
+        }
+    }
+
+    private func handleOpenPaneURL(_ components: URLComponents) {
+        guard let paneValue = queryValue("pane", in: components)?.lowercased() else { return }
+
+        switch paneValue {
+        case "home":
+            selectedPane = .home
+        case "dev":
+            selectedPane = .dev
+        case "roachclaw":
+            selectedPane = .roachClaw
+        case "maps":
+            selectedPane = .maps
+        case "education":
+            selectedPane = .education
+        case "archives":
+            selectedPane = .archives
+        case "vault":
+            selectedPane = .knowledge
+        case "runtime":
+            selectedPane = .runtime
+        default:
+            break
+        }
+    }
+
+    private func queryValue(_ name: String, in components: URLComponents) -> String? {
+        components.queryItems?.first(where: { $0.name == name })?.value
     }
 
     private func synchronizeWikipediaSelection() {
@@ -1607,6 +1751,9 @@ struct RoachNetMacApp: App {
                 .frame(minWidth: 760, idealWidth: 1100, minHeight: 560, idealHeight: 760)
                 .onAppear {
                     appDelegate.model = model
+                }
+                .onOpenURL { url in
+                    Task { await model.handleIncomingURL(url) }
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -3908,8 +4055,13 @@ private struct RootWorkspaceView: View {
     }
 }
 final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: WorkspaceModel?
+    weak var model: WorkspaceModel? {
+        didSet {
+            flushPendingURLsIfNeeded()
+        }
+    }
     private var isHandlingTermination = false
+    private var pendingURLs: [URL] = []
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -3939,6 +4091,24 @@ final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return .terminateLater
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        pendingURLs.append(contentsOf: urls)
+        flushPendingURLsIfNeeded()
+    }
+
+    private func flushPendingURLsIfNeeded() {
+        guard let model, !pendingURLs.isEmpty else { return }
+
+        let urls = pendingURLs
+        pendingURLs.removeAll()
+
+        for url in urls {
+            Task { @MainActor in
+                await model.handleIncomingURL(url)
+            }
+        }
     }
 }
 

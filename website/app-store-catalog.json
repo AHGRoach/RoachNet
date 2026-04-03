@@ -1,45 +1,190 @@
 {
-  "updatedAt": "2026-04-02T22:10:00-04:00",
+  "updatedAt": "2026-04-03T14:45:00-04:00",
+  "featuredId": "base-atlas",
   "items": [
     {
-      "title": "Field Maps",
-      "kind": "Mirror",
-      "size": "2-40 GB",
-      "status": "Ready for mirror",
+      "id": "base-atlas",
+      "title": "Base Atlas",
+      "subtitle": "Core renderer and shared basemap",
+      "category": "Maps",
+      "section": "Field Ops",
+      "size": "320 MB",
+      "status": "Ready",
+      "source": "RoachNet mirror",
+      "icon": "./assets/app-store/base-atlas.svg",
+      "summary": "Install the shared vector atlas and base map assets first so regional packs open cleanly inside the RoachNet Maps lane.",
+      "featured": true,
+      "accent": "blue",
+      "machineFit": "Best first install on every supported Mac",
+      "includes": [
+        "Shared vector atlas and renderer assets",
+        "Required before regional map collections",
+        "Installs directly into the native Maps lane"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "View manifest",
+      "detailUrl": "./collections/maps.json",
+      "installIntent": {
+        "action": "base-map-assets"
+      }
+    },
+    {
+      "id": "pacific-region",
+      "title": "Pacific Region",
+      "subtitle": "Alaska, California, Hawaii, Oregon, Washington",
+      "category": "Maps",
+      "section": "Field Ops",
+      "size": "2.6 GB",
+      "status": "Ready",
       "source": "Geofabrik + curated packs",
-      "summary": "Regional map bundles staged through RoachNet manifests so the app can install verified packs without depending on live upstream links.",
-      "primaryLabel": "Open maps manifest",
-      "primaryUrl": "./collections/maps.json"
+      "icon": "./assets/app-store/pacific-region.svg",
+      "summary": "Queue the Pacific regional collection directly into RoachNet so the field map lane is useful immediately after install.",
+      "accent": "blue",
+      "machineFit": "Ideal once Base Atlas is already installed",
+      "includes": [
+        "Pacific region collection manifest",
+        "Regional downloads for Alaska, California, Hawaii, Oregon, and Washington",
+        "Mapped install path inside the field-ops shelf"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "Open collection",
+      "detailUrl": "./collections/maps.json",
+      "installIntent": {
+        "action": "map-collection",
+        "slug": "pacific"
+      }
     },
     {
-      "title": "Knowledge Shelf",
-      "kind": "Archive",
-      "size": "4-90 GB",
-      "status": "Cataloging",
-      "source": "Kiwix, ZIM, offline docs",
-      "summary": "Wikipedia, medical references, and field manuals mirrored behind roachnet.org URLs with resumable pulls and integrity checks.",
-      "primaryLabel": "Open knowledge manifest",
-      "primaryUrl": "./collections/kiwix-categories.json"
+      "id": "medicine-essential",
+      "title": "Medicine Essentials",
+      "subtitle": "Field medicine, NHS meds, CDC travel health",
+      "category": "Knowledge",
+      "section": "Knowledge Packs",
+      "size": "331 MB",
+      "status": "Recommended",
+      "source": "Kiwix mirror",
+      "icon": "./assets/app-store/medicine-essential.svg",
+      "summary": "A compact medical reference pack for first aid, medications, emergency care, and field medicine without pulling the full library on day one.",
+      "accent": "green",
+      "machineFit": "Lean enough for first boot and travel installs",
+      "includes": [
+        "Emergency care and first-aid references",
+        "Medication and travel-health docs",
+        "Contained knowledge install in the Education lane"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "View catalog",
+      "detailUrl": "./collections/kiwix-categories.json",
+      "installIntent": {
+        "action": "education-tier",
+        "category": "medicine",
+        "tier": "medicine-essential"
+      }
     },
     {
-      "title": "RoachClaw Model Packs",
-      "kind": "AI",
-      "size": "1-20 GB",
-      "status": "Contained first",
-      "source": "Ollama + RoachNet curation",
-      "summary": "Machine-aware local models recommended from the user’s specs, with contained installs and a cloud lane fallback for first boot.",
-      "primaryLabel": "Download RoachNet 1.30.9",
-      "primaryUrl": "https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-macOS.dmg"
+      "id": "survival-essential",
+      "title": "Survival Essentials",
+      "subtitle": "Winter prep and bug-out basics",
+      "category": "Knowledge",
+      "section": "Knowledge Packs",
+      "size": "2.3 GB",
+      "status": "Ready",
+      "source": "Kiwix mirror",
+      "icon": "./assets/app-store/survival-essential.svg",
+      "summary": "Queue the lean survival pack first so RoachNet has practical emergency references without waiting on the larger preparedness tiers.",
+      "accent": "gold",
+      "machineFit": "Good default for field kits and travel setups",
+      "includes": [
+        "Prepper and bug-out references",
+        "Offline winter and emergency planning docs",
+        "Install queue lands in the Education lane"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "View catalog",
+      "detailUrl": "./collections/kiwix-categories.json",
+      "installIntent": {
+        "action": "education-tier",
+        "category": "survival",
+        "tier": "survival-essential"
+      }
     },
     {
-      "title": "Developer Toolchain",
-      "kind": "Tools",
-      "size": "500 MB-8 GB",
-      "status": "Design ready",
-      "source": "Jam, CyberChef, Dev surfaces",
-      "summary": "The same backend can stage future Jam-ready utilities, data-lab tools, and RoachNet Dev workspace downloads through one mirror-backed catalog.",
-      "primaryLabel": "Open tooling manifest",
-      "primaryUrl": "./collections/wikipedia.json"
+      "id": "wikipedia-quick-reference",
+      "title": "Wikipedia Quick Reference",
+      "subtitle": "Top 100,000 articles, minimal images",
+      "category": "Knowledge",
+      "section": "Knowledge Packs",
+      "size": "313 MB",
+      "status": "Fast first install",
+      "source": "Kiwix mirror",
+      "icon": "./assets/app-store/wikipedia-quick-reference.svg",
+      "summary": "A small Wikipedia lane for quick lookup work. It is the best default when the user wants offline reference without committing to a multi-gigabyte encyclopedia on first boot.",
+      "accent": "blue",
+      "machineFit": "Fastest encyclopedia option for smaller installs",
+      "includes": [
+        "Top article quick-reference pack",
+        "Minimal image footprint for faster sync",
+        "Wikipedia option queued directly in RoachNet"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "View options",
+      "detailUrl": "./collections/wikipedia.json",
+      "installIntent": {
+        "action": "wikipedia-option",
+        "option": "top-mini"
+      }
+    },
+    {
+      "id": "roachclaw-quickstart",
+      "title": "RoachClaw Quickstart",
+      "subtitle": "Contained qwen2.5-coder:1.5b model",
+      "category": "AI",
+      "section": "AI Packs",
+      "size": "1-2 GB",
+      "status": "Best first boot",
+      "source": "Contained Ollama lane",
+      "icon": "./assets/app-store/roachclaw-quickstart.svg",
+      "summary": "Open RoachNet and queue the fast contained starter model so RoachClaw can answer on a clean machine without borrowing a host Ollama install.",
+      "accent": "violet",
+      "machineFit": "Best on all Apple Silicon Macs, especially 16 GB systems",
+      "includes": [
+        "Contained Ollama-backed model download",
+        "RoachClaw bootstrap queue on first launch",
+        "Cloud fallback remains available while the model downloads"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "Open RoachClaw",
+      "detailUrl": "./index.html#screens",
+      "installIntent": {
+        "action": "roachclaw-model",
+        "model": "qwen2.5-coder:1.5b"
+      }
+    },
+    {
+      "id": "roachclaw-studio",
+      "title": "RoachClaw Studio",
+      "subtitle": "Contained qwen2.5-coder:7b upgrade",
+      "category": "AI",
+      "section": "AI Packs",
+      "size": "4-5 GB",
+      "status": "For larger Apple Silicon Macs",
+      "source": "Contained Ollama lane",
+      "icon": "./assets/app-store/roachclaw-studio.svg",
+      "summary": "A bigger local coding model for machines with more headroom. Queue it from the site and RoachNet will open directly into the RoachClaw workbench to stage the download.",
+      "accent": "violet",
+      "machineFit": "Best on M2 Pro, Max, and higher-memory Apple Silicon",
+      "includes": [
+        "Contained 7B coding model queue",
+        "RoachClaw workbench handoff",
+        "Larger local lane for stronger coding and agent tasks"
+      ],
+      "installLabel": "Get",
+      "detailLabel": "Open RoachClaw",
+      "detailUrl": "./index.html#screens",
+      "installIntent": {
+        "action": "roachclaw-model",
+        "model": "qwen2.5-coder:7b"
+      }
     }
   ]
 }

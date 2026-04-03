@@ -500,7 +500,7 @@ async function copySwiftPackageResources(executable, resourcesPath) {
   }
 }
 
-async function bundleApp({ name, executable, identifier, iconPath, prepareResources }) {
+async function bundleApp({ name, executable, identifier, iconPath, prepareResources, urlSchemes = [] }) {
   const bundlePath = path.join(distPath, `${name}.app`)
   const contentsPath = path.join(bundlePath, 'Contents')
   const macOSPath = path.join(contentsPath, 'MacOS')
@@ -521,6 +521,23 @@ async function bundleApp({ name, executable, identifier, iconPath, prepareResour
     console.log(`Preparing bundled resources for ${name}...`)
     await prepareResources({ bundlePath, contentsPath, resourcesPath })
   }
+
+  const urlSchemesPlist = urlSchemes.length
+    ? `
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>CFBundleURLName</key>
+      <string>${identifier}</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+${urlSchemes.map((scheme) => `        <string>${scheme}</string>`).join('\n')}
+      </array>
+    </dict>
+  </array>`
+    : ''
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -547,6 +564,7 @@ async function bundleApp({ name, executable, identifier, iconPath, prepareResour
   <key>NSHighResolutionCapable</key>
   <true/>
   ${iconPath ? '<key>CFBundleIconFile</key>\n  <string>RoachNet</string>' : ''}
+  ${urlSchemesPlist}
 </dict>
 </plist>
 `
@@ -588,6 +606,7 @@ async function main() {
       name: 'RoachNet',
       executable: path.join(binPath, 'RoachNetApp'),
       identifier: 'com.roachwares.roachnet',
+      urlSchemes: ['roachnet'],
       prepareResources: async ({ resourcesPath }) => {
         await copyBundledNodeRuntime(bundledNodeRuntimePath, resourcesPath)
         const bundledSourcePath = path.join(resourcesPath, 'RoachNetSource')
