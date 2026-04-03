@@ -37,6 +37,7 @@ const appDetailClose = document.querySelector('#app-detail-close')
 const appsCountStat = document.querySelector('#apps-count')
 const appsSectionsCountStat = document.querySelector('#apps-sections-count')
 const appsToolbarStats = document.querySelector('#apps-toolbar-stats')
+const returnHomeButtons = [...document.querySelectorAll('[data-return-home]')]
 
 const platformPresets = {
   mac: {
@@ -1236,6 +1237,20 @@ function closeAppDetail() {
   document.body.classList.remove('app-detail-open')
 }
 
+function returnToRoachNetHome(event) {
+  event?.preventDefault()
+
+  const referrer = document.referrer || ''
+  const cameFromRoachNetHome = /^https:\/\/roachnet\.org(?:\/|$)/i.test(referrer)
+
+  if (cameFromRoachNetHome && window.history.length > 1) {
+    window.history.back()
+    return
+  }
+
+  window.location.href = 'https://roachnet.org/'
+}
+
 async function loadAppStoreCatalog() {
   if (!appStoreGrid) {
     return
@@ -1513,6 +1528,9 @@ appDetailOverlay?.addEventListener('click', (event) => {
   if (event.target === appDetailOverlay) {
     closeAppDetail()
   }
+})
+returnHomeButtons.forEach((button) => {
+  button.addEventListener('click', returnToRoachNetHome)
 })
 
 document.addEventListener('click', (event) => {
