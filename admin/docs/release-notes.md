@@ -518,6 +518,21 @@
 
 ---
 
+## Version 1.30.9 - April 3, 2026
+
+### 🐛 Bug Fixes
+
+- **Setup App**: Fixed the packaged `RoachNet Setup.app` so mouse clicks advance the installer again instead of leaving progression stuck on the Return key.
+- **Installer Runtime**: Improved dependency detection so setup now checks for package-manager updates, surfaces upgrade commands for installed tools, and handles Docker availability more cleanly.
+- **Website**: Replaced the broken PayPal hosted-button embed with clean direct donation actions that render correctly on `roachnet.org`.
+- **Native Shell**: Restored vertical scrolling in the main workspace and serialized background refresh work to reduce runtime instability in the desktop shell.
+
+### ✨ Improvements
+
+- **macOS Packaging**: Rebuilt the `1.30.9` DMG and setup bundle with the latest installer/runtime fixes validated from the packaged app itself.
+
+---
+
 ## Version 1.2.0 - October 7, 2025
 
 ### 🚀 New Features

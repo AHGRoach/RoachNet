@@ -204,7 +204,7 @@ function getCurrentAppVersion() {
     return packagedVersion
   }
 
-  return readJsonFile(path.join(repoRoot, 'package.json'))?.version || '1.30.8'
+  return readJsonFile(path.join(repoRoot, 'package.json'))?.version || '1.30.9'
 }
 
 function parseGitHubRepo(sourceRepoUrl = DEFAULT_SOURCE_REPO_URL) {
@@ -853,6 +853,111 @@ async function detectPackageManager() {
   return { id: 'none', label: 'None detected' }
 }
 
+function getDependencyPackageTargets(packageManagerId) {
+  const targets = {
+    brew: {
+      git: ['git'],
+      node: ['node@22'],
+      npm: ['node@22'],
+      docker: ['docker'],
+      dockerCompose: ['docker'],
+      ollama: ['ollama'],
+    },
+    winget: {
+      git: ['Git.Git'],
+      node: ['OpenJS.NodeJS.LTS'],
+      npm: ['OpenJS.NodeJS.LTS'],
+      docker: ['Docker.DockerDesktop'],
+      dockerCompose: ['Docker.DockerDesktop'],
+      ollama: ['Ollama.Ollama'],
+    },
+    choco: {
+      git: ['git'],
+      node: ['nodejs-lts'],
+      npm: ['nodejs-lts'],
+      docker: ['docker-desktop'],
+      dockerCompose: ['docker-desktop'],
+      ollama: ['ollama'],
+    },
+  }
+
+  return targets[packageManagerId] || {}
+}
+
+async function detectOutdatedPackages(packageManagerId) {
+  if (packageManagerId === 'brew') {
+    try {
+      const result = await runProcess('brew', ['outdated', '--json=v2'], {
+        env: getShellEnv(),
+        timeoutMs: 20_000,
+      })
+      const parsed = JSON.parse(result.stdout || '{}')
+      return new Set([
+        ...(parsed.formulae || []).map((item) => item.name).filter(Boolean),
+        ...(parsed.casks || []).map((item) => item.name).filter(Boolean),
+      ])
+    } catch {
+      return new Set()
+    }
+  }
+
+  if (packageManagerId === 'winget') {
+    try {
+      const result = await runProcess(
+        'winget',
+        ['upgrade', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity'],
+        {
+          env: getShellEnv(),
+          timeoutMs: 20_000,
+        }
+      )
+      const packages = new Set()
+
+      for (const rawLine of result.stdout.split(/\r?\n/)) {
+        const line = rawLine.trim()
+        if (
+          !line ||
+          line.startsWith('Name ') ||
+          line.startsWith('--') ||
+          line.includes('No installed package')
+        ) {
+          continue
+        }
+
+        const columns = line.split(/\s{2,}/).map((segment) => segment.trim()).filter(Boolean)
+        if (columns.length >= 2) {
+          packages.add(columns[1])
+        }
+      }
+
+      return packages
+    } catch {
+      return new Set()
+    }
+  }
+
+  if (packageManagerId === 'choco') {
+    try {
+      const result = await runProcess('choco', ['outdated', '--limit-output'], {
+        env: getShellEnv(),
+        timeoutMs: 20_000,
+      })
+      return new Set(
+        result.stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => line.split('|')[0])
+          .filter(Boolean)
+      )
+    } catch {
+      return new Set()
+    }
+  }
+
+  return new Set()
+}
+
 function parseVersionNumber(raw) {
   if (!raw) {
     return null
@@ -897,6 +1002,31 @@ async function detectCommandVersion(command, args = ['--version']) {
   }
 }
 
+async function detectLatestNpmPackageVersion(packageName, npmBinary) {
+  if (!packageName || !npmBinary) {
+    return null
+  }
+
+  try {
+    const result = await runProcess(npmBinary, ['view', packageName, 'version', '--json'], {
+      env: getShellEnv(),
+      timeoutMs: 12_000,
+    })
+    const raw = (result.stdout || '').trim()
+    if (!raw) {
+      return null
+    }
+
+    try {
+      return parseVersionNumber(JSON.parse(raw))
+    } catch {
+      return parseVersionNumber(raw)
+    }
+  } catch {
+    return null
+  }
+}
+
 async function detectContainerRuntime(options = {}) {
   return detectRoachNetContainerRuntime({
     commandPath,
@@ -928,6 +1058,8 @@ function describePlatform() {
 }
 
 async function detectDependencies({ containerRuntime } = {}) {
+  const packageManager = await detectPackageManager()
+  const outdatedPackages = await detectOutdatedPackages(packageManager.id)
   const gitPath = await commandPath('git')
   const bundledNodePath = getPreferredNodeBinary()
   const bundledNpmPath = getPreferredNpmBinary(bundledNodePath)
@@ -953,9 +1085,32 @@ async function detectDependencies({ containerRuntime } = {}) {
   const openclawVersion = openclawAvailable
     ? await detectCommandVersion(process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw', ['--version'])
     : null
+  const latestOpenclawVersion = openclawAvailable
+    ? await detectLatestNpmPackageVersion('openclaw', npmPath)
+    : null
+  const dockerVersion = resolvedContainerRuntime.dockerCliPath
+    ? await detectCommandVersion('docker', ['--version'])
+    : null
+  const dockerComposeVersion = resolvedContainerRuntime.composeAvailable
+    ? await detectCommandVersion('docker', ['compose', 'version'])
+    : null
   const minimumNodeVersion = '22.0.0'
   const nodeNeedsUpdate =
     Boolean(nodeVersion) && compareVersions(nodeVersion, minimumNodeVersion) < 0
+  const packageTargets = getDependencyPackageTargets(packageManager.id)
+  const bundledNodeResolvedPath = bundledNodePath.includes(path.sep) ? path.resolve(bundledNodePath) : null
+  const bundledNpmResolvedPath =
+    bundledNpmPath.includes(path.sep) && existsSync(bundledNpmPath) ? path.resolve(bundledNpmPath) : null
+  const nodeResolvedPath = nodePath && nodePath.includes(path.sep) ? path.resolve(nodePath) : null
+  const npmResolvedPath = npmPath && npmPath.includes(path.sep) ? path.resolve(npmPath) : null
+  const usingBundledNode = Boolean(nodeResolvedPath && bundledNodeResolvedPath && nodeResolvedPath === bundledNodeResolvedPath)
+  const usingBundledNpm = Boolean(npmResolvedPath && bundledNpmResolvedPath && npmResolvedPath === bundledNpmResolvedPath)
+  const hasPackageUpdate = (dependencyId) =>
+    (packageTargets[dependencyId] || []).some((packageName) => outdatedPackages.has(packageName))
+  const openclawNeedsUpdate =
+    Boolean(openclawVersion) &&
+    Boolean(latestOpenclawVersion) &&
+    compareVersions(openclawVersion, latestOpenclawVersion) < 0
 
   return {
     git: {
@@ -966,7 +1121,7 @@ async function detectDependencies({ containerRuntime } = {}) {
       path: gitPath,
       version: gitVersion,
       minimumVersion: null,
-      needsUpdate: false,
+      needsUpdate: hasPackageUpdate('git'),
     },
     node: {
       id: 'node',
@@ -976,7 +1131,8 @@ async function detectDependencies({ containerRuntime } = {}) {
       path: nodePath,
       version: nodeVersion,
       minimumVersion: minimumNodeVersion,
-      needsUpdate: nodeNeedsUpdate,
+      needsUpdate: nodeNeedsUpdate || (!usingBundledNode && hasPackageUpdate('node')),
+      bundled: usingBundledNode,
     },
     npm: {
       id: 'npm',
@@ -986,7 +1142,8 @@ async function detectDependencies({ containerRuntime } = {}) {
       path: npmPath,
       version: npmVersion,
       minimumVersion: null,
-      needsUpdate: false,
+      needsUpdate: !usingBundledNpm && hasPackageUpdate('npm'),
+      bundled: usingBundledNpm,
     },
     docker: {
       id: 'docker',
@@ -995,18 +1152,18 @@ async function detectDependencies({ containerRuntime } = {}) {
       available: Boolean(resolvedContainerRuntime.dockerCliPath),
       path: resolvedContainerRuntime.dockerCliPath,
       daemonRunning: resolvedContainerRuntime.daemonRunning,
-      version: null,
+      version: dockerVersion,
       minimumVersion: null,
-      needsUpdate: false,
+      needsUpdate: hasPackageUpdate('docker'),
     },
     dockerCompose: {
       id: 'dockerCompose',
       label: 'Docker Compose',
       required: true,
       available: resolvedContainerRuntime.composeAvailable,
-      version: null,
+      version: dockerComposeVersion,
       minimumVersion: '2.x',
-      needsUpdate: false,
+      needsUpdate: hasPackageUpdate('dockerCompose'),
     },
     ollama: {
       id: 'ollama',
@@ -1015,7 +1172,7 @@ async function detectDependencies({ containerRuntime } = {}) {
       available: ollamaAvailable,
       version: ollamaVersion,
       minimumVersion: null,
-      needsUpdate: false,
+      needsUpdate: hasPackageUpdate('ollama'),
     },
     openclaw: {
       id: 'openclaw',
@@ -1024,8 +1181,8 @@ async function detectDependencies({ containerRuntime } = {}) {
       available: openclawAvailable,
       path: openclawPath,
       version: openclawVersion,
-      minimumVersion: null,
-      needsUpdate: false,
+      minimumVersion: latestOpenclawVersion,
+      needsUpdate: openclawNeedsUpdate,
     },
   }
 }
@@ -1036,13 +1193,25 @@ function getEffectiveSourceMode(config = {}) {
 }
 
 function getRequiredDependencyIds(config = {}) {
-  const requiredIds = ['docker']
+  const requiredIds = ['docker', 'dockerCompose']
 
   if (getEffectiveSourceMode(config) === 'clone') {
     requiredIds.unshift('git')
   }
 
   return requiredIds
+}
+
+function getManagedDependencyIds(config = {}, dependencies = {}) {
+  const managedIds = new Set(getRequiredDependencyIds(config))
+
+  for (const dependencyId of ['ollama', 'openclaw']) {
+    if (dependencies[dependencyId]?.available) {
+      managedIds.add(dependencyId)
+    }
+  }
+
+  return [...managedIds]
 }
 
 function applyDependencyRequirements(dependencies, config = {}) {
@@ -1062,61 +1231,69 @@ function applyDependencyRequirements(dependencies, config = {}) {
 function getDependencyInstallCommand(packageManagerId, dependencyId) {
   const commands = {
     brew: {
-      git: 'brew install git',
-      node: 'brew install node@22',
-      docker: 'brew install --cask docker',
-      ollama: 'brew install ollama',
-      openclaw: 'npm install -g openclaw',
+      git: 'brew upgrade git || brew install git',
+      node: 'brew upgrade node@22 || brew install node@22',
+      docker: 'brew upgrade --cask docker || brew install --cask docker',
+      dockerCompose: 'brew upgrade --cask docker || brew install --cask docker',
+      ollama: 'brew upgrade ollama || brew install ollama',
+      openclaw: 'npm install -g openclaw@latest',
     },
     apt: {
       git: 'sudo apt-get update && sudo apt-get install -y git curl ca-certificates',
       node:
         'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs',
       docker: 'curl -fsSL https://get.docker.com | sudo sh',
+      dockerCompose: 'sudo apt-get update && sudo apt-get install -y docker-compose-plugin',
       ollama: 'curl -fsSL https://ollama.com/install.sh | sh',
-      openclaw: 'npm install -g openclaw',
+      openclaw: 'npm install -g openclaw@latest',
     },
     dnf: {
       git: 'sudo dnf install -y git curl ca-certificates',
       node: 'curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo dnf install -y nodejs',
       docker: 'curl -fsSL https://get.docker.com | sudo sh',
+      dockerCompose: 'sudo dnf install -y docker-compose-plugin || sudo dnf install -y docker-compose',
       ollama: 'curl -fsSL https://ollama.com/install.sh | sh',
-      openclaw: 'npm install -g openclaw',
+      openclaw: 'npm install -g openclaw@latest',
     },
     yum: {
       git: 'sudo yum install -y git curl ca-certificates',
       node: 'curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo yum install -y nodejs',
       docker: 'curl -fsSL https://get.docker.com | sudo sh',
+      dockerCompose: 'sudo yum install -y docker-compose-plugin || sudo yum install -y docker-compose',
       ollama: 'curl -fsSL https://ollama.com/install.sh | sh',
-      openclaw: 'npm install -g openclaw',
+      openclaw: 'npm install -g openclaw@latest',
     },
     pacman: {
       git: 'sudo pacman -Sy --noconfirm git curl ca-certificates',
       node: 'sudo pacman -Sy --noconfirm nodejs npm',
       docker: 'sudo pacman -Sy --noconfirm docker docker-compose',
+      dockerCompose: 'sudo pacman -Sy --noconfirm docker docker-compose',
       ollama: 'sudo pacman -Sy --noconfirm ollama',
-      openclaw: 'npm install -g openclaw',
+      openclaw: 'npm install -g openclaw@latest',
     },
     zypper: {
       git: 'sudo zypper install -y git curl ca-certificates',
       node: 'sudo zypper install -y nodejs22 npm22',
       docker: 'sudo zypper install -y docker docker-compose',
+      dockerCompose: 'sudo zypper install -y docker-compose',
       ollama: null,
-      openclaw: 'npm install -g openclaw',
+      openclaw: 'npm install -g openclaw@latest',
     },
     winget: {
-      git: 'winget install --id Git.Git -e --source winget',
-      node: 'winget install --id OpenJS.NodeJS.LTS -e --source winget',
-      docker: 'winget install --id Docker.DockerDesktop -e --source winget',
-      ollama: 'winget install --id Ollama.Ollama -e --source winget',
-      openclaw: 'npm install -g openclaw',
+      git: 'winget upgrade --id Git.Git -e --source winget || winget install --id Git.Git -e --source winget',
+      node: 'winget upgrade --id OpenJS.NodeJS.LTS -e --source winget || winget install --id OpenJS.NodeJS.LTS -e --source winget',
+      docker: 'winget upgrade --id Docker.DockerDesktop -e --source winget || winget install --id Docker.DockerDesktop -e --source winget',
+      dockerCompose: 'winget upgrade --id Docker.DockerDesktop -e --source winget || winget install --id Docker.DockerDesktop -e --source winget',
+      ollama: 'winget upgrade --id Ollama.Ollama -e --source winget || winget install --id Ollama.Ollama -e --source winget',
+      openclaw: 'npm install -g openclaw@latest',
     },
     choco: {
-      git: 'choco install git -y',
-      node: 'choco install nodejs-lts -y',
-      docker: 'choco install docker-desktop -y',
+      git: 'choco upgrade git -y || choco install git -y',
+      node: 'choco upgrade nodejs-lts -y || choco install nodejs-lts -y',
+      docker: 'choco upgrade docker-desktop -y || choco install docker-desktop -y',
+      dockerCompose: 'choco upgrade docker-desktop -y || choco install docker-desktop -y',
       ollama: null,
-      openclaw: 'npm install -g openclaw',
+      openclaw: 'npm install -g openclaw@latest',
     },
   }
 
@@ -1124,12 +1301,16 @@ function getDependencyInstallCommand(packageManagerId, dependencyId) {
 }
 
 function dependencyInstallNeedsPrivileges(packageManagerId, dependencyId) {
-  if (process.platform === 'darwin' && packageManagerId === 'brew' && dependencyId === 'docker') {
+  if (
+    process.platform === 'darwin' &&
+    packageManagerId === 'brew' &&
+    ['docker', 'dockerCompose'].includes(dependencyId)
+  ) {
     return true
   }
 
   if (process.platform === 'win32' && ['winget', 'choco'].includes(packageManagerId)) {
-    return dependencyId === 'docker'
+    return ['docker', 'dockerCompose'].includes(dependencyId)
   }
 
   if (['apt', 'dnf', 'yum', 'pacman', 'zypper'].includes(packageManagerId)) {
@@ -1365,6 +1546,7 @@ async function ensureRequiredDependencies(config, task, packageManager, dependen
   const requiredIds = getRequiredDependencyIds(config)
   let activePackageManager = packageManager
   let activeDependencies = applyDependencyRequirements(dependencies, config)
+  let managedIds = getManagedDependencyIds(config, activeDependencies)
 
   const hasMissingRequiredDependency = requiredIds.some((dependencyId) => {
     const dependency = activeDependencies[dependencyId]
@@ -1402,14 +1584,20 @@ async function ensureRequiredDependencies(config, task, packageManager, dependen
       await detectDependencies({ containerRuntime: refreshedContainerRuntime }),
       config
     )
+    managedIds = getManagedDependencyIds(config, activeDependencies)
 
     if (activePackageManager.id === 'none') {
       throw new Error('Homebrew did not finish installing, so RoachNet Setup cannot continue installing required dependencies on macOS.')
     }
   }
 
-  for (const dependencyId of requiredIds) {
+  for (const dependencyId of managedIds) {
     const dependency = activeDependencies[dependencyId]
+    const isRequiredDependency = requiredIds.includes(dependencyId)
+
+    if (!dependency?.available && !isRequiredDependency) {
+      continue
+    }
 
     if (dependency?.available && !dependency?.needsUpdate) {
       appendTaskLog(
@@ -1420,14 +1608,16 @@ async function ensureRequiredDependencies(config, task, packageManager, dependen
     }
 
     if (!config.autoInstallDependencies) {
-      throw new Error(`${dependency.label} is missing and automatic dependency installation is disabled.`)
+      throw new Error(
+        `${dependency.label} ${dependency?.available ? 'needs an update' : 'is missing'} and automatic dependency installation is disabled.`
+      )
     }
 
     const installCommand = getDependencyInstallCommand(activePackageManager.id, dependencyId)
 
     if (!installCommand) {
       throw new Error(
-        `${dependency.label} is missing and RoachNet Setup does not have an automatic install command for ${activePackageManager.label}.`
+        `${dependency.label} ${dependency?.available ? 'needs an update' : 'is missing'} and RoachNet Setup does not have an automatic install command for ${activePackageManager.label}.`
       )
     }
 
@@ -2040,8 +2230,20 @@ async function getInstallerState(searchParams = new URLSearchParams()) {
     installCommand: getDependencyInstallCommand(packageManager.id, dependency.id),
     notes: [
       getDependencyNotes(packageManager.id, dependency.id),
-      dependency.needsUpdate && dependency.minimumVersion
-        ? `${dependency.label} ${dependency.version || 'unknown'} is older than the required ${dependency.minimumVersion}.`
+      dependency.needsUpdate && dependency.minimumVersion && dependency.version
+        ? `${dependency.label} ${dependency.version} can be updated to ${dependency.minimumVersion}.`
+        : null,
+      dependency.needsUpdate && dependency.minimumVersion && !dependency.version
+        ? `${dependency.label} needs an update to satisfy ${dependency.minimumVersion}.`
+        : null,
+      dependency.needsUpdate && !dependency.minimumVersion
+        ? `A newer ${dependency.label} release is available from the detected package source.`
+        : null,
+      dependency.id === 'docker' && dependency.available && dependency.daemonRunning === false
+        ? 'Docker is installed but the daemon is not running yet. RoachNet Setup can launch Docker Desktop automatically.'
+        : null,
+      dependency.bundled
+        ? `${dependency.label} is currently satisfied by the bundled runtime inside RoachNet Setup.`
         : null,
     ]
       .filter(Boolean)

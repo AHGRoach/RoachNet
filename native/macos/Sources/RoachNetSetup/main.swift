@@ -684,7 +684,10 @@ private struct SetupRootView: View {
 
                     footer
                 }
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -1061,7 +1064,7 @@ private struct SetupWindowConfigurator: NSViewRepresentable {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.tabbingMode = .disallowed
-            window.isMovableByWindowBackground = true
+            window.isMovableByWindowBackground = false
             window.isRestorable = false
 
             let currentSize = window.frame.size

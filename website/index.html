@@ -29,11 +29,6 @@
       content="Offline maps, local AI, and your own notes in one calm little command center that lives on your machine."
     />
     <meta name="twitter:image" content="https://roachnet.org/assets/roachnet-logo.png" />
-    <script
-      src="https://www.paypal.com/sdk/js?client-id=BAAluJJtHEis1jkisWaTGm2Ue1JxBDFPWz9yCO34X56VXuTZyzvHgZ0z2x52rKvBksDsOTqMx0oB0TZoxw&components=hosted-buttons&enable-funding=venmo&currency=USD"
-      crossorigin="anonymous"
-      async
-    ></script>
     <link rel="stylesheet" href="./app.css" />
   </head>
   <body>
@@ -69,12 +64,12 @@
           </p>
 
           <div class="hero-actions">
-            <button class="cta cta--primary" id="primary-download" type="button">Download RoachNet 1.30.8 for macOS</button>
+            <button class="cta cta--primary" id="primary-download" type="button">Download RoachNet 1.30.9 for macOS</button>
             <a class="cta cta--ghost" href="https://github.com/AHGRoach/RoachNet" target="_blank" rel="noreferrer">View on GitHub</a>
           </div>
 
           <p class="hero-footnote">Built for Apple Silicon, Windows 11, and Linux desktops.</p>
-          <p class="download-meta" id="download-meta">Starts with RoachNet Setup v1.30.8 · RoachNet-Setup-macOS.dmg</p>
+          <p class="download-meta" id="download-meta">Starts with RoachNet Setup v1.30.9 · RoachNet-Setup-macOS.dmg</p>
 
           <div class="hero-status" aria-label="RoachNet status row">
             <span data-hero-time>--:-- --</span>
@@ -124,7 +119,7 @@
           <article class="feature-card">
             <span class="feature-card__eyebrow">Dev Studio</span>
             <h3>Code, shell, and AI assist in one native lane.</h3>
-            <p>The 1.30.8 build makes setup self-contained on a clean Mac, boots from the bundled runtime instead of a host Node install, and carries the expanded developer workspace with RoachClaw assist forward into a calmer release.</p>
+            <p>The 1.30.9 build hardens setup clicks on clean Macs, improves dependency repair and update checks, and smooths the native shell so the first launch is less brittle.</p>
           </article>
 
           <article class="feature-card">
@@ -292,7 +287,7 @@
         </div>
 
         <div class="downloads-actions">
-          <button class="cta cta--primary" id="downloads-primary" type="button">Download RoachNet 1.30.8 for macOS</button>
+          <button class="cta cta--primary" id="downloads-primary" type="button">Download RoachNet 1.30.9 for macOS</button>
           <a class="cta cta--ghost" href="https://github.com/AHGRoach/RoachNet" target="_blank" rel="noreferrer">View on GitHub</a>
         </div>
       </section>
@@ -309,14 +304,20 @@
             <span class="feature-card__eyebrow">AHG Records LLC</span>
             <h3>Back the label behind RoachNet.</h3>
             <p>Support the broader AHG Records LLC work that funds releases, tools, experiments, and the long tail of keeping independent projects alive.</p>
-            <div class="support-card__button" id="paypal-container-ahg-records"></div>
+            <div class="support-card__actions">
+              <a class="cta cta--primary support-card__cta" href="https://www.paypal.com/donate/?hosted_button_id=ZV8RL9DWQXHGE" target="_blank" rel="noreferrer">Donate to AHG Records LLC</a>
+            </div>
+            <p class="support-card__note">Secure hosted donation page with PayPal and Venmo support.</p>
           </article>
 
           <article class="support-card">
             <span class="feature-card__eyebrow">RoachNet Development</span>
             <h3>Help fund faster fixes and new local-first features.</h3>
             <p>Support native installer work, local AI improvements, mirror-backed downloads, and the next rounds of runtime and UX polish inside RoachNet.</p>
-            <div class="support-card__button" id="paypal-container-roachnet-dev"></div>
+            <div class="support-card__actions">
+              <a class="cta cta--primary support-card__cta" href="https://www.paypal.com/donate/?hosted_button_id=ZV8RL9DWQXHGE" target="_blank" rel="noreferrer">Donate to RoachNet</a>
+            </div>
+            <p class="support-card__note">The same hosted donation page also supports Venmo when it is available for the visitor.</p>
           </article>
         </div>
       </section>
@@ -355,31 +356,6 @@
       </div>
     </footer>
 
-    <script>
-      document.addEventListener('DOMContentLoaded', () => {
-        const hostedButtonId = 'ZV8RL9DWQXHGE'
-        const containers = ['#paypal-container-ahg-records', '#paypal-container-roachnet-dev']
-
-        const renderButtons = () => {
-          if (!window.paypal?.HostedButtons) {
-            window.setTimeout(renderButtons, 150)
-            return
-          }
-
-          containers.forEach((selector) => {
-            const target = document.querySelector(selector)
-            if (!target || target.dataset.paypalReady === 'true') {
-              return
-            }
-
-            target.dataset.paypalReady = 'true'
-            window.paypal.HostedButtons({ hostedButtonId }).render(selector)
-          })
-        }
-
-        renderButtons()
-      })
-    </script>
     <script src="./app.js" type="module"></script>
   </body>
 </html>

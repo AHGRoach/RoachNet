@@ -382,6 +382,9 @@ final class WorkspaceModel: ObservableObject {
     private var attemptedRoachClawServiceBootstrap = false
     private var attemptedInstalledServiceBootstrap = false
     private var refreshLoopTask: Task<Void, Never>?
+    private var refreshInFlight = false
+    private var queuedRefreshRequested = false
+    private var queuedRefreshSilent = true
 
     var setupCompleted: Bool { config.setupCompletedAt != nil }
     var installPath: String { config.installPath.isEmpty ? RoachNetRepositoryLocator.defaultInstallPath() : config.installPath }
@@ -505,6 +508,28 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func refreshRuntimeState(silently: Bool = false) async {
+        if refreshInFlight {
+            queuedRefreshRequested = true
+            queuedRefreshSilent = queuedRefreshSilent && silently
+            return
+        }
+
+        refreshInFlight = true
+        defer {
+            refreshInFlight = false
+
+            if queuedRefreshRequested {
+                let nextSilent = queuedRefreshSilent
+                queuedRefreshRequested = false
+                queuedRefreshSilent = true
+
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.refreshRuntimeState(silently: nextSilent)
+                }
+            }
+        }
+
         refreshConfigOnly()
         guard setupCompleted else { return }
         let currentConfig = config
@@ -1578,6 +1603,7 @@ struct RoachNetMacApp: App {
     var body: some Scene {
         WindowGroup("RoachNet") {
             RootWorkspaceView(model: model)
+                .background(MainWindowConfigurator())
                 .frame(minWidth: 760, idealWidth: 1100, minHeight: 560, idealHeight: 760)
                 .onAppear {
                     appDelegate.model = model
@@ -1585,6 +1611,27 @@ struct RoachNetMacApp: App {
         }
         .windowStyle(.hiddenTitleBar)
     }
+}
+
+private struct MainWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+
+            window.minSize = NSSize(width: 760, height: 560)
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.tabbingMode = .disallowed
+            window.isMovableByWindowBackground = false
+            window.isRestorable = false
+        }
+
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 private struct RootWorkspaceView: View {
@@ -1962,11 +2009,13 @@ private struct RootWorkspaceView: View {
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
+                .padding(.bottom, 12)
                 .frame(maxWidth: isTight ? 1180 : 1260, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .animation(shellSpring, value: activePane)
                 .animation(shellSpring, value: model.setupCompleted)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
