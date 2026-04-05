@@ -128,7 +128,7 @@ public sealed partial class MainWindow : Window
         return root;
     }
 
-    private static TextBlock Label(string text, double fontSize, double letterSpacing, FontWeight weight, Brush foreground)
+    private static TextBlock Label(string text, double fontSize, double letterSpacing, Windows.UI.Text.FontWeight weight, Brush foreground)
     {
         return new TextBlock
         {
