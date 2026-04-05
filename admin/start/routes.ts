@@ -12,6 +12,7 @@ import type { HttpContext } from '@adonisjs/core/http'
 const BenchmarkController = () => import('#controllers/benchmark_controller')
 const ChatsController = () => import('#controllers/chats_controller')
 const CollectionUpdatesController = () => import('#controllers/collection_updates_controller')
+const CompanionController = () => import('#controllers/companion_controller')
 const DocsController = () => import('#controllers/docs_controller')
 const DownloadsController = () => import('#controllers/downloads_controller')
 const EasySetupController = () => import('#controllers/easy_setup_controller')
@@ -161,6 +162,20 @@ router
   .prefix('/api/chat/sessions')
 
 router.get('/api/chat/suggestions', [ChatsController, 'suggestions'])
+
+router
+  .group(() => {
+    router.get('/bootstrap', [CompanionController, 'bootstrap'])
+    router.get('/runtime', [CompanionController, 'runtime'])
+    router.get('/vault', [CompanionController, 'vault'])
+    router.post('/services/affect', [CompanionController, 'affectService'])
+    router.get('/chat/sessions', [CompanionController, 'sessionsIndex'])
+    router.get('/chat/sessions/:id', [CompanionController, 'sessionsShow'])
+    router.post('/chat/sessions', [CompanionController, 'sessionsStore'])
+    router.post('/chat/send', [CompanionController, 'sendMessage'])
+    router.post('/install', [CompanionController, 'install'])
+  })
+  .prefix('/api/companion')
 
 router
   .group(() => {

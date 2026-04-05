@@ -6,6 +6,11 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
     public var storagePath: String
     public var useDockerContainerization: Bool
     public var installRoachClaw: Bool
+    public var companionEnabled: Bool
+    public var companionHost: String
+    public var companionPort: Int
+    public var companionToken: String
+    public var companionAdvertisedURL: String
     public var roachClawDefaultModel: String
     public var distributedInferenceBackend: String
     public var exoBaseUrl: String
@@ -23,6 +28,11 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         storagePath: String? = nil,
         useDockerContainerization: Bool = false,
         installRoachClaw: Bool = true,
+        companionEnabled: Bool = true,
+        companionHost: String = "0.0.0.0",
+        companionPort: Int = 38111,
+        companionToken: String = RoachNetInstallerConfig.generateCompanionToken(),
+        companionAdvertisedURL: String = "",
         roachClawDefaultModel: String = "qwen2.5-coder:1.5b",
         distributedInferenceBackend: String = "disabled",
         exoBaseUrl: String = "http://127.0.0.1:52415",
@@ -39,6 +49,13 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         self.storagePath = storagePath ?? RoachNetRepositoryLocator.defaultStoragePath(installPath: installPath)
         self.useDockerContainerization = useDockerContainerization
         self.installRoachClaw = installRoachClaw
+        self.companionEnabled = companionEnabled
+        self.companionHost = companionHost
+        self.companionPort = companionPort
+        self.companionToken = companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? RoachNetInstallerConfig.generateCompanionToken()
+            : companionToken
+        self.companionAdvertisedURL = companionAdvertisedURL
         self.roachClawDefaultModel = roachClawDefaultModel
         self.distributedInferenceBackend = distributedInferenceBackend
         self.exoBaseUrl = exoBaseUrl
@@ -57,6 +74,11 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         case storagePath
         case useDockerContainerization
         case installRoachClaw
+        case companionEnabled
+        case companionHost
+        case companionPort
+        case companionToken
+        case companionAdvertisedURL
         case roachClawDefaultModel
         case distributedInferenceBackend
         case exoBaseUrl
@@ -91,6 +113,11 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
             storagePath: storagePath,
             useDockerContainerization: try container.decodeIfPresent(Bool.self, forKey: .useDockerContainerization) ?? false,
             installRoachClaw: try container.decodeIfPresent(Bool.self, forKey: .installRoachClaw) ?? true,
+            companionEnabled: try container.decodeIfPresent(Bool.self, forKey: .companionEnabled) ?? true,
+            companionHost: try container.decodeIfPresent(String.self, forKey: .companionHost) ?? "0.0.0.0",
+            companionPort: try container.decodeIfPresent(Int.self, forKey: .companionPort) ?? 38111,
+            companionToken: try container.decodeIfPresent(String.self, forKey: .companionToken) ?? RoachNetInstallerConfig.generateCompanionToken(),
+            companionAdvertisedURL: try container.decodeIfPresent(String.self, forKey: .companionAdvertisedURL) ?? "",
             roachClawDefaultModel: try container.decodeIfPresent(String.self, forKey: .roachClawDefaultModel) ?? "qwen2.5-coder:1.5b",
             distributedInferenceBackend: try container.decodeIfPresent(String.self, forKey: .distributedInferenceBackend) ?? "disabled",
             exoBaseUrl: try container.decodeIfPresent(String.self, forKey: .exoBaseUrl) ?? "http://127.0.0.1:52415",
@@ -111,6 +138,11 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         try container.encode(storagePath, forKey: .storagePath)
         try container.encode(useDockerContainerization, forKey: .useDockerContainerization)
         try container.encode(installRoachClaw, forKey: .installRoachClaw)
+        try container.encode(companionEnabled, forKey: .companionEnabled)
+        try container.encode(companionHost, forKey: .companionHost)
+        try container.encode(companionPort, forKey: .companionPort)
+        try container.encode(companionToken, forKey: .companionToken)
+        try container.encode(companionAdvertisedURL, forKey: .companionAdvertisedURL)
         try container.encode(roachClawDefaultModel, forKey: .roachClawDefaultModel)
         try container.encode(distributedInferenceBackend, forKey: .distributedInferenceBackend)
         try container.encode(exoBaseUrl, forKey: .exoBaseUrl)
@@ -121,6 +153,12 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         try container.encodeIfPresent(setupCompletedAt, forKey: .setupCompletedAt)
         try container.encode(pendingLaunchIntro, forKey: .pendingLaunchIntro)
         try container.encode(pendingRoachClawSetup, forKey: .pendingRoachClawSetup)
+    }
+
+    public static func generateCompanionToken() -> String {
+        let first = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let second = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        return "\(first)\(second)"
     }
 }
 
@@ -455,6 +493,13 @@ public enum RoachNetRepositoryLocator {
                 installedAppPath: defaultInstalledAppPath(installPath: installPath),
                 storagePath: defaultStoragePath(installPath: installPath)
             )
+        }
+
+        if decoded.companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var refreshed = decoded
+            refreshed.companionToken = RoachNetInstallerConfig.generateCompanionToken()
+            try? writeConfig(refreshed)
+            return refreshed
         }
 
         return decoded

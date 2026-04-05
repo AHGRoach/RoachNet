@@ -45,6 +45,8 @@ const BUILD_RUNTIME_REDIS_PORT = '36379'
 const BUILD_RUNTIME_QDRANT_PORT = '36333'
 const BUILD_RUNTIME_OLLAMA_PORT = '36434'
 const BUILD_RUNTIME_OPENCLAW_PORT = '13001'
+const DEFAULT_COMPANION_HOST = '0.0.0.0'
+const DEFAULT_COMPANION_PORT = '38111'
 const MANAGED_PORT_FALLBACKS = ['8080', BUILD_RUNTIME_OPENCLAW_PORT]
 const MANAGED_RUNTIME_DB_USER = 'nomad_user'
 const MANAGED_RUNTIME_SECRETS_FILENAME = 'roachnet-managed-runtime-secrets.json'
@@ -100,6 +102,19 @@ async function loadEnv() {
 
   const raw = await readFile(envPath, 'utf8')
   return parseEnvFile(raw)
+}
+
+function isTruthyFlag(value) {
+  return ['1', 'true', 'yes', 'on', 'enabled'].includes(String(value || '').trim().toLowerCase())
+}
+
+function formatUrlHost(host) {
+  const trimmed = String(host || '').trim()
+  if (!trimmed) {
+    return '127.0.0.1'
+  }
+
+  return trimmed.includes(':') && !trimmed.startsWith('[') ? `[${trimmed}]` : trimmed
 }
 
 function getBaseUrl(envValues) {
@@ -445,6 +460,26 @@ function getRuntimeEnvValues(envValues) {
     'https://roachnet.org/collections'
   const configuredOpenClawWorkspace =
     process.env.OPENCLAW_WORKSPACE_PATH?.trim() || envValues.OPENCLAW_WORKSPACE_PATH?.trim()
+  const configuredCompanionEnabled =
+    process.env.ROACHNET_COMPANION_ENABLED?.trim() ||
+    envValues.ROACHNET_COMPANION_ENABLED?.trim() ||
+    ''
+  const configuredCompanionHost =
+    process.env.ROACHNET_COMPANION_HOST?.trim() ||
+    envValues.ROACHNET_COMPANION_HOST?.trim() ||
+    DEFAULT_COMPANION_HOST
+  const configuredCompanionPort =
+    process.env.ROACHNET_COMPANION_PORT?.trim() ||
+    envValues.ROACHNET_COMPANION_PORT?.trim() ||
+    DEFAULT_COMPANION_PORT
+  const configuredCompanionToken =
+    process.env.ROACHNET_COMPANION_TOKEN?.trim() ||
+    envValues.ROACHNET_COMPANION_TOKEN?.trim() ||
+    ''
+  const configuredCompanionAdvertisedUrl =
+    process.env.ROACHNET_COMPANION_ADVERTISED_URL?.trim() ||
+    envValues.ROACHNET_COMPANION_ADVERTISED_URL?.trim() ||
+    ''
 
   return {
     ...envValues,
@@ -462,9 +497,75 @@ function getRuntimeEnvValues(envValues) {
       process.env.ROACHNET_DISABLE_QUEUE?.trim() ||
       envValues.ROACHNET_DISABLE_QUEUE?.trim() ||
       '',
+    ROACHNET_COMPANION_ENABLED: configuredCompanionEnabled,
+    ROACHNET_COMPANION_HOST: configuredCompanionHost,
+    ROACHNET_COMPANION_PORT: configuredCompanionPort,
+    ROACHNET_COMPANION_TOKEN: configuredCompanionToken,
+    ROACHNET_COMPANION_ADVERTISED_URL: configuredCompanionAdvertisedUrl,
     OPENCLAW_WORKSPACE_PATH:
       configuredOpenClawWorkspace ? path.resolve(configuredOpenClawWorkspace) : path.join(storageRoot, 'openclaw'),
   }
+}
+
+function wantsCompanionRuntime(envValues) {
+  const rawMode = envValues.ROACHNET_COMPANION_ENABLED?.trim() || ''
+  if (rawMode) {
+    return isTruthyFlag(rawMode)
+  }
+
+  return Boolean(envValues.ROACHNET_COMPANION_TOKEN?.trim())
+}
+
+function getCompanionListenHost(envValues) {
+  return envValues.ROACHNET_COMPANION_HOST?.trim() || DEFAULT_COMPANION_HOST
+}
+
+function getCompanionPort(envValues) {
+  return envValues.ROACHNET_COMPANION_PORT?.trim() || DEFAULT_COMPANION_PORT
+}
+
+function getCompanionLocalUrl(envValues) {
+  if (!wantsCompanionRuntime(envValues)) {
+    return null
+  }
+
+  const listenHost = getCompanionListenHost(envValues)
+  const localHost =
+    listenHost === '0.0.0.0' || listenHost === '::' || listenHost === '[::]'
+      ? '127.0.0.1'
+      : listenHost
+
+  return `http://${formatUrlHost(localHost)}:${getCompanionPort(envValues)}`
+}
+
+function getCompanionAdvertisedUrl(envValues) {
+  if (!wantsCompanionRuntime(envValues)) {
+    return null
+  }
+
+  return envValues.ROACHNET_COMPANION_ADVERTISED_URL?.trim() || getCompanionLocalUrl(envValues)
+}
+
+function readLatestSourceServerUrl(logPath = serverLogPath) {
+  if (!existsSync(logPath)) {
+    return null
+  }
+
+  const lines = readFileSync(logPath, 'utf8').split(/\r?\n/)
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]
+    const bannerMatch = line.match(/Server address:\s+(http:\/\/[^\s]+)/)
+    if (bannerMatch?.[1]) {
+      return bannerMatch[1]
+    }
+
+    const fallbackMatch = line.match(/started HTTP server on ([^\s]+)/)
+    if (fallbackMatch?.[1]) {
+      return `http://${fallbackMatch[1]}`
+    }
+  }
+
+  return null
 }
 
 function wantsContainerlessRuntime(envValues) {
@@ -678,8 +779,7 @@ function getServerRuntimeTarget() {
   if (process.env.ROACHNET_USE_SOURCE === '1') {
     return {
       cwd: adminDir,
-      entrypoint: 'ace.js',
-      args: ['serve', '--assets=false'],
+      entrypoint: path.join(adminDir, 'bin', 'server.ts'),
       kind: 'source',
     }
   }
@@ -702,8 +802,7 @@ function getServerRuntimeTarget() {
 
   return {
     cwd: adminDir,
-    entrypoint: 'ace.js',
-    args: ['serve', '--assets=false'],
+    entrypoint: path.join(adminDir, 'bin', 'server.ts'),
     kind: 'source',
   }
 }
@@ -780,6 +879,8 @@ async function listManagedRuntimeProcesses() {
     /roachnet-runtime-cache\/.+\/bin\/(?:server|worker)\.js/,
     new RegExp(`${escapedBuildDir}/bin/(?:server|worker)\\.js`),
     new RegExp(`${escapedRepoRoot}/admin/ace\\.js\\s+(?:serve|queue:listen)`),
+    new RegExp(`${escapedRepoRoot}/admin/bin/(?:server|worker)\\.ts`),
+    new RegExp(`${escapedRepoRoot}/scripts/roachnet-companion-server\\.mjs`),
   ]
 
   let output = ''
@@ -1156,6 +1257,7 @@ async function stopManagedRuntime(envValues) {
     trackedInfo?.workerPid,
     trackedInfo?.ollamaPid,
     trackedInfo?.openclawPid,
+    trackedInfo?.companionPid,
   ])
 
   if (!existsSync(managementComposePath)) {
@@ -1447,7 +1549,16 @@ function terminateDetachedChild(child) {
   }
 }
 
-function recordDetachedRuntimeChildren({ target, serverHandle, workerHandle, ollamaHandle, openclawHandle }) {
+function recordDetachedRuntimeChildren({
+  target,
+  serverHandle,
+  workerHandle,
+  ollamaHandle,
+  openclawHandle,
+  companionHandle,
+  companionUrl = null,
+  companionAdvertisedUrl = null,
+}) {
   writeRuntimeProcessInfo({
     targetKind: target.kind,
     targetEntrypoint: target.entrypoint,
@@ -1455,6 +1566,9 @@ function recordDetachedRuntimeChildren({ target, serverHandle, workerHandle, oll
     workerPid: workerHandle?.child?.pid ?? null,
     ollamaPid: ollamaHandle?.child?.pid ?? null,
     openclawPid: openclawHandle?.child?.pid ?? null,
+    companionPid: companionHandle?.child?.pid ?? null,
+    companionUrl,
+    companionAdvertisedUrl,
     writtenAt: new Date().toISOString(),
   })
 }
@@ -1557,6 +1671,96 @@ async function maybeSpawnOpenClawGateway({ runtimeEnvValues, logFd }) {
   }
 
   return null
+}
+
+async function maybeSpawnCompanionServer({
+  nodeBinary,
+  runtimeEnvValues,
+  targetUrl,
+  logFd,
+}) {
+  if (!wantsCompanionRuntime(runtimeEnvValues)) {
+    return {
+      handle: null,
+      localUrl: null,
+      advertisedUrl: null,
+    }
+  }
+
+  const companionEntrypoint = path.join(repoRoot, 'scripts', 'roachnet-companion-server.mjs')
+  if (!existsSync(companionEntrypoint)) {
+    console.warn('RoachNet companion server entrypoint is missing. Skipping companion boot.')
+    return {
+      handle: null,
+      localUrl: null,
+      advertisedUrl: null,
+    }
+  }
+
+  const token = runtimeEnvValues.ROACHNET_COMPANION_TOKEN?.trim()
+  if (!token) {
+    console.warn('RoachNet companion mode was requested without a companion token. Skipping companion boot.')
+    return {
+      handle: null,
+      localUrl: null,
+      advertisedUrl: null,
+    }
+  }
+
+  const localUrl = getCompanionLocalUrl(runtimeEnvValues)
+  const advertisedUrl = getCompanionAdvertisedUrl(runtimeEnvValues)
+  const targetOrigin = new URL('/', targetUrl).toString()
+  const companionEnv = {
+    ...process.env,
+    ...runtimeEnvValues,
+    ROACHNET_COMPANION_ENABLED: '1',
+    ROACHNET_COMPANION_HOST: getCompanionListenHost(runtimeEnvValues),
+    ROACHNET_COMPANION_PORT: getCompanionPort(runtimeEnvValues),
+    ROACHNET_COMPANION_TOKEN: token,
+    ROACHNET_COMPANION_ADVERTISED_URL: runtimeEnvValues.ROACHNET_COMPANION_ADVERTISED_URL?.trim() || '',
+    ROACHNET_COMPANION_TARGET_URL: targetOrigin,
+  }
+
+  debugBoot('launch-server:spawn-companion', {
+    companionEntrypoint,
+    localUrl,
+    advertisedUrl,
+    targetOrigin,
+  })
+
+  const handle = spawnDetachedNodeProcess({
+    nodeBinary,
+    runtimeKind: 'build',
+    entrypoint: companionEntrypoint,
+    cwd: repoRoot,
+    env: companionEnv,
+    logFd,
+  })
+
+  if (localUrl) {
+    const ready = await waitForHttpEndpoint(
+      new URL('/health', localUrl).toString(),
+      15_000
+    )
+
+    if (!ready) {
+      console.warn(`RoachNet companion did not answer on ${localUrl} before the local timeout.`)
+    }
+  }
+
+  return {
+    handle,
+    localUrl,
+    advertisedUrl,
+  }
+}
+
+function resolveCompanionTargetUrl({ resolvedTarget, healthyUrl }) {
+  if (resolvedTarget.kind !== 'source') {
+    return healthyUrl
+  }
+
+  return readLatestSourceServerUrl() || healthyUrl
 }
 
 async function maybeSpawnContainedOllama({ runtimeEnvValues, logFd }) {
@@ -1714,16 +1918,28 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
       : resolvedTarget.cwd
 
   if (resolvedTarget.kind === 'build') {
-    await ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues)
+    try {
+      await ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues)
+    } catch (error) {
+      if (!serverHandle.hasExited()) {
+        terminateDetachedChild(serverHandle.child)
+      }
+
+      clearRuntimeProcessInfo()
+      throw error
+    }
   }
 
   const workerEntrypoint =
     resolvedTarget.kind === 'build'
       ? path.join(runtimeRoot, 'bin', 'worker.js')
-      : path.join(runtimeRoot, 'bin', 'worker.entry.js')
+      : path.join(runtimeRoot, 'bin', 'worker.ts')
   let workerHandle = null
   let ollamaHandle = null
   let openclawHandle = null
+  let companionHandle = null
+  let companionUrl = null
+  let companionAdvertisedUrl = null
 
   if (existsSync(workerEntrypoint)) {
     if (runtimeEnvValues.ROACHNET_DISABLE_QUEUE === '1') {
@@ -1772,14 +1988,6 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     logFd: serverLogFd,
   })
 
-  recordDetachedRuntimeChildren({
-    target: resolvedTarget,
-    serverHandle,
-    workerHandle,
-    ollamaHandle,
-    openclawHandle,
-  })
-
   const healthyUrl = await waitForHealth(healthUrls, timeoutMs)
   debugBoot('launch-server:health-result', {
     resolvedKind: resolvedTarget.kind,
@@ -1788,10 +1996,38 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     workerExited: workerHandle?.hasExited() ?? null,
   })
   if (healthyUrl) {
+    const companionTargetUrl = resolveCompanionTargetUrl({
+      resolvedTarget,
+      healthyUrl,
+    })
+    const companion = await maybeSpawnCompanionServer({
+      nodeBinary,
+      runtimeEnvValues,
+      targetUrl: companionTargetUrl,
+      logFd: serverLogFd,
+    })
+    companionHandle = companion.handle
+    companionUrl = companion.localUrl
+    companionAdvertisedUrl = companion.advertisedUrl
+
+    recordDetachedRuntimeChildren({
+      target: resolvedTarget,
+      serverHandle,
+      workerHandle,
+      ollamaHandle,
+      openclawHandle,
+      companionHandle,
+      companionUrl,
+      companionAdvertisedUrl,
+    })
+
     return {
       child: serverHandle.child,
       childExited: serverHandle.hasExited(),
       worker: workerHandle?.child ?? null,
+      companion: companionHandle?.child ?? null,
+      companionUrl,
+      companionAdvertisedUrl,
       healthyUrl,
       target: resolvedTarget,
     }
@@ -1811,6 +2047,10 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
 
   if (openclawHandle && !openclawHandle.hasExited()) {
     terminateDetachedChild(openclawHandle.child)
+  }
+
+  if (companionHandle && !companionHandle.hasExited()) {
+    terminateDetachedChild(companionHandle.child)
   }
 
   clearRuntimeProcessInfo()
@@ -1861,10 +2101,13 @@ async function main() {
 
   if (alreadyRunningUrl) {
     const runningHomeUrl = new URL(requestedOpenPath, alreadyRunningUrl)
+    const runtimeEnvValues = getRuntimeEnvValues(envValues)
     writeServerInfo({
       pid: null,
       healthUrl: alreadyRunningUrl.toString(),
       webUrl: runningHomeUrl.toString(),
+      companionUrl: getCompanionLocalUrl(runtimeEnvValues),
+      companionAdvertisedUrl: getCompanionAdvertisedUrl(runtimeEnvValues),
       target: 'existing',
       repoRoot,
     })
@@ -1881,6 +2124,7 @@ async function main() {
     trackedInfo?.workerPid,
     trackedInfo?.ollamaPid,
     trackedInfo?.openclawPid,
+    trackedInfo?.companionPid,
   ])
   clearRuntimeProcessInfo()
 
@@ -1923,8 +2167,7 @@ async function main() {
     launchResult = await launchServer(
       {
         cwd: adminDir,
-        entrypoint: 'ace.js',
-        args: ['serve', '--assets=false'],
+        entrypoint: path.join(adminDir, 'bin', 'server.ts'),
         kind: 'source',
       },
       envValues,
@@ -1947,6 +2190,8 @@ async function main() {
     pid: launchResult.child?.pid ?? null,
     healthUrl: launchResult.healthyUrl.toString(),
     webUrl: homeUrl.toString(),
+    companionUrl: launchResult.companionUrl ?? null,
+    companionAdvertisedUrl: launchResult.companionAdvertisedUrl ?? null,
     target: launchResult.target.kind,
     repoRoot,
     logPath: serverLogPath,

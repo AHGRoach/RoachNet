@@ -212,6 +212,8 @@ public struct ManagedAppServerInfo: Decodable, Sendable {
     public let pid: Int32?
     public let healthUrl: String
     public let webUrl: String?
+    public let companionUrl: String?
+    public let companionAdvertisedUrl: String?
     public let target: String?
     public let repoRoot: String?
     public let logPath: String?
@@ -305,6 +307,15 @@ public actor ManagedAppRuntimeBridge {
         environment["ROACHNET_CONTAINERLESS_MODE"] = normalizedContainerlessMode
         environment["ROACHNET_DISABLE_QUEUE"] = normalizedContainerlessMode == "1" ? "1" : "0"
         environment["ROACHNET_ROACHCLAW_DEFAULT_MODEL"] = config.roachClawDefaultModel
+        environment["ROACHNET_COMPANION_ENABLED"] = config.companionEnabled ? "1" : "0"
+        environment["ROACHNET_COMPANION_HOST"] = config.companionHost
+        environment["ROACHNET_COMPANION_PORT"] = String(config.companionPort)
+        environment["ROACHNET_COMPANION_TOKEN"] = config.companionToken
+        if config.companionAdvertisedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            environment.removeValue(forKey: "ROACHNET_COMPANION_ADVERTISED_URL")
+        } else {
+            environment["ROACHNET_COMPANION_ADVERTISED_URL"] = config.companionAdvertisedURL
+        }
         environment["PATH"] = [
             normalizedLocalBinPath,
             normalizedNodeBinDirectory,
@@ -739,6 +750,15 @@ public actor ManagedAppRuntimeBridge {
         environment["OPENCLAW_BASE_URL"] = "http://127.0.0.1:13001"
         environment["ROACHNET_CONTAINERLESS_MODE"] = normalizedContainerlessMode
         environment["ROACHNET_DISABLE_QUEUE"] = normalizedContainerlessMode == "1" ? "1" : "0"
+        environment["ROACHNET_COMPANION_ENABLED"] = config.companionEnabled ? "1" : "0"
+        environment["ROACHNET_COMPANION_HOST"] = config.companionHost
+        environment["ROACHNET_COMPANION_PORT"] = String(config.companionPort)
+        environment["ROACHNET_COMPANION_TOKEN"] = config.companionToken
+        if config.companionAdvertisedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            environment.removeValue(forKey: "ROACHNET_COMPANION_ADVERTISED_URL")
+        } else {
+            environment["ROACHNET_COMPANION_ADVERTISED_URL"] = config.companionAdvertisedURL
+        }
         environment["PATH"] = [
             normalizedLocalBinPath,
             normalizedNodeBinDirectory,

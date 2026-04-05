@@ -230,7 +230,7 @@ export class OllamaService {
   }
 
   private async getConfigFingerprint(): Promise<string> {
-    const settingUrl = (await KVStore.getValue('ai.ollamaBaseUrl'))?.trim()
+    const settingUrl = await this.readConfiguredOllamaBaseUrl()
     const configuredUrl = env.get('OLLAMA_BASE_URL')?.trim()
     const preferredUrl =
       process.env.ROACHNET_NATIVE_ONLY === '1'
@@ -758,7 +758,7 @@ export class OllamaService {
   }
 
   private async getPrimaryRuntimeCandidates(): Promise<Array<{ baseUrl: string; source: AIRuntimeSource }>> {
-    const settingUrl = (await KVStore.getValue('ai.ollamaBaseUrl'))?.trim()
+    const settingUrl = await this.readConfiguredOllamaBaseUrl()
     const configuredUrl = env.get('OLLAMA_BASE_URL')?.trim()
     const candidates: Array<{ baseUrl: string; source: AIRuntimeSource }> = []
     const seen = new Set<string>()
@@ -787,6 +787,19 @@ export class OllamaService {
     addCandidate(DEFAULT_OLLAMA_BASE_URL, 'local')
 
     return candidates
+  }
+
+  private async readConfiguredOllamaBaseUrl(): Promise<string | undefined> {
+    try {
+      return (await KVStore.getValue('ai.ollamaBaseUrl'))?.trim()
+    } catch (error) {
+      logger.warn(
+        `[OllamaService] Falling back to env/default Ollama host after settings lookup failed: ${
+          error instanceof Error ? error.message : error
+        }`
+      )
+      return undefined
+    }
   }
 
   private async getDockerRuntimeCandidate(): Promise<{ baseUrl: string; source: AIRuntimeSource } | null> {
