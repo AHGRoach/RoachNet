@@ -65,9 +65,20 @@ public enum RoachNetDeveloperPaths {
             .path
     }
 
+    public static func roachBrainRoot(storagePath: String) -> String {
+        URL(fileURLWithPath: workspaceRoot(storagePath: storagePath))
+            .appendingPathComponent("roachbrain", isDirectory: true)
+            .path
+    }
+
     public static func secretsCatalogURL(storagePath: String) -> URL {
         URL(fileURLWithPath: stateRoot(storagePath: storagePath))
             .appendingPathComponent("manifest.json")
+    }
+
+    public static func roachBrainCatalogURL(storagePath: String) -> URL {
+        URL(fileURLWithPath: roachBrainRoot(storagePath: storagePath))
+            .appendingPathComponent("memories.json")
     }
 
     public static func ensureWorkspaceDirectories(storagePath: String) throws {
@@ -78,6 +89,10 @@ public enum RoachNetDeveloperPaths {
         )
         try fileManager.createDirectory(
             at: secretsCatalogURL(storagePath: storagePath).deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: roachBrainCatalogURL(storagePath: storagePath).deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
     }

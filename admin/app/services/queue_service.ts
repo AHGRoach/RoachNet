@@ -98,23 +98,24 @@ class InMemoryQueue {
 }
 
 export class QueueService {
-  private queues: Map<string, any> = new Map()
+  private static queues: Map<string, any> = new Map()
 
   getQueue(name: string): any {
-    if (!this.queues.has(name)) {
+    if (!QueueService.queues.has(name)) {
       const queue = queueConfig.disabled
         ? new InMemoryQueue(name)
         : new Queue(name, {
             connection: queueConfig.connection!,
           })
-      this.queues.set(name, queue)
+      QueueService.queues.set(name, queue)
     }
-    return this.queues.get(name)!
+    return QueueService.queues.get(name)!
   }
 
   async close() {
-    for (const queue of this.queues.values()) {
+    for (const queue of QueueService.queues.values()) {
       await queue.close()
     }
+    QueueService.queues.clear()
   }
 }

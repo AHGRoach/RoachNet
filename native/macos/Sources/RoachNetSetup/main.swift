@@ -26,21 +26,21 @@ enum SetupStage: Int, CaseIterable, Identifiable {
 
     var headline: String {
         switch self {
-        case .welcome: return "Get RoachNet ready."
-        case .machine: return "Check this Mac."
-        case .runtime: return "Prepare the local runtime."
-        case .roachClaw: return "Set up local AI."
-        case .finish: return "Open RoachNet."
+        case .welcome: return "Start the install."
+        case .machine: return "Pick the machine lane."
+        case .runtime: return "Stage the local runtime."
+        case .roachClaw: return "Set the first AI lane."
+        case .finish: return "Launch the real shell."
         }
     }
 
     var detail: String {
         switch self {
-        case .welcome: return "RoachNet handles setup first, so the app can open clean."
-        case .machine: return "We’ll see what’s already installed and what still needs a hand."
-        case .runtime: return "RoachNet keeps the local services contained and close to the app."
-        case .roachClaw: return "Ollama and OpenClaw start from one sane local default."
-        case .finish: return "You’re ready to move into the command deck."
+        case .welcome: return "RoachNet stages the install, runtime, and first content lanes before it hands you into the shell."
+        case .machine: return "Choose where the app and content live, then let setup work from that contained root."
+        case .runtime: return "The runtime stays grouped with RoachNet instead of leaving a trail across the machine."
+        case .roachClaw: return "Contained Ollama and OpenClaw start from a default tuned for this Mac."
+        case .finish: return "The machine is staged. Open Home and keep moving."
         }
     }
 }
@@ -164,6 +164,11 @@ final class SetupController: ObservableObject {
     }
 
     func startRuntimeAction() async {
+        guard config.useDockerContainerization else {
+            statusLine = "Docker containerization is off for this install."
+            return
+        }
+
         guard !isBusy else { return }
         isBusy = true
         errorLine = nil
@@ -650,6 +655,7 @@ private struct SetupRootView: View {
                 .padding(.bottom, 18)
             }
         }
+        .animation(.spring(response: 0.34, dampingFraction: 0.88), value: controller.stage)
     }
 
     private func chromeBar(width: CGFloat) -> some View {
@@ -716,7 +722,7 @@ private struct SetupRootView: View {
                     Text("RoachNet Setup")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(RoachPalette.text)
-                    Text("A calmer way to get set up")
+                    Text("Contained install for this Mac")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(RoachPalette.muted)
                 }
@@ -730,7 +736,7 @@ private struct SetupRootView: View {
                     Text("RoachNet Setup")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(RoachPalette.text)
-                    Text("A calmer way to get set up")
+                    Text("Contained install for this Mac")
                         .font(.system(size: 12, weight: .regular))
                         .foregroundStyle(RoachPalette.muted)
                 }
@@ -741,7 +747,7 @@ private struct SetupRootView: View {
     private var progressHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Install Flow")
+                Text("Setup Flow")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .tracking(1.4)
                     .foregroundStyle(RoachPalette.muted)
@@ -766,20 +772,14 @@ private struct SetupRootView: View {
 
                 Spacer(minLength: 0)
 
-                if controller.stage == .welcome || controller.stage == .finish {
-                    RoachOrbitMark()
-                        .frame(width: 108, height: 108)
-                }
+                stageHeroGlyph
             }
 
             VStack(alignment: .leading, spacing: 18) {
                 stageHeroCopy
 
-                if controller.stage == .welcome || controller.stage == .finish {
-                    RoachOrbitMark()
-                        .frame(width: 92, height: 92)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                stageHeroGlyph
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -790,9 +790,27 @@ private struct SetupRootView: View {
         case .welcome:
             VStack(alignment: .leading, spacing: 18) {
                 LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                    welcomeCard(title: "Check this Mac", detail: "RoachNet checks what is already present and only pulls in what this install still needs.")
-                    welcomeCard(title: "Stage the runtime", detail: "The setup flow handles the local runtime and container services instead of expecting a prepped machine.")
-                    welcomeCard(title: "Open RoachNet", detail: "Move straight into the app when setup, storage, and the first local lanes are aligned.")
+                    RoachFeatureTile(
+                        "Machine",
+                        title: "Check this Mac",
+                        detail: "RoachNet checks what is present and only stages what this install still needs.",
+                        systemName: "desktopcomputer",
+                        accent: RoachPalette.green
+                    )
+                    RoachFeatureTile(
+                        "Runtime",
+                        title: "Stage the local stack",
+                        detail: "The setup flow handles the runtime and contained services instead of assuming a prepped machine.",
+                        systemName: "server.rack",
+                        accent: RoachPalette.magenta
+                    )
+                    RoachFeatureTile(
+                        "Launch",
+                        title: "Open RoachNet",
+                        detail: "Move straight into the real shell once storage, runtime, and the first AI lane are aligned.",
+                        systemName: "sparkles",
+                        accent: RoachPalette.cyan
+                    )
                 }
             }
 
@@ -832,6 +850,7 @@ private struct SetupRootView: View {
         case .runtime:
             VStack(alignment: .leading, spacing: 14) {
                 LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
+                    RoachInfoPill(title: "Runtime Mode", value: runtimeModeValue)
                     RoachInfoPill(title: "Container Runtime", value: runtimeValue)
                     RoachInfoPill(title: "Services", value: servicesValue)
                     RoachInfoPill(
@@ -842,8 +861,24 @@ private struct SetupRootView: View {
                     )
                 }
 
-                SetupNativeButton(title: "Start Runtime Now", role: .secondary, isEnabled: !controller.isBusy) {
-                    Task { await controller.startRuntimeAction() }
+                RoachInsetPanel {
+                    Toggle(isOn: $controller.config.useDockerContainerization) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Use Docker containerization")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(RoachPalette.text)
+                            Text("Leave this off for the fully-contained Apple Silicon lane. Turn it on only if you want Docker-backed support services.")
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundStyle(RoachPalette.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+
+                if controller.config.useDockerContainerization {
+                    SetupNativeButton(title: "Start Runtime Now", role: .secondary, isEnabled: !controller.isBusy) {
+                        Task { await controller.startRuntimeAction() }
+                    }
                 }
             }
 
@@ -999,6 +1034,9 @@ private struct SetupRootView: View {
     }
 
     private var runtimeValue: String {
+        if !controller.config.useDockerContainerization {
+            return "Not selected"
+        }
         if controller.setupState?.containerRuntime.detectionPending == true {
             return "Checking"
         }
@@ -1009,6 +1047,10 @@ private struct SetupRootView: View {
             return "Detected"
         }
         return "Needs Setup"
+    }
+
+    private var runtimeModeValue: String {
+        controller.config.useDockerContainerization ? "Docker" : "Contained Local"
     }
 
     private var servicesValue: String {
@@ -1037,6 +1079,55 @@ private struct SetupRootView: View {
                 .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(RoachPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var stageHeroGlyph: some View {
+        if controller.stage == .welcome || controller.stage == .finish {
+            RoachOrbitMark()
+                .frame(width: 104, height: 104)
+        } else {
+            Image(systemName: stageSystemImage)
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(stageAccent)
+                .frame(width: 96, height: 96)
+                .background(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .fill(stageAccent.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .stroke(stageAccent.opacity(0.18), lineWidth: 1)
+                )
+        }
+    }
+
+    private var stageSystemImage: String {
+        switch controller.stage {
+        case .welcome:
+            return "sparkles"
+        case .machine:
+            return "shippingbox.fill"
+        case .runtime:
+            return "server.rack"
+        case .roachClaw:
+            return "brain.head.profile"
+        case .finish:
+            return "checkmark.circle.fill"
+        }
+    }
+
+    private var stageAccent: Color {
+        switch controller.stage {
+        case .welcome, .finish:
+            return RoachPalette.magenta
+        case .machine:
+            return RoachPalette.bronze
+        case .runtime:
+            return RoachPalette.green
+        case .roachClaw:
+            return RoachPalette.cyan
         }
     }
 

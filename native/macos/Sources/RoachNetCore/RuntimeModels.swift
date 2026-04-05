@@ -4,6 +4,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
     public var installPath: String
     public var installedAppPath: String
     public var storagePath: String
+    public var useDockerContainerization: Bool
     public var installRoachClaw: Bool
     public var roachClawDefaultModel: String
     public var distributedInferenceBackend: String
@@ -20,6 +21,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         installPath: String,
         installedAppPath: String,
         storagePath: String? = nil,
+        useDockerContainerization: Bool = false,
         installRoachClaw: Bool = true,
         roachClawDefaultModel: String = "qwen2.5-coder:1.5b",
         distributedInferenceBackend: String = "disabled",
@@ -35,6 +37,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         self.installPath = installPath
         self.installedAppPath = installedAppPath
         self.storagePath = storagePath ?? RoachNetRepositoryLocator.defaultStoragePath(installPath: installPath)
+        self.useDockerContainerization = useDockerContainerization
         self.installRoachClaw = installRoachClaw
         self.roachClawDefaultModel = roachClawDefaultModel
         self.distributedInferenceBackend = distributedInferenceBackend
@@ -52,6 +55,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         case installPath
         case installedAppPath
         case storagePath
+        case useDockerContainerization
         case installRoachClaw
         case roachClawDefaultModel
         case distributedInferenceBackend
@@ -85,6 +89,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
             installPath: installPath,
             installedAppPath: installedAppPath,
             storagePath: storagePath,
+            useDockerContainerization: try container.decodeIfPresent(Bool.self, forKey: .useDockerContainerization) ?? false,
             installRoachClaw: try container.decodeIfPresent(Bool.self, forKey: .installRoachClaw) ?? true,
             roachClawDefaultModel: try container.decodeIfPresent(String.self, forKey: .roachClawDefaultModel) ?? "qwen2.5-coder:1.5b",
             distributedInferenceBackend: try container.decodeIfPresent(String.self, forKey: .distributedInferenceBackend) ?? "disabled",
@@ -104,6 +109,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable {
         try container.encode(installPath, forKey: .installPath)
         try container.encode(installedAppPath, forKey: .installedAppPath)
         try container.encode(storagePath, forKey: .storagePath)
+        try container.encode(useDockerContainerization, forKey: .useDockerContainerization)
         try container.encode(installRoachClaw, forKey: .installRoachClaw)
         try container.encode(roachClawDefaultModel, forKey: .roachClawDefaultModel)
         try container.encode(distributedInferenceBackend, forKey: .distributedInferenceBackend)
@@ -346,6 +352,27 @@ public enum RoachNetRepositoryLocator {
             .path
     }
 
+    public static func defaultLocalBinPath(installPath: String? = nil) -> String {
+        let root = installPath ?? defaultInstallPath()
+        return URL(fileURLWithPath: root)
+            .appendingPathComponent("bin", isDirectory: true)
+            .path
+    }
+
+    public static func defaultOpenClawWorkspacePath(storagePath: String? = nil, installPath: String? = nil) -> String {
+        let root = storagePath ?? defaultStoragePath(installPath: installPath)
+        return URL(fileURLWithPath: root)
+            .appendingPathComponent("openclaw", isDirectory: true)
+            .path
+    }
+
+    public static func defaultOllamaModelsPath(storagePath: String? = nil, installPath: String? = nil) -> String {
+        let root = storagePath ?? defaultStoragePath(installPath: installPath)
+        return URL(fileURLWithPath: root)
+            .appendingPathComponent("ollama", isDirectory: true)
+            .path
+    }
+
     public static func defaultRuntimeStatePath() -> String {
         if
             let override = ProcessInfo.processInfo.environment["ROACHNET_RUNTIME_STATE_ROOT"],
@@ -384,7 +411,10 @@ public enum RoachNetRepositoryLocator {
         let existingSegments = (ProcessInfo.processInfo.environment["PATH"] ?? "")
             .split(separator: Character(pathSeparator))
             .map(String.init)
+        let configuredInstallPath = readConfig().installPath
         let preferredSegments = [
+            ProcessInfo.processInfo.environment["ROACHNET_LOCAL_BIN_PATH"],
+            defaultLocalBinPath(installPath: configuredInstallPath),
             embeddedNodeBinDirectory(),
             "/opt/homebrew/opt/node@22/bin",
             "/opt/homebrew/bin",

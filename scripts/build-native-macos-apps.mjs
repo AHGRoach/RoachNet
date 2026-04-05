@@ -165,11 +165,14 @@ async function verifyNodeRuntimeRoot(runtimeRoot) {
   }
 
   try {
-    await run(binaryPath, ['--version'], {
+    const { stdout } = await run(binaryPath, ['--version'], {
       stdio: 'pipe',
       timeoutMs: 4_000,
     })
-    return true
+    const resolvedVersion = stdout.trim()
+    const expectedMajor = bundledNodeVersion.replace(/^v/, '').split('.')[0]
+    const actualMajor = resolvedVersion.replace(/^v/, '').split('.')[0]
+    return actualMajor === expectedMajor
   } catch {
     return false
   }
@@ -185,8 +188,8 @@ async function ensureBundledNodeRuntime() {
   const bundledNodeBinary = path.join(extractedPath, 'bin', 'node')
   const candidateRoots = [
     process.env.ROACHNET_BUNDLED_NODE_ROOT?.trim(),
-    resolveNodeRuntimeRoot(process.execPath),
     resolveNodeRuntimeRoot(getPreferredNodeBinary()),
+    resolveNodeRuntimeRoot(process.execPath),
     existsSync(bundledNodeBinary) ? extractedPath : null,
   ].filter(Boolean)
 

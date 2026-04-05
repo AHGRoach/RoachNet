@@ -280,14 +280,38 @@ public actor ManagedAppRuntimeBridge {
         let normalizedStoragePath = config.storagePath.isEmpty
             ? RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath)
             : config.storagePath
+        let normalizedInstallPath = config.installPath.isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
         let normalizedWorkspacePath = defaultWorkspacePath(from: config)
+        let normalizedLocalBinPath = RoachNetRepositoryLocator.defaultLocalBinPath(installPath: normalizedInstallPath)
+        let normalizedOllamaModelsPath = RoachNetRepositoryLocator.defaultOllamaModelsPath(storagePath: normalizedStoragePath)
+        let normalizedContainerlessMode = config.useDockerContainerization ? "0" : "1"
+        let normalizedNodeBinary = RoachNetRepositoryLocator.preferredNodeBinary()
+        let normalizedNodeBinDirectory = normalizedNodeBinary == "/usr/bin/env"
+            ? nil
+            : URL(fileURLWithPath: normalizedNodeBinary).deletingLastPathComponent().path
         environment["ROACHNET_NO_BROWSER"] = "1"
         environment["ROACHNET_SERVER_INFO_FILE"] = infoURL.path
         environment["ROACHNET_REPO_ROOT"] = repoRoot.path
         environment["ROACHNET_RUNTIME_STATE_ROOT"] = RoachNetRepositoryLocator.defaultRuntimeStatePath()
+        environment["ROACHNET_LOCAL_BIN_PATH"] = normalizedLocalBinPath
+        environment["ROACHNET_NODE_BINARY"] = normalizedNodeBinary
         environment["NOMAD_STORAGE_PATH"] = normalizedStoragePath
         environment["OPENCLAW_WORKSPACE_PATH"] = normalizedWorkspacePath
+        environment["OLLAMA_MODELS"] = normalizedOllamaModelsPath
+        environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:36434"
+        environment["OPENCLAW_BASE_URL"] = "http://127.0.0.1:13001"
+        environment["ROACHNET_CONTAINERLESS_MODE"] = normalizedContainerlessMode
+        environment["ROACHNET_DISABLE_QUEUE"] = normalizedContainerlessMode == "1" ? "1" : "0"
         environment["ROACHNET_ROACHCLAW_DEFAULT_MODEL"] = config.roachClawDefaultModel
+        environment["PATH"] = [
+            normalizedLocalBinPath,
+            normalizedNodeBinDirectory,
+            environment["PATH"],
+        ]
+        .compactMap { $0 }
+        .joined(separator: ":")
         process.environment = environment
 
         try process.run()
@@ -548,6 +572,44 @@ public actor ManagedAppRuntimeBridge {
         return response.message ?? "Education course queued."
     }
 
+    public func downloadRemoteZim(
+        using config: RoachNetInstallerConfig,
+        url: String
+    ) async throws -> String {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let url: String
+        }
+
+        let response: ActionResponse = try await post(
+            "/api/zim/download-remote",
+            baseURL: baseURL,
+            body: Payload(url: url)
+        )
+        return response.message ?? "Knowledge pack queued."
+    }
+
+    public func downloadRemoteMap(
+        using config: RoachNetInstallerConfig,
+        url: String
+    ) async throws -> String {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let url: String
+        }
+
+        let response: ActionResponse = try await post(
+            "/api/maps/download-remote",
+            baseURL: baseURL,
+            body: Payload(url: url)
+        )
+        return response.message ?? "Map pack queued."
+    }
+
     public func selectWikipedia(
         using config: RoachNetInstallerConfig,
         optionId: String
@@ -654,12 +716,36 @@ public actor ManagedAppRuntimeBridge {
         let normalizedStoragePath = config.storagePath.isEmpty
             ? RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath)
             : config.storagePath
+        let normalizedInstallPath = config.installPath.isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
         let normalizedWorkspacePath = defaultWorkspacePath(from: config)
+        let normalizedLocalBinPath = RoachNetRepositoryLocator.defaultLocalBinPath(installPath: normalizedInstallPath)
+        let normalizedOllamaModelsPath = RoachNetRepositoryLocator.defaultOllamaModelsPath(storagePath: normalizedStoragePath)
+        let normalizedContainerlessMode = config.useDockerContainerization ? "0" : "1"
+        let normalizedNodeBinary = RoachNetRepositoryLocator.preferredNodeBinary()
+        let normalizedNodeBinDirectory = normalizedNodeBinary == "/usr/bin/env"
+            ? nil
+            : URL(fileURLWithPath: normalizedNodeBinary).deletingLastPathComponent().path
         environment["ROACHNET_NO_BROWSER"] = "1"
         environment["ROACHNET_REPO_ROOT"] = repoRoot.path
         environment["ROACHNET_RUNTIME_STATE_ROOT"] = RoachNetRepositoryLocator.defaultRuntimeStatePath()
+        environment["ROACHNET_LOCAL_BIN_PATH"] = normalizedLocalBinPath
+        environment["ROACHNET_NODE_BINARY"] = normalizedNodeBinary
         environment["NOMAD_STORAGE_PATH"] = normalizedStoragePath
         environment["OPENCLAW_WORKSPACE_PATH"] = normalizedWorkspacePath
+        environment["OLLAMA_MODELS"] = normalizedOllamaModelsPath
+        environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:36434"
+        environment["OPENCLAW_BASE_URL"] = "http://127.0.0.1:13001"
+        environment["ROACHNET_CONTAINERLESS_MODE"] = normalizedContainerlessMode
+        environment["ROACHNET_DISABLE_QUEUE"] = normalizedContainerlessMode == "1" ? "1" : "0"
+        environment["PATH"] = [
+            normalizedLocalBinPath,
+            normalizedNodeBinDirectory,
+            environment["PATH"],
+        ]
+        .compactMap { $0 }
+        .joined(separator: ":")
         stopProcess.environment = environment
 
         do {
@@ -716,9 +802,7 @@ public actor ManagedAppRuntimeBridge {
             ? RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath)
             : config.storagePath
 
-        return URL(fileURLWithPath: storageRoot)
-            .appendingPathComponent("openclaw")
-            .path
+        return RoachNetRepositoryLocator.defaultOpenClawWorkspacePath(storagePath: storageRoot)
     }
 
     private func isHealthy(_ healthURLString: String) async throws -> Bool {

@@ -194,6 +194,84 @@ public struct RoachPanel<Content: View>: View {
     }
 }
 
+public struct RoachSpotlightPanel<Content: View>: View {
+    private let accent: Color
+    private let content: Content
+    @State private var breathe = false
+
+    public init(accent: Color = RoachPalette.magenta, @ViewBuilder content: () -> Content) {
+        self.accent = accent
+        self.content = content()
+    }
+
+    public var body: some View {
+        content
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    RoachPalette.panelRaised.opacity(0.94),
+                                    RoachPalette.panel.opacity(0.88),
+                                    Color.black.opacity(0.32),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    Circle()
+                        .fill(accent.opacity(0.16))
+                        .frame(width: 240, height: 240)
+                        .blur(radius: 72)
+                        .offset(x: breathe ? -20 : -64, y: breathe ? -18 : -54)
+
+                    Circle()
+                        .fill(RoachPalette.green.opacity(0.08))
+                        .frame(width: 180, height: 180)
+                        .blur(radius: 66)
+                        .offset(x: breathe ? 220 : 180, y: breathe ? -12 : 24)
+
+                    LinearGradient(
+                        colors: [
+                            accent.opacity(0.42),
+                            accent.opacity(0.08),
+                            Color.clear,
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(height: 3)
+                    .padding(.top, 1)
+                }
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                accent.opacity(0.30),
+                                Color.white.opacity(0.08),
+                                RoachPalette.green.opacity(0.16),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: accent.opacity(0.10), radius: 28, x: 0, y: 16)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 6.5).repeatForever(autoreverses: true)) {
+                    breathe = true
+                }
+            }
+    }
+}
+
 public struct RoachKicker: View {
     private let text: String
 
@@ -636,6 +714,83 @@ public struct RoachSectionHeader: View {
                     .lineSpacing(2)
             }
         }
+    }
+}
+
+public struct RoachFeatureTile: View {
+    private let label: String
+    private let title: String
+    private let detail: String
+    private let systemName: String
+    private let accent: Color
+
+    public init(
+        _ label: String,
+        title: String,
+        detail: String,
+        systemName: String,
+        accent: Color = RoachPalette.green
+    ) {
+        self.label = label
+        self.title = title
+        self.detail = detail
+        self.systemName = systemName
+        self.accent = accent
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                Image(systemName: systemName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(accent)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(accent.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(accent.opacity(0.16), lineWidth: 1)
+                    )
+
+                Spacer(minLength: 10)
+
+                Text(label.uppercased())
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(1.1)
+                    .foregroundStyle(RoachPalette.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(RoachPalette.text)
+                Text(detail)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(RoachPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            RoachPalette.panelRaised.opacity(0.72),
+                            RoachPalette.panel.opacity(0.62),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(accent.opacity(0.16), lineWidth: 1)
+        )
     }
 }
 

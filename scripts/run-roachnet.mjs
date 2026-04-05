@@ -117,9 +117,25 @@ function getRequestedOpenPath() {
   return requestedPath.startsWith('/') ? requestedPath : `/${requestedPath}`
 }
 
+function getLocalBinRoot() {
+  return process.env.ROACHNET_LOCAL_BIN_PATH?.trim() || path.join(repoRoot, 'bin')
+}
+
+function getLocalToolBinaryPath(toolName) {
+  return path.join(getLocalBinRoot(), process.platform === 'win32' ? `${toolName}.cmd` : toolName)
+}
+
 function getPreferredNpmBinary() {
+  const nodeBinary = getPreferredNodeBinary()
+  const localNodeNpm = nodeBinary.includes(path.sep)
+    ? path.join(path.dirname(nodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm')
+    : null
+  const localBinNpm = getLocalToolBinaryPath('npm')
   const macHomebrewNode22 = '/opt/homebrew/opt/node@22/bin/npm'
-  return existsSync(macHomebrewNode22) ? macHomebrewNode22 : 'npm'
+
+  return [process.env.ROACHNET_NPM_BINARY, localNodeNpm, localBinNpm, macHomebrewNode22, 'npm']
+    .filter(Boolean)
+    .find((candidate) => candidate === 'npm' || existsSync(candidate)) || 'npm'
 }
 
 function hashString(value) {
@@ -240,8 +256,35 @@ async function waitForHttpEndpoint(url, timeoutMs, accept = (response) => respon
 }
 
 function getPreferredNodeBinary() {
+  const appEmbeddedNode = path.join(
+    repoRoot,
+    'app',
+    'RoachNet.app',
+    'Contents',
+    'Resources',
+    'EmbeddedRuntime',
+    'node',
+    'bin',
+    'node'
+  )
+  const siblingEmbeddedNode = path.resolve(
+    repoRoot,
+    '..',
+    'EmbeddedRuntime',
+    'node',
+    'bin',
+    'node'
+  )
   const macHomebrewNode22 = '/opt/homebrew/opt/node@22/bin/node'
-  return existsSync(macHomebrewNode22) ? macHomebrewNode22 : process.execPath
+  return [
+    process.env.ROACHNET_NODE_BINARY,
+    appEmbeddedNode,
+    siblingEmbeddedNode,
+    macHomebrewNode22,
+    process.execPath,
+  ]
+    .filter(Boolean)
+    .find((candidate) => existsSync(candidate)) || process.execPath
 }
 
 function debugBoot(stage, details = {}) {
@@ -1002,6 +1045,11 @@ async function runCommand(binary, args, options) {
 }
 
 async function commandPath(command) {
+  const localCandidate = getLocalToolBinaryPath(command.replace(/\.cmd$/i, ''))
+  if (existsSync(localCandidate)) {
+    return localCandidate
+  }
+
   try {
     const binary = process.platform === 'win32' ? 'where' : 'which'
     const result = await runCommand(binary, [command], {
@@ -1106,6 +1154,7 @@ async function stopManagedRuntime(envValues) {
   await terminateManagedRuntimeProcesses([
     trackedInfo?.serverPid,
     trackedInfo?.workerPid,
+    trackedInfo?.ollamaPid,
     trackedInfo?.openclawPid,
   ])
 
@@ -1189,6 +1238,7 @@ async function prepareBuildRuntimeTarget(envValues) {
   const runtimeMetadataPath = path.join(runtimeDir, BUILD_RUNTIME_METADATA_FILENAME)
   const runtimeNodeModulesPath = path.join(runtimeDir, 'node_modules')
   const runtimeDependencyStampPath = path.join(runtimeDir, BUILD_RUNTIME_DEPENDENCY_STAMP_FILENAME)
+  const bundledRuntimeNodeModulesPath = path.join(buildDir, 'node_modules')
   const existingSignature = existsSync(runtimeMetadataPath)
     ? JSON.parse(readFileSync(runtimeMetadataPath, 'utf8')).signature
     : null
@@ -1244,6 +1294,26 @@ async function prepareBuildRuntimeTarget(envValues) {
     'utf8'
   )
 
+  if (
+    !existsSync(runtimeNodeModulesPath) &&
+    existsSync(path.join(bundledRuntimeNodeModulesPath, '@adonisjs', 'core'))
+  ) {
+    debugBoot('build-runtime:seed-bundled-deps-start', {
+      runtimeDir,
+      bundledRuntimeNodeModulesPath,
+    })
+    console.log('Seeding the compiled RoachNet runtime from bundled production dependencies...')
+    await cp(bundledRuntimeNodeModulesPath, runtimeNodeModulesPath, {
+      recursive: true,
+      force: true,
+      dereference: false,
+    })
+    writeFileSync(runtimeDependencyStampPath, `${fingerprint.dependencyHash}\n`, 'utf8')
+    debugBoot('build-runtime:seed-bundled-deps-ready', {
+      runtimeDir,
+    })
+  }
+
   const installedHash = existsSync(runtimeDependencyStampPath)
     ? readFileSync(runtimeDependencyStampPath, 'utf8').trim()
     : ''
@@ -1264,7 +1334,13 @@ async function prepareBuildRuntimeTarget(envValues) {
         ...process.env,
         ...runtimeEnvValues,
         NODE_ENV: 'production',
-        PATH: `/opt/homebrew/opt/node@22/bin:${process.env.PATH || ''}`,
+        PATH: [
+          getLocalBinRoot(),
+          path.dirname(getPreferredNodeBinary()),
+          process.env.PATH || '',
+        ]
+          .filter(Boolean)
+          .join(path.delimiter),
       },
     })
 
@@ -1304,7 +1380,13 @@ async function ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues) {
     ...runtimeEnvValues,
     NODE_ENV: 'production',
     ROACHNET_DISABLE_TRANSMIT: '1',
-    PATH: `/opt/homebrew/opt/node@22/bin:${process.env.PATH || ''}`,
+    PATH: [
+      getLocalBinRoot(),
+      path.dirname(getPreferredNodeBinary()),
+      process.env.PATH || '',
+    ]
+      .filter(Boolean)
+      .join(path.delimiter),
   }
   const nodeBinary = getPreferredNodeBinary()
 
@@ -1365,12 +1447,13 @@ function terminateDetachedChild(child) {
   }
 }
 
-function recordDetachedRuntimeChildren({ target, serverHandle, workerHandle, openclawHandle }) {
+function recordDetachedRuntimeChildren({ target, serverHandle, workerHandle, ollamaHandle, openclawHandle }) {
   writeRuntimeProcessInfo({
     targetKind: target.kind,
     targetEntrypoint: target.entrypoint,
     serverPid: serverHandle.child?.pid ?? null,
     workerPid: workerHandle?.child?.pid ?? null,
+    ollamaPid: ollamaHandle?.child?.pid ?? null,
     openclawPid: openclawHandle?.child?.pid ?? null,
     writtenAt: new Date().toISOString(),
   })
@@ -1474,6 +1557,44 @@ async function maybeSpawnOpenClawGateway({ runtimeEnvValues, logFd }) {
   }
 
   return null
+}
+
+async function maybeSpawnContainedOllama({ runtimeEnvValues, logFd }) {
+  const baseUrl = runtimeEnvValues.OLLAMA_BASE_URL?.trim()
+  if (!baseUrl) {
+    return null
+  }
+
+  const ollamaBinary = await commandPath('ollama')
+  if (!ollamaBinary) {
+    return null
+  }
+
+  const parsedBaseUrl = new URL(baseUrl)
+  const host = parsedBaseUrl.hostname || '127.0.0.1'
+  const port = parsedBaseUrl.port || '11434'
+  const modelsPath =
+    runtimeEnvValues.OLLAMA_MODELS?.trim() ||
+    path.join(runtimeEnvValues.NOMAD_STORAGE_PATH || getPersistentStorageRoot(), 'ollama')
+
+  mkdirSync(modelsPath, { recursive: true })
+
+  if (await waitForHttpEndpoint(new URL('/api/version', parsedBaseUrl).toString(), 1_000)) {
+    return null
+  }
+
+  return spawnDetachedProcess({
+    binary: ollamaBinary,
+    args: ['serve'],
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...runtimeEnvValues,
+      OLLAMA_HOST: `${host}:${port}`,
+      OLLAMA_MODELS: modelsPath,
+    },
+    logFd,
+  })
 }
 
 async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogFd) {
@@ -1601,6 +1722,7 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
       ? path.join(runtimeRoot, 'bin', 'worker.js')
       : path.join(runtimeRoot, 'bin', 'worker.entry.js')
   let workerHandle = null
+  let ollamaHandle = null
   let openclawHandle = null
 
   if (existsSync(workerEntrypoint)) {
@@ -1624,6 +1746,27 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     }
   }
 
+  if (wantsContainerlessRuntime(runtimeEnvValues)) {
+    ollamaHandle = await maybeSpawnContainedOllama({
+      runtimeEnvValues,
+      logFd: serverLogFd,
+    })
+
+    if (runtimeEnvValues.OLLAMA_BASE_URL?.trim()) {
+      const ollamaReady = await waitForHttpEndpoint(
+        new URL('/api/version', runtimeEnvValues.OLLAMA_BASE_URL).toString(),
+        Math.min(timeoutMs, 120_000)
+      )
+
+      if (!ollamaReady) {
+        console.warn(
+          `Contained Ollama did not answer on ${runtimeEnvValues.OLLAMA_BASE_URL} before the local timeout. ` +
+            'RoachClaw may stay unavailable until Ollama finishes warming up.'
+        )
+      }
+    }
+  }
+
   openclawHandle = await maybeSpawnOpenClawGateway({
     runtimeEnvValues,
     logFd: serverLogFd,
@@ -1633,6 +1776,7 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     target: resolvedTarget,
     serverHandle,
     workerHandle,
+    ollamaHandle,
     openclawHandle,
   })
 
@@ -1661,6 +1805,10 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     terminateDetachedChild(workerHandle.child)
   }
 
+  if (ollamaHandle && !ollamaHandle.hasExited()) {
+    terminateDetachedChild(ollamaHandle.child)
+  }
+
   if (openclawHandle && !openclawHandle.hasExited()) {
     terminateDetachedChild(openclawHandle.child)
   }
@@ -1678,6 +1826,20 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
 
 async function main() {
   const envValues = await loadEnv()
+  process.env.ROACHNET_LOCAL_BIN_PATH = envValues.ROACHNET_LOCAL_BIN_PATH || getLocalBinRoot()
+  if (envValues.ROACHNET_NODE_BINARY) {
+    process.env.ROACHNET_NODE_BINARY = envValues.ROACHNET_NODE_BINARY
+  }
+  if (envValues.ROACHNET_NPM_BINARY) {
+    process.env.ROACHNET_NPM_BINARY = envValues.ROACHNET_NPM_BINARY
+  }
+  process.env.PATH = [
+    process.env.ROACHNET_LOCAL_BIN_PATH,
+    path.dirname(getPreferredNodeBinary()),
+    process.env.PATH || '',
+  ]
+    .filter(Boolean)
+    .join(path.delimiter)
   debugBoot('main:start', {
     argv: process.argv.slice(2),
   })
@@ -1717,6 +1879,7 @@ async function main() {
   await terminateManagedRuntimeProcesses([
     trackedInfo?.serverPid,
     trackedInfo?.workerPid,
+    trackedInfo?.ollamaPid,
     trackedInfo?.openclawPid,
   ])
   clearRuntimeProcessInfo()

@@ -39,6 +39,7 @@ struct DeveloperInlineSuggestion: Identifiable, Hashable {
 
 @MainActor
 final class DevWorkspaceModel: ObservableObject {
+    @Published var storagePath = ""
     @Published var workspaceRootPath = ""
     @Published var projectsRootPath = ""
     @Published var installPath = ""
@@ -63,6 +64,9 @@ final class DevWorkspaceModel: ObservableObject {
     @Published var secretNotesDraft = ""
     @Published var secretValueDraft = ""
     @Published var revealedSecretValue = ""
+    @Published var roachBrainQuery = ""
+    @Published var roachBrainMemories: [RoachBrainMemory] = []
+    @Published var roachBrainStatus = "RoachBrain is ready."
 
     private var commandProcess: Process?
     private let dateFormatter = ISO8601DateFormatter()
@@ -131,6 +135,36 @@ final class DevWorkspaceModel: ObservableObject {
         case "sh", "zsh": return "Shell"
         default: return pathExtension.uppercased()
         }
+    }
+
+    var roachBrainSuggestedMatches: [RoachBrainMatch] {
+        let query = [aiPrompt, activeDocumentLabel, currentProjectName]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: " ")
+        return RoachBrainStore.search(roachBrainMemories, query: query, tags: roachBrainContextTags, limit: 4)
+    }
+
+    var roachBrainVisibleMatches: [RoachBrainMatch] {
+        let trimmedQuery = roachBrainQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedQuery.isEmpty {
+            return Array(
+                roachBrainMemories
+                    .sorted { lhs, rhs in
+                        if lhs.pinned != rhs.pinned {
+                            return lhs.pinned && !rhs.pinned
+                        }
+                        return lhs.lastAccessedAt > rhs.lastAccessedAt
+                    }
+                    .prefix(5)
+                    .map { RoachBrainMatch(memory: $0, score: $0.pinned ? 100 : 10, matchedTags: []) }
+            )
+        }
+
+        return RoachBrainStore.search(roachBrainMemories, query: trimmedQuery, tags: roachBrainContextTags, limit: 6)
+    }
+
+    var roachBrainPinnedCount: Int {
+        roachBrainMemories.filter(\.pinned).count
     }
 
     var inlineSuggestions: [DeveloperInlineSuggestion] {
@@ -450,10 +484,12 @@ final class DevWorkspaceModel: ObservableObject {
         let workspaceRootPath = RoachNetDeveloperPaths.workspaceRoot(storagePath: storagePath)
         let projectsRootPath = RoachNetDeveloperPaths.projectsRoot(storagePath: storagePath)
 
+        self.storagePath = storagePath
+
         if self.workspaceRootPath == workspaceRootPath,
            self.projectsRootPath == projectsRootPath,
            self.installPath == installPath,
-           !fileTree.isEmpty || !secretRecords.isEmpty
+           (!fileTree.isEmpty || !secretRecords.isEmpty || !roachBrainMemories.isEmpty)
         {
             return
         }
@@ -467,6 +503,7 @@ final class DevWorkspaceModel: ObservableObject {
             try seedWorkspaceIfNeeded()
             reloadWorkspace()
             loadSecrets(storagePath: storagePath)
+            loadRoachBrain(storagePath: storagePath)
             importStatus = "Developer workspace ready."
             lastError = nil
         } catch {
@@ -892,6 +929,13 @@ final class DevWorkspaceModel: ObservableObject {
         }
     }
 
+    func loadRoachBrain(storagePath: String) {
+        roachBrainMemories = RoachBrainStore.load(storagePath: storagePath)
+        roachBrainStatus = roachBrainMemories.isEmpty
+            ? "No memory stored yet."
+            : "\(roachBrainMemories.count) local memories ready."
+    }
+
     func selectSecret(_ record: RoachNetSecretRecord?) {
         selectedSecretID = record?.id
         if let record {
@@ -1006,6 +1050,9 @@ final class DevWorkspaceModel: ObservableObject {
         let prompt = aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
 
+        let memoryMatches = roachBrainSuggestedMatches
+        let memoryContextBlock = RoachBrainStore.contextBlock(for: memoryMatches)
+
         let fileContext = activeDocument.map { document in
             """
             Current file: \(document.relativePath)
@@ -1018,6 +1065,12 @@ final class DevWorkspaceModel: ObservableObject {
 
         let composedPrompt = """
         You are assisting inside RoachNet Dev Studio.
+
+        \(memoryContextBlock.isEmpty ? "" : """
+        \(memoryContextBlock)
+
+        Use the RoachBrain notes only if they help this request stay concrete.
+        """)
 
         \(fileContext)
 
@@ -1034,7 +1087,11 @@ final class DevWorkspaceModel: ObservableObject {
 
         do {
             aiResponse = try await workspaceModel.requestDeveloperAssist(prompt: composedPrompt)
-            importStatus = "RoachClaw returned a coding response."
+            try? RoachBrainStore.markAccessed(memoryIDs: memoryMatches.map(\.id), storagePath: storagePath)
+            rememberAssistantExchange(prompt: prompt, response: aiResponse)
+            importStatus = memoryMatches.isEmpty
+                ? "RoachClaw returned a coding response."
+                : "RoachClaw returned a coding response with RoachBrain context."
         } catch {
             aiResponse = ""
             lastError = error.localizedDescription
@@ -1047,6 +1104,34 @@ final class DevWorkspaceModel: ObservableObject {
     func copyAssistantResponse() {
         copyToPasteboard(aiResponse)
         importStatus = "Copied RoachClaw response."
+    }
+
+    func saveAssistantResponseToRoachBrain() {
+        let response = aiResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !response.isEmpty, !storagePath.isEmpty else { return }
+
+        do {
+            _ = try RoachBrainStore.capture(
+                storagePath: storagePath,
+                title: roachBrainMemoryTitle(from: aiPrompt),
+                body: """
+                Request:
+                \(aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+
+                Response:
+                \(response)
+                """,
+                source: "Dev Studio Assist",
+                tags: roachBrainContextTags + ["saved", "dev-assist"],
+                pinned: true
+            )
+            loadRoachBrain(storagePath: storagePath)
+            importStatus = "Saved this assist pass into RoachBrain."
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+            importStatus = "RoachBrain save failed."
+        }
     }
 
     func insertInlineSuggestion(_ suggestion: DeveloperInlineSuggestion) {
@@ -1126,6 +1211,45 @@ final class DevWorkspaceModel: ObservableObject {
     private func appendTerminalOutput(_ chunk: String) {
         let combined = terminalOutput + chunk
         terminalOutput = String(combined.suffix(40_000))
+    }
+
+    private var roachBrainContextTags: [String] {
+        [
+            "dev",
+            "assist",
+            activeDocumentLanguage.lowercased(),
+            currentProjectName.lowercased(),
+        ]
+    }
+
+    private func rememberAssistantExchange(prompt: String, response: String) {
+        guard !storagePath.isEmpty else { return }
+
+        do {
+            _ = try RoachBrainStore.capture(
+                storagePath: storagePath,
+                title: roachBrainMemoryTitle(from: prompt),
+                body: """
+                Request:
+                \(prompt)
+
+                Response:
+                \(response)
+                """,
+                source: "Dev Studio Assist",
+                tags: roachBrainContextTags + ["dev-assist"]
+            )
+            loadRoachBrain(storagePath: storagePath)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func roachBrainMemoryTitle(from prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Dev Studio exchange" }
+        let compact = trimmed.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return compact.count > 56 ? String(compact.prefix(53)) + "..." : compact
     }
 
     private func formattedAssistantInsertion(_ response: String, fileExtension: String) -> String {
@@ -1551,54 +1675,133 @@ struct DevWorkspaceView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 16) {
-                    RoachSectionHeader(
-                        "Dev",
-                        title: "Native coding surfaces inside the RoachNet vault.",
-                        detail: "Projects stay inside the RoachNet workspace, secrets stay in Keychain, and RoachClaw is available for quick implementation passes."
-                    )
+            RoachSpotlightPanel(accent: RoachPalette.cyan) {
+                VStack(alignment: .leading, spacing: 18) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 18) {
+                            HStack(alignment: .top, spacing: 16) {
+                                RoachModuleMark(
+                                    systemName: WorkspacePane.dev.icon,
+                                    size: 56,
+                                    isSelected: true,
+                                    glow: true
+                                )
 
-                    RoachStageStrip(
-                        titles: ["Vault", "Edit", "Assist", "Secrets", "Shell"],
-                        activeIndex: 1
-                    )
+                                RoachSectionHeader(
+                                    "Dev Studio",
+                                    title: "Build inside the RoachNet vault.",
+                                    detail: "Projects, shell, secrets, and AI stay in one native coding lane."
+                                )
+                            }
 
-                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                        RoachInfoPill(title: "Active Project", value: devModel.currentProjectName)
-                        RoachInfoPill(title: "Current File", value: devModel.activeDocumentLabel)
-                        RoachInfoPill(title: "Projects Root", value: devModel.projectsRootPath.isEmpty ? "Preparing" : devModel.projectsRootPath)
-                        RoachInfoPill(title: "Assistant Model", value: model.selectedChatModelLabel)
-                        RoachInfoPill(title: "Secrets", value: "\(devModel.secretRecords.count) stored")
-                        RoachInfoPill(title: "Open Tabs", value: "\(devModel.openDocuments.count)")
-                        RoachInfoPill(title: "Recommended Local Lane", value: model.recommendedLocalModels.first ?? "qwen2.5-coder:1.5b")
-                        RoachInfoPill(title: "RoachClaw", value: roachClawStatusText)
-                        RoachInfoPill(title: "Cloud Lane", value: cloudLaneText)
-                        RoachInfoPill(title: "Exo", value: exoStatusText)
+                            Spacer(minLength: 16)
+
+                            HStack(spacing: 12) {
+                                Button("New Project") {
+                                    devModel.createProject()
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+
+                                Button("Import") {
+                                    devModel.importProject()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Reload") {
+                                    devModel.reloadWorkspace()
+                                    devModel.loadSecrets(storagePath: model.storagePath)
+                                    devModel.loadRoachBrain(storagePath: model.storagePath)
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .top, spacing: 16) {
+                                RoachModuleMark(
+                                    systemName: WorkspacePane.dev.icon,
+                                    size: 52,
+                                    isSelected: true,
+                                    glow: true
+                                )
+
+                                RoachSectionHeader(
+                                    "Dev Studio",
+                                    title: "Build inside the RoachNet vault.",
+                                    detail: "Projects, shell, secrets, and AI stay in one native coding lane."
+                                )
+                            }
+
+                            HStack(spacing: 12) {
+                                Button("New Project") {
+                                    devModel.createProject()
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+
+                                Button("Import") {
+                                    devModel.importProject()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Reload") {
+                                    devModel.reloadWorkspace()
+                                    devModel.loadSecrets(storagePath: model.storagePath)
+                                    devModel.loadRoachBrain(storagePath: model.storagePath)
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+                        }
+                    }
+
+                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
+                        RoachFeatureTile(
+                            "Project",
+                            title: devModel.currentProjectName,
+                            detail: devModel.activeDocumentLabel,
+                            systemName: "shippingbox.fill",
+                            accent: RoachPalette.green
+                        )
+                        RoachFeatureTile(
+                            "Assist",
+                            title: model.selectedChatModelLabel,
+                            detail: roachClawStatusText,
+                            systemName: "sparkles",
+                            accent: RoachPalette.magenta
+                        )
+                        RoachFeatureTile(
+                            "Secrets",
+                            title: "\(devModel.secretRecords.count) stored",
+                            detail: "Keychain-backed values stay outside the workspace files.",
+                            systemName: "key.fill",
+                            accent: RoachPalette.cyan
+                        )
+                        RoachFeatureTile(
+                            "RoachBrain",
+                            title: "\(devModel.roachBrainMemories.count) memories",
+                            detail: devModel.roachBrainPinnedCount > 0
+                                ? "\(devModel.roachBrainPinnedCount) pinned for quick retrieval."
+                                : "Recent coding context stays searchable locally.",
+                            systemName: "brain.head.profile",
+                            accent: RoachPalette.bronze
+                        )
                     }
 
                     Text(model.recommendedLocalModelSummary)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
 
-                    HStack(spacing: 8) {
-                        RoachTag("Local-first", accent: RoachPalette.green)
-                        RoachTag("Keychain-backed secrets", accent: RoachPalette.cyan)
-                        RoachTag("Contained runtime", accent: RoachPalette.bronze)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            RoachTag("Local-first", accent: RoachPalette.green)
+                            RoachTag("RoachBrain memory", accent: RoachPalette.magenta)
+                            RoachTag("Keychain-backed secrets", accent: RoachPalette.cyan)
+                            RoachTag("Contained runtime", accent: RoachPalette.bronze)
+                            RoachTag(cloudLaneText, accent: cloudLaneText == "No cloud lane" ? RoachPalette.muted : RoachPalette.cyan)
+                        }
                     }
 
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 12) {
-                            Button("New Project") {
-                                devModel.createProject()
-                            }
-                            .buttonStyle(RoachPrimaryButtonStyle())
-
-                            Button("Import Project") {
-                                devModel.importProject()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-
                             Button("New File") {
                                 devModel.createFile()
                             }
@@ -1613,49 +1816,23 @@ struct DevWorkspaceView: View {
                                 devModel.createScratchFile()
                             }
                             .buttonStyle(RoachSecondaryButtonStyle())
-
-                            Button("Reload Workspace") {
-                                devModel.reloadWorkspace()
-                                devModel.loadSecrets(storagePath: model.storagePath)
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
                         }
 
                         VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 12) {
-                                Button("New Project") {
-                                    devModel.createProject()
-                                }
-                                .buttonStyle(RoachPrimaryButtonStyle())
-
-                                Button("Import Project") {
-                                    devModel.importProject()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("Reload Workspace") {
-                                    devModel.reloadWorkspace()
-                                    devModel.loadSecrets(storagePath: model.storagePath)
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
+                            Button("New File") {
+                                devModel.createFile()
                             }
+                            .buttonStyle(RoachSecondaryButtonStyle())
 
-                            HStack(spacing: 12) {
-                                Button("New File") {
-                                    devModel.createFile()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("New Folder") {
-                                    devModel.createFolder()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("New Scratch") {
-                                    devModel.createScratchFile()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
+                            Button("New Folder") {
+                                devModel.createFolder()
                             }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+
+                            Button("New Scratch") {
+                                devModel.createScratchFile()
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
                         }
                     }
                 }
@@ -1877,12 +2054,12 @@ struct DevWorkspaceView: View {
 
     private var sideRail: some View {
         VStack(alignment: .leading, spacing: 16) {
-            RoachInsetPanel {
+            RoachSpotlightPanel(accent: RoachPalette.magenta) {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Text("RoachClaw Assist")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(RoachPalette.text)
+                        .foregroundStyle(RoachPalette.text)
                         Spacer()
                         RoachTag(model.selectedChatModelLabel, accent: RoachPalette.green)
                     }
@@ -1944,6 +2121,81 @@ struct DevWorkspaceView: View {
                         }
                     }
 
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("RoachBrain")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .tracking(1.1)
+                                .foregroundStyle(RoachPalette.muted)
+                            Spacer()
+                            Text(devModel.roachBrainStatus)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(RoachPalette.muted)
+                        }
+
+                        TextField("Search local memory", text: $devModel.roachBrainQuery)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(RoachPalette.text)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(RoachPalette.panelRaised.opacity(0.64))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(RoachPalette.border, lineWidth: 1)
+                            )
+
+                        if devModel.roachBrainVisibleMatches.isEmpty {
+                            Text("Saved memory appears here after the first assist pass or manual save.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(RoachPalette.muted)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(devModel.roachBrainVisibleMatches.prefix(3)) { match in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack {
+                                            Text(match.memory.title)
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundStyle(RoachPalette.text)
+                                                .lineLimit(1)
+                                            Spacer()
+                                            if match.memory.pinned {
+                                                RoachTag("Pinned", accent: RoachPalette.magenta)
+                                            }
+                                        }
+
+                                        Text(match.memory.summary)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(RoachPalette.muted)
+                                            .fixedSize(horizontal: false, vertical: true)
+
+                                        if !match.memory.tags.isEmpty {
+                                            ScrollView(.horizontal, showsIndicators: false) {
+                                                HStack(spacing: 6) {
+                                                    ForEach(match.memory.tags.prefix(4), id: \.self) { tag in
+                                                        RoachTag(tag, accent: RoachPalette.cyan)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(12)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .fill(Color.black.opacity(0.18))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(RoachPalette.border, lineWidth: 1)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     HStack(spacing: 10) {
                         Button("Model Store") {
                             Task {
@@ -1958,6 +2210,12 @@ struct DevWorkspaceView: View {
                             }
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button("Save to RoachBrain") {
+                            devModel.saveAssistantResponseToRoachBrain()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                        .disabled(devModel.aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
 
                     Button(devModel.aiIsRunning ? "Thinking…" : "Ask RoachClaw") {

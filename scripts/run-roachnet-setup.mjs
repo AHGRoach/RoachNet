@@ -4,7 +4,7 @@ import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { chmod, copyFile, cp, mkdtemp, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { chmod, copyFile, cp, mkdtemp, readFile, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,6 +36,7 @@ const INSTALLER_DIAGNOSTICS_CACHE_TTL_MS = 30_000
 const INSTALLER_DIAGNOSTIC_COMMAND_TIMEOUT_MS = 1_500
 const GITHUB_API_ROOT = 'https://api.github.com'
 const DEFAULT_ROACHCLAW_MODEL = 'qwen2.5-coder:1.5b'
+const OLLAMA_RELEASE_API_URL = 'https://api.github.com/repos/ollama/ollama/releases/latest'
 
 const runtimeState = {
   task: null,
@@ -239,10 +240,32 @@ function parseGitHubRepo(sourceRepoUrl = DEFAULT_SOURCE_REPO_URL) {
   }
 }
 
+function resolvePackagedSetupBundlePath() {
+  const explicitBundlePath = process.env.ROACHNET_SETUP_APP_BUNDLE?.trim()
+  if (explicitBundlePath) {
+    return normalizeInputPath(explicitBundlePath)
+  }
+
+  if (process.platform !== 'darwin') {
+    return null
+  }
+
+  const resourcesPath = path.dirname(repoRoot)
+  const contentsPath = path.dirname(resourcesPath)
+  const bundlePath = path.dirname(contentsPath)
+
+  if (bundlePath.endsWith('.app') && path.basename(contentsPath) === 'Contents') {
+    return bundlePath
+  }
+
+  return null
+}
+
 function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
   const arch = process.arch
-  const setupBundlePath = process.env.ROACHNET_SETUP_APP_BUNDLE
+  const setupBundlePath = resolvePackagedSetupBundlePath()
   const setupBundleDir = setupBundlePath ? path.dirname(setupBundlePath) : null
+  const setupResourcesDir = setupBundlePath ? path.join(setupBundlePath, 'Contents', 'Resources') : null
   const persistedInstallPath = normalizeInputPath(
     loadPersistedInstallerConfig().installPath || getDefaultInstallPath()
   )
@@ -258,9 +281,11 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
         path.join(repoRoot, 'desktop-dist', `mac-${arch}`, 'RoachNet.app'),
         path.join(repoRoot, 'native', 'macos', 'dist', 'RoachNet.app'),
         setupBundleDir ? path.join(setupBundleDir, 'RoachNet.app') : null,
+        setupResourcesDir ? path.join(setupResourcesDir, 'InstallerAssets', 'RoachNet.app') : null,
         path.join(repoRoot, 'desktop-dist', `RoachNet-${version}-mac-${arch}.zip`),
         path.join(repoRoot, 'native', 'macos', 'dist', `RoachNet-${version}-mac-${arch}.zip`),
         setupBundleDir ? path.join(setupBundleDir, `RoachNet-${version}-mac-${arch}.zip`) : null,
+        setupResourcesDir ? path.join(setupResourcesDir, 'InstallerAssets', `RoachNet-${version}-mac-${arch}.zip`) : null,
       ].filter(Boolean),
       assetMatcher(name) {
         return (
@@ -881,6 +906,11 @@ async function runPrivilegedShell(command, options = {}) {
 }
 
 async function commandPath(command) {
+  const localCandidate = getLocalToolBinaryPath(command.replace(/\.cmd$/i, ''), repoRoot)
+  if (existsSync(localCandidate)) {
+    return localCandidate
+  }
+
   try {
     const binary = process.platform === 'win32' ? 'where' : 'which'
     const result = await runProcess(binary, [command], {
@@ -1616,6 +1646,10 @@ function getDefaultConfig(overrides = {}) {
       persistedConfig.autoInstallDependencies === undefined
         ? false
         : Boolean(persistedConfig.autoInstallDependencies),
+    useDockerContainerization:
+      overrides.useDockerContainerization === undefined
+        ? Boolean(persistedConfig.useDockerContainerization)
+        : Boolean(overrides.useDockerContainerization),
     installRoachClaw,
     roachClawDefaultModel:
       typeof persistedConfig.roachClawDefaultModel === 'string' &&
@@ -1715,11 +1749,79 @@ async function waitForPorts(ports, log) {
   throw new Error('Timed out while waiting for RoachNet support services to become reachable.')
 }
 
+async function waitForHttpOk(url, timeoutMs) {
+  const startedAt = Date.now()
+  let lastError = null
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const controller = new AbortController()
+    const timeoutHandle = setTimeout(() => controller.abort(), 3_000)
+
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+
+      if (response.ok) {
+        clearTimeout(timeoutHandle)
+        return true
+      }
+
+      lastError = `${response.status} ${response.statusText}`
+    } catch (error) {
+      lastError = error?.message || 'request failed'
+    } finally {
+      clearTimeout(timeoutHandle)
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, PORT_WAIT_INTERVAL_MS))
+  }
+
+  throw new Error(
+    `Timed out while waiting for ${url} to answer successfully${lastError ? ` (${lastError})` : ''}.`
+  )
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null) {
+    return child?.exitCode ?? 0
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false
+    const timeoutHandle =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            if (resolved) {
+              return
+            }
+
+            resolved = true
+            resolve(null)
+          }, timeoutMs)
+        : null
+
+    child.once('close', (code) => {
+      if (resolved) {
+        return
+      }
+
+      resolved = true
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle)
+      }
+      resolve(code)
+    })
+  })
+}
+
 function getPreferredNodeBinary() {
   const candidates = [
-    process.execPath,
+    process.env.ROACHNET_NODE_BINARY,
     '/opt/homebrew/opt/node@22/bin/node',
     '/usr/local/opt/node@22/bin/node',
+    process.execPath,
     'node',
   ]
 
@@ -1729,6 +1831,7 @@ function getPreferredNodeBinary() {
 function getPreferredNpmBinary(nodeBinary) {
   const candidatePaths = [
     path.join(path.dirname(nodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm'),
+    process.env.ROACHNET_NPM_BINARY,
     '/opt/homebrew/opt/node@22/bin/npm',
     '/usr/local/opt/node@22/bin/npm',
     process.platform === 'win32' ? 'npm.cmd' : 'npm',
@@ -1743,10 +1846,12 @@ function getShellEnv() {
   const preferredNodeBin = preferredNodeBinary.includes(path.sep)
     ? path.dirname(preferredNodeBinary)
     : null
+  const localBinPath = process.env.ROACHNET_LOCAL_BIN_PATH || path.join(repoRoot, 'bin')
 
   return {
     ...process.env,
     PATH: [
+      localBinPath,
       preferredNodeBin,
       '/opt/homebrew/bin',
       '/usr/local/bin',
@@ -1757,6 +1862,204 @@ function getShellEnv() {
       .filter(Boolean)
       .join(path.delimiter),
   }
+}
+
+function getLocalBinRoot(repoPath = repoRoot) {
+  return normalizeInputPath(process.env.ROACHNET_LOCAL_BIN_PATH || path.join(repoPath, 'bin'))
+}
+
+function getLocalToolBinaryPath(toolName, repoPath = repoRoot) {
+  const base = getLocalBinRoot(repoPath)
+  const fileName = process.platform === 'win32' ? `${toolName}.cmd` : toolName
+  return path.join(base, fileName)
+}
+
+async function symlinkOrCopyToolBinary(sourcePath, destinationPath) {
+  await rm(destinationPath, { force: true }).catch(() => {})
+  await ensureDirectory(path.dirname(destinationPath))
+
+  try {
+    await symlink(sourcePath, destinationPath)
+  } catch {
+    await copyFile(sourcePath, destinationPath)
+    await chmod(destinationPath, 0o755).catch(() => {})
+  }
+}
+
+async function downloadToFile(url, destinationPath) {
+  return downloadFile(url, destinationPath)
+}
+
+async function getLatestOllamaRelease() {
+  const release = await fetchJson(OLLAMA_RELEASE_API_URL)
+  const asset = Array.isArray(release.assets)
+    ? release.assets.find((entry) => entry?.name === 'Ollama-darwin.zip')
+    : null
+
+  return {
+    version: parseVersionNumber(release.tag_name) || null,
+    url: asset?.browser_download_url || 'https://ollama.com/download/Ollama-darwin.zip',
+  }
+}
+
+async function ensureContainedOpenClaw(repoPath, task) {
+  const localBinaryPath = getLocalToolBinaryPath('openclaw', repoPath)
+  const currentVersion = existsSync(localBinaryPath)
+    ? await detectCommandVersion(localBinaryPath, ['--version'])
+    : null
+  const nodeBinary = getPreferredNodeBinary()
+  const npmBinary = getPreferredNpmBinary(nodeBinary)
+  const latestVersion = await detectLatestNpmPackageVersion('openclaw', npmBinary)
+  const needsInstall =
+    !existsSync(localBinaryPath) ||
+    !currentVersion ||
+    (latestVersion && compareVersions(currentVersion, latestVersion) < 0)
+
+  if (!needsInstall) {
+    appendTaskLog(
+      task,
+      `Contained OpenClaw is ready${currentVersion ? ` (${currentVersion})` : ''}.`
+    )
+    return localBinaryPath
+  }
+
+  const packageRoot = path.join(repoPath, 'runtime', 'vendor', 'openclaw')
+  const packageJsonPath = path.join(packageRoot, 'package.json')
+  const packageName = latestVersion ? `openclaw@${latestVersion}` : 'openclaw@latest'
+
+  appendTaskLog(task, `Installing contained OpenClaw into ${packageRoot}...`)
+  await ensureDirectory(packageRoot)
+  if (!existsSync(packageJsonPath)) {
+    writeFileSync(
+      packageJsonPath,
+      JSON.stringify(
+        {
+          name: 'roachnet-contained-openclaw',
+          private: true,
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    )
+  }
+
+  await runProcess(
+    npmBinary,
+    ['install', '--prefix', packageRoot, '--no-audit', '--no-fund', '--omit=dev', packageName],
+    {
+      cwd: repoPath,
+      env: {
+        ...getShellEnv(),
+        npm_config_update_notifier: 'false',
+        npm_config_fund: 'false',
+        npm_config_audit: 'false',
+      },
+      timeoutMs: 300_000,
+      onStdout(text) {
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+          appendTaskLog(task, line)
+        }
+      },
+      onStderr(text) {
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+          appendTaskLog(task, line)
+        }
+      },
+    }
+  )
+
+  const installedBinaryPath = path.join(
+    packageRoot,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'
+  )
+
+  if (!existsSync(installedBinaryPath)) {
+    throw new Error(`Contained OpenClaw install completed without a launchable binary at ${installedBinaryPath}.`)
+  }
+
+  await symlinkOrCopyToolBinary(installedBinaryPath, localBinaryPath)
+  appendTaskLog(task, `Contained OpenClaw linked at ${localBinaryPath}.`)
+  return localBinaryPath
+}
+
+async function ensureContainedOllama(repoPath, task) {
+  if (!(process.platform === 'darwin' && process.arch === 'arm64')) {
+    appendTaskLog(task, 'Contained Ollama downloads are currently only automated for Apple Silicon macOS.')
+    return null
+  }
+
+  const localBinaryPath = getLocalToolBinaryPath('ollama', repoPath)
+  const currentVersion = existsSync(localBinaryPath)
+    ? await detectCommandVersion(localBinaryPath, ['--version'])
+    : null
+  const latestRelease = await getLatestOllamaRelease()
+  const needsInstall =
+    !existsSync(localBinaryPath) ||
+    !currentVersion ||
+    (latestRelease.version && compareVersions(currentVersion, latestRelease.version) < 0)
+
+  if (!needsInstall) {
+    appendTaskLog(
+      task,
+      `Contained Ollama is ready${currentVersion ? ` (${currentVersion})` : ''}.`
+    )
+    return localBinaryPath
+  }
+
+  const vendorRoot = path.join(repoPath, 'runtime', 'vendor', 'ollama')
+  const finalAppPath = path.join(vendorRoot, 'Ollama.app')
+  const downloadRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-ollama-'))
+  const archivePath = path.join(downloadRoot, 'Ollama-darwin.zip')
+  const unpackRoot = path.join(downloadRoot, 'unpacked')
+  const extractedAppPath = path.join(unpackRoot, 'Ollama.app')
+
+  appendTaskLog(
+    task,
+    `Downloading contained Ollama${latestRelease.version ? ` ${latestRelease.version}` : ''}...`
+  )
+
+  try {
+    await downloadToFile(latestRelease.url, archivePath)
+    await ensureDirectory(unpackRoot)
+    await runProcess('ditto', ['-x', '-k', archivePath, unpackRoot], {
+      env: getShellEnv(),
+      timeoutMs: 300_000,
+    })
+
+    if (!existsSync(extractedAppPath)) {
+      throw new Error(`Contained Ollama archive did not unpack an app bundle at ${extractedAppPath}.`)
+    }
+
+    await rm(finalAppPath, { recursive: true, force: true })
+    await ensureDirectory(vendorRoot)
+    await cp(extractedAppPath, finalAppPath, { recursive: true, force: true })
+
+    const appBinaryPath = path.join(finalAppPath, 'Contents', 'Resources', 'ollama')
+    if (!existsSync(appBinaryPath)) {
+      throw new Error(`Contained Ollama bundle is missing ${appBinaryPath}.`)
+    }
+
+    await symlinkOrCopyToolBinary(appBinaryPath, localBinaryPath)
+    appendTaskLog(task, `Contained Ollama linked at ${localBinaryPath}.`)
+    return localBinaryPath
+  } finally {
+    await rm(downloadRoot, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function ensureContainedAITooling(config, repoPath, task) {
+  await ensureDirectory(getLocalBinRoot(repoPath))
+
+  if (config.installRoachClaw === false) {
+    appendTaskLog(task, 'Skipping contained RoachClaw tooling because this install has RoachClaw disabled.')
+    return
+  }
+
+  await ensureContainedOpenClaw(repoPath, task)
+  await ensureContainedOllama(repoPath, task)
 }
 
 function createTask(config) {
@@ -1960,6 +2263,7 @@ async function ensureRepository(config, repoPath, task) {
 async function smokeTestInstalledRuntime(config, envValues, task) {
   const nodeBinary = getPreferredNodeBinary()
   const launcherPath = path.join(config.installPath, 'scripts', 'run-roachnet.mjs')
+  const healthUrl = new URL('/api/health', envValues.URL).toString()
 
   if (!existsSync(launcherPath)) {
     throw new Error(`Missing RoachNet launcher at ${launcherPath}.`)
@@ -1967,16 +2271,45 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
 
   appendTaskLog(task, 'Smoke testing the contained runtime before finalizing the install...')
 
+  let launcherChild = null
+  let launcherStdout = ''
+  let launcherStderr = ''
+  let launcherExitCode = null
+
   try {
-    await runProcess(nodeBinary, [launcherPath], {
+    launcherChild = spawn(nodeBinary, [launcherPath], {
       cwd: config.installPath,
       env: {
         ...getShellEnv(),
         ROACHNET_NO_BROWSER: '1',
       },
-      timeoutMs: PORT_WAIT_TIMEOUT_MS + 120_000,
     })
-    appendTaskLog(task, `Contained runtime answered ${new URL('/api/health', envValues.URL).toString()}.`)
+
+    launcherChild.stdout?.on('data', (chunk) => {
+      launcherStdout += chunk.toString()
+    })
+    launcherChild.stderr?.on('data', (chunk) => {
+      launcherStderr += chunk.toString()
+    })
+
+    launcherChild.once('error', (error) => {
+      launcherStderr += `${error?.message || String(error)}\n`
+    })
+
+    await waitForHttpOk(healthUrl, PORT_WAIT_TIMEOUT_MS + 120_000)
+    appendTaskLog(task, `Contained runtime answered ${healthUrl}.`)
+
+    // The runtime launcher is expected to stay alive once the health endpoint is up.
+    // We only treat an early non-zero exit as a smoke-test failure.
+    launcherExitCode = await waitForChildExit(launcherChild, 3_000)
+
+    if (launcherExitCode !== null && launcherExitCode !== 0) {
+      throw new Error(
+        `Contained runtime launcher exited with code ${launcherExitCode} after ${healthUrl} answered successfully.\n${
+          launcherStderr.trim() || launcherStdout.trim()
+        }`
+      )
+    }
   } finally {
     await runProcess(nodeBinary, [launcherPath, '--stop'], {
       cwd: config.installPath,
@@ -1986,6 +2319,11 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
       },
       timeoutMs: 30_000,
     }).catch(() => {})
+
+    const exitCode = await waitForChildExit(launcherChild, 10_000)
+    if (exitCode === null && launcherChild) {
+      launcherChild.kill('SIGKILL')
+    }
   }
 }
 
@@ -2048,7 +2386,7 @@ function buildManagementCompose({
       REDIS_PORT: "6379"
       NOMAD_STORAGE_PATH: /app/storage
       OPENCLAW_WORKSPACE_PATH: "${openClawWorkspaceRoot}"
-      OLLAMA_BASE_URL: "${resolvedOllamaBaseUrl}"
+      OLLAMA_BASE_URL: "http://ollama:11434"
       OPENCLAW_BASE_URL: "${resolvedOpenClawBaseUrl}"
       ROACHNET_DB_ROOT_PASSWORD: "${resolvedDbRootPassword}"
     depends_on:
@@ -2056,6 +2394,8 @@ function buildManagementCompose({
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/api/health"]
       interval: 15s
@@ -2089,6 +2429,8 @@ function buildManagementCompose({
     image: redis:7-alpine
     container_name: roachnet_redis_${hashString(installPath).slice(0, 8)}
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:36379:6379"
     volumes:
       - "${runtimeRoot}/redis:/data"
     healthcheck:
@@ -2096,6 +2438,24 @@ function buildManagementCompose({
       interval: 15s
       timeout: 10s
       retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.16
+    container_name: roachnet_qdrant_${hashString(installPath).slice(0, 8)}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:36333:6333"
+    volumes:
+      - "${runtimeRoot}/qdrant:/qdrant/storage"
+
+  ollama:
+    image: ollama/ollama:0.20.2
+    container_name: roachnet_ollama_${hashString(installPath).slice(0, 8)}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:36434:11434"
+    volumes:
+      - "${storageRoot}/ollama:/root/.ollama"
 `
 }
 
@@ -2135,6 +2495,7 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
   await ensureDirectory(path.join(repoPath, 'bin'))
 
   const port = await resolveInstallPort(existingValues.PORT, 8080, 'Application', task)
+  const containerlessMode = config.useDockerContainerization ? '0' : '1'
   const dbPassword = existingValues.DB_PASSWORD || randomSecret(16)
   const dbRootPassword = existingValues.ROACHNET_DB_ROOT_PASSWORD || randomSecret(16)
   const appKey = existingValues.APP_KEY || randomSecret(24)
@@ -2143,11 +2504,24 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
   const openClawWorkspacePath = normalizeInputPath(path.join(storagePath, 'openclaw'))
   const sqliteDbPath = normalizeInputPath(path.join(storagePath, 'state', 'roachnet.sqlite'))
   const localToolsPath = normalizeInputPath(path.join(repoPath, 'bin'))
-  const ollamaBaseUrl = existingValues.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
-  const openClawBaseUrl = existingValues.OPENCLAW_BASE_URL || 'http://127.0.0.1:13001'
+  const installedAppPath = getCanonicalInstalledAppPath(repoPath)
+  const embeddedNodeBinaryPath = normalizeInputPath(
+    path.join(installedAppPath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'node')
+  )
+  const embeddedNpmBinaryPath = normalizeInputPath(
+    path.join(installedAppPath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'npm')
+  )
+  const ollamaBaseUrl = config.installRoachClaw === false
+    ? (existingValues.OLLAMA_BASE_URL || 'http://127.0.0.1:36434')
+    : 'http://127.0.0.1:36434'
+  const openClawBaseUrl = config.installRoachClaw === false
+    ? (existingValues.OPENCLAW_BASE_URL || 'http://127.0.0.1:13001')
+    : 'http://127.0.0.1:13001'
+  const ollamaModelsPath = normalizeInputPath(path.join(storagePath, 'ollama'))
 
   await ensureDirectory(storagePath)
   await ensureDirectory(openClawWorkspacePath)
+  await ensureDirectory(ollamaModelsPath)
   await ensureDirectory(path.dirname(sqliteDbPath))
 
   const envValues = {
@@ -2159,7 +2533,7 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
     LOG_LEVEL: existingValues.LOG_LEVEL || 'info',
     APP_KEY: appKey,
     NODE_ENV: existingValues.NODE_ENV || 'production',
-    DB_CONNECTION: existingValues.DB_CONNECTION || 'sqlite',
+    DB_CONNECTION: containerlessMode === '1' ? 'sqlite' : 'mysql',
     DB_HOST: existingValues.DB_HOST || '127.0.0.1',
     DB_PORT: existingValues.DB_PORT || 3306,
     DB_USER: existingValues.DB_USER || 'nomad_user',
@@ -2171,11 +2545,14 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
     REDIS_PORT: existingValues.REDIS_PORT || 6379,
     NOMAD_STORAGE_PATH: storagePath,
     OLLAMA_BASE_URL: ollamaBaseUrl,
+    OLLAMA_MODELS: ollamaModelsPath,
     OPENCLAW_BASE_URL: openClawBaseUrl,
     OPENCLAW_WORKSPACE_PATH: openClawWorkspacePath,
     ROACHNET_LOCAL_BIN_PATH: localToolsPath,
-    ROACHNET_CONTAINERLESS_MODE: existingValues.ROACHNET_CONTAINERLESS_MODE || '1',
-    ROACHNET_DISABLE_QUEUE: existingValues.ROACHNET_DISABLE_QUEUE || '1',
+    ROACHNET_NODE_BINARY: embeddedNodeBinaryPath,
+    ROACHNET_NPM_BINARY: embeddedNpmBinaryPath,
+    ROACHNET_CONTAINERLESS_MODE: containerlessMode,
+    ROACHNET_DISABLE_QUEUE: containerlessMode === '1' ? '1' : '0',
     ROACHNET_DISABLE_TRANSMIT: existingValues.ROACHNET_DISABLE_TRANSMIT || '1',
     ROACHNET_DB_ROOT_PASSWORD: dbRootPassword,
   }
@@ -2203,7 +2580,12 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
   appendTaskLog(task, `Prepared RoachNet env file at ${envPath}.`)
   appendTaskLog(task, `Prepared Docker management file at ${managementComposePath}.`)
   appendTaskLog(task, `RoachNet storage will live inside ${storagePath}.`)
-  appendTaskLog(task, 'The first boot will use the contained local runtime lane instead of installing global dependencies.')
+  appendTaskLog(
+    task,
+    containerlessMode === '1'
+      ? 'The first boot will use the contained local runtime lane instead of installing global dependencies.'
+      : 'Docker containerization is enabled for the support-services lane. RoachNet will still keep its payload inside the install root.'
+  )
 
   return {
     envValues,
@@ -2312,6 +2694,7 @@ async function runInstallWorkflow(config) {
       : 'stable',
     updateBaseUrl: config.updateBaseUrl?.trim().replace(/\/+$/, '') || '',
     autoInstallDependencies: false,
+    useDockerContainerization: Boolean(config.useDockerContainerization),
   }
   const task = createTask(normalizedConfig)
   runtimeState.task = task
@@ -2357,6 +2740,9 @@ async function runInstallWorkflow(config) {
 
     setPhase('Staging RoachNet')
     await ensureRepository(stagedConfig, stagedConfig.installPath, task)
+
+    setPhase('Installing contained AI tooling')
+    await ensureContainedAITooling(stagedConfig, stagedConfig.installPath, task)
 
     setPhase('Preparing contained runtime')
     const prepared = await prepareEnvironmentFiles(stagedConfig, stagedConfig.installPath, task)
@@ -2426,6 +2812,10 @@ async function getInstallerState(searchParams = new URLSearchParams()) {
       searchParams.get('autoInstallDependencies') === null
         ? undefined
         : searchParams.get('autoInstallDependencies') === 'true',
+    useDockerContainerization:
+      searchParams.get('useDockerContainerization') === null
+        ? undefined
+        : searchParams.get('useDockerContainerization') === 'true',
     installRoachClaw:
       searchParams.get('installRoachClaw') === null
         ? undefined

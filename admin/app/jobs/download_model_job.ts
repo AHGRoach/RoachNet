@@ -114,13 +114,30 @@ export class DownloadModelJob {
       if (queueConfig.disabled) {
         const runner = new DownloadModelJob()
         void Promise.resolve().then(async () => {
-          try {
-            job.markActive?.()
-            await runner.handle(job as Job)
-            job.markCompleted?.()
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            job.markFailed?.(message)
+          const attempts = 40
+          const delayMs = 60_000
+          let lastMessage = 'Model download did not start.'
+
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              job.markActive?.()
+              await runner.handle(job as Job)
+              job.markCompleted?.()
+              return
+            } catch (error) {
+              lastMessage = error instanceof Error ? error.message : String(error)
+              logger.warn(
+                `[DownloadModelJob] Inline attempt ${attempt}/${attempts} failed for ${params.modelName}: ${lastMessage}`
+              )
+
+              if (attempt >= attempts) {
+                job.markFailed?.(lastMessage)
+                return
+              }
+
+              job.markDelayed?.()
+              await new Promise((resolve) => setTimeout(resolve, delayMs))
+            }
           }
         })
       }

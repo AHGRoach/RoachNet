@@ -679,6 +679,8 @@ final class WorkspaceModel: ObservableObject {
     ]
     @Published var promptDraft: String = ""
     @Published var selectedChatModel: String = ""
+    @Published var roachBrainQuery: String = ""
+    @Published var roachBrainMemories: [RoachBrainMemory] = []
     @Published var selectedWikipediaOptionId: String = "none"
     @Published var isApplyingDefaults = false
     @Published var isSendingPrompt = false
@@ -792,11 +794,38 @@ final class WorkspaceModel: ObservableObject {
     var hasCloudChatFallback: Bool {
         preferredCloudChatModel(excluding: nil) != nil
     }
+    var roachBrainSuggestedMatches: [RoachBrainMatch] {
+        let query = [promptDraft, chatLines.last?.text ?? "", displayedRoachClawDefaultModel]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: " ")
+        return RoachBrainStore.search(roachBrainMemories, query: query, tags: ["roachclaw", "chat"], limit: 4)
+    }
+    var roachBrainVisibleMatches: [RoachBrainMatch] {
+        let trimmedQuery = roachBrainQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedQuery.isEmpty {
+            return Array(
+                roachBrainMemories
+                    .sorted { lhs, rhs in
+                        if lhs.pinned != rhs.pinned {
+                            return lhs.pinned && !rhs.pinned
+                        }
+                        return lhs.lastAccessedAt > rhs.lastAccessedAt
+                    }
+                    .prefix(6)
+                    .map { RoachBrainMatch(memory: $0, score: $0.pinned ? 100 : 10, matchedTags: []) }
+            )
+        }
+        return RoachBrainStore.search(roachBrainMemories, query: trimmedQuery, tags: ["roachclaw", "chat"], limit: 6)
+    }
+    var roachBrainPinnedCount: Int {
+        roachBrainMemories.filter(\.pinned).count
+    }
 
     func refreshConfigOnly() {
         config = RoachNetRepositoryLocator.readConfig()
         statusLine = setupCompleted ? "Setup complete." : "Setup still required."
         synchronizeSelectedChatModel()
+        refreshRoachBrain()
     }
 
     deinit {
@@ -920,6 +949,7 @@ final class WorkspaceModel: ObservableObject {
         }
 
         let selectedModel = resolvedChatModel()
+        let brainMatches = roachBrainContextMatches(for: trimmedPrompt, tags: ["roachclaw", "chat"])
         let preferredCloudModel = isCloudModel(selectedModel) ? selectedModel : preferredCloudChatModel(excluding: nil)
         let cloudFallbackModel = preferredCloudChatModel(excluding: selectedModel)
         let roachClawReady = snapshot?.roachClaw.ready == true
@@ -964,9 +994,10 @@ final class WorkspaceModel: ObservableObject {
             let response = try await ManagedAppRuntimeBridge.shared.sendChat(
                 using: currentConfig,
                 model: primaryModel,
-                prompt: trimmedPrompt,
+                prompt: composedRoachBrainPrompt(from: trimmedPrompt, matches: brainMatches, mode: "RoachClaw workbench"),
                 timeout: primaryTimeout
             )
+            try? RoachBrainStore.markAccessed(memoryIDs: brainMatches.map(\.id), storagePath: storagePath)
             if primaryModel != selectedModel {
                 selectedChatModel = primaryModel
                 chatLines.append(
@@ -977,6 +1008,7 @@ final class WorkspaceModel: ObservableObject {
                 )
             }
             chatLines.append(.init(role: "RoachClaw", text: response.isEmpty ? "No content returned." : response))
+            rememberRoachClawExchange(prompt: trimmedPrompt, response: response, model: primaryModel)
             statusLine = "Prompt complete."
         } catch {
             let fallbackModel = preferredCloudChatModel(excluding: primaryModel)
@@ -986,9 +1018,10 @@ final class WorkspaceModel: ObservableObject {
                     let fallbackResponse = try await ManagedAppRuntimeBridge.shared.sendChat(
                         using: currentConfig,
                         model: fallbackModel,
-                        prompt: trimmedPrompt,
+                        prompt: composedRoachBrainPrompt(from: trimmedPrompt, matches: brainMatches, mode: "RoachClaw workbench"),
                         timeout: 45
                     )
+                    try? RoachBrainStore.markAccessed(memoryIDs: brainMatches.map(\.id), storagePath: storagePath)
                     selectedChatModel = fallbackModel
                     chatLines.append(
                         .init(
@@ -1002,6 +1035,7 @@ final class WorkspaceModel: ObservableObject {
                             text: fallbackResponse.isEmpty ? "No content returned." : fallbackResponse
                         )
                     )
+                    rememberRoachClawExchange(prompt: trimmedPrompt, response: fallbackResponse, model: fallbackModel)
                     statusLine = "Prompt complete."
                     isSendingPrompt = false
                     return
@@ -1045,6 +1079,7 @@ final class WorkspaceModel: ObservableObject {
         }
 
         let selectedModel = resolvedChatModel()
+        let brainMatches = roachBrainContextMatches(for: trimmedPrompt, tags: ["dev", "assist"])
         let preferredCloudModel = preferredCloudChatModel(excluding: selectedModel)
         let shouldPreferCloudWarmupLane =
             snapshot?.roachClaw.ready != true &&
@@ -1054,22 +1089,61 @@ final class WorkspaceModel: ObservableObject {
         let primaryTimeout: TimeInterval = isCloudModel(primaryModel) ? 45 : 30
 
         do {
-            return try await ManagedAppRuntimeBridge.shared.sendChat(
+            let response = try await ManagedAppRuntimeBridge.shared.sendChat(
                 using: currentConfig,
                 model: primaryModel,
-                prompt: trimmedPrompt,
+                prompt: composedRoachBrainPrompt(from: trimmedPrompt, matches: brainMatches, mode: "Dev Studio assist"),
                 timeout: primaryTimeout
             )
+            try? RoachBrainStore.markAccessed(memoryIDs: brainMatches.map(\.id), storagePath: storagePath)
+            rememberRoachClawExchange(prompt: trimmedPrompt, response: response, model: primaryModel, extraTags: ["dev", "assist"])
+            return response
         } catch {
             if !isCloudModel(primaryModel), let fallbackModel = preferredCloudChatModel(excluding: primaryModel) {
-                return try await ManagedAppRuntimeBridge.shared.sendChat(
+                let response = try await ManagedAppRuntimeBridge.shared.sendChat(
                     using: currentConfig,
                     model: fallbackModel,
-                    prompt: trimmedPrompt,
+                    prompt: composedRoachBrainPrompt(from: trimmedPrompt, matches: brainMatches, mode: "Dev Studio assist"),
                     timeout: 45
                 )
+                try? RoachBrainStore.markAccessed(memoryIDs: brainMatches.map(\.id), storagePath: storagePath)
+                rememberRoachClawExchange(prompt: trimmedPrompt, response: response, model: fallbackModel, extraTags: ["dev", "assist", "cloud"])
+                return response
             }
             throw error
+        }
+    }
+
+    func saveLatestRoachClawResponseToRoachBrain() {
+        guard
+            let response = chatLines.last(where: { $0.role == "RoachClaw" })?.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            !response.isEmpty
+        else {
+            return
+        }
+
+        let latestPrompt = chatLines.last(where: { $0.role == "User" })?.text ?? promptDraft
+        do {
+            _ = try RoachBrainStore.capture(
+                storagePath: storagePath,
+                title: roachBrainMemoryTitle(from: latestPrompt),
+                body: """
+                Request:
+                \(latestPrompt)
+
+                Response:
+                \(response)
+                """,
+                source: "RoachClaw Workbench",
+                tags: ["roachclaw", "chat", "saved", resolvedChatModel()],
+                pinned: true
+            )
+            refreshRoachBrain()
+            statusLine = "Saved the last RoachClaw response into RoachBrain."
+            errorLine = nil
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "RoachBrain save failed."
         }
     }
 
@@ -1233,11 +1307,33 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    func downloadRemoteZim(_ url: String) async {
+        await runAction("remote-zim-\(url.hashValue)", status: "Queueing knowledge pack.") {
+            _ = try await ManagedAppRuntimeBridge.shared.downloadRemoteZim(
+                using: self.config,
+                url: url
+            )
+        }
+    }
+
+    func downloadRemoteMap(_ url: String) async {
+        await runAction("remote-map-\(url.hashValue)", status: "Queueing map pack.") {
+            _ = try await ManagedAppRuntimeBridge.shared.downloadRemoteMap(
+                using: self.config,
+                url: url
+            )
+        }
+    }
+
     func applyWikipediaSelection() async {
         let optionId = selectedWikipediaOptionId
         await runAction("wikipedia-\(optionId)", status: "Updating Wikipedia selection.") {
             _ = try await ManagedAppRuntimeBridge.shared.selectWikipedia(using: self.config, optionId: optionId)
         }
+    }
+
+    func refreshRoachBrain() {
+        roachBrainMemories = RoachBrainStore.load(storagePath: storagePath)
     }
 
     func queueRoachClawModel(_ modelName: String) async {
@@ -1292,6 +1388,65 @@ final class WorkspaceModel: ObservableObject {
         activeActions.remove(actionID)
     }
 
+    private func roachBrainContextMatches(for prompt: String, tags: [String]) -> [RoachBrainMatch] {
+        refreshRoachBrain()
+        return RoachBrainStore.search(
+            roachBrainMemories,
+            query: prompt,
+            tags: tags + [displayedRoachClawDefaultModel],
+            limit: 4
+        )
+    }
+
+    private func composedRoachBrainPrompt(from prompt: String, matches: [RoachBrainMatch], mode: String) -> String {
+        let contextBlock = RoachBrainStore.contextBlock(for: matches)
+        guard !contextBlock.isEmpty else { return prompt }
+
+        return """
+        You are responding inside \(mode).
+
+        \(contextBlock)
+
+        Use the RoachBrain notes only if they materially help this request.
+
+        User request:
+        \(prompt)
+        """
+    }
+
+    private func rememberRoachClawExchange(
+        prompt: String,
+        response: String,
+        model: String,
+        extraTags: [String] = []
+    ) {
+        do {
+            _ = try RoachBrainStore.capture(
+                storagePath: storagePath,
+                title: roachBrainMemoryTitle(from: prompt),
+                body: """
+                Request:
+                \(prompt)
+
+                Response:
+                \(response)
+                """,
+                source: "RoachClaw Workbench",
+                tags: ["roachclaw", "chat", model] + extraTags
+            )
+            refreshRoachBrain()
+        } catch {
+            errorLine = error.localizedDescription
+        }
+    }
+
+    private func roachBrainMemoryTitle(from prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "RoachClaw exchange" }
+        let compact = trimmed.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return compact.count > 56 ? String(compact.prefix(53)) + "..." : compact
+    }
+
     private func handleInstallContentURL(_ components: URLComponents) async {
         guard setupCompleted else {
             selectedPane = .home
@@ -1336,6 +1491,30 @@ final class WorkspaceModel: ObservableObject {
             }
             selectedPane = .education
             await downloadEducationResource(categorySlug: categorySlug, resourceId: resourceId)
+        case "direct-download":
+            guard let remoteURL = queryValue("url", in: components) else {
+                errorLine = "RoachNet couldn't read the download URL from that App Store link."
+                statusLine = "Install link incomplete."
+                return
+            }
+
+            let fileType = (
+                queryValue("filetype", in: components)
+                ?? queryValue("resourceType", in: components)
+                ?? ""
+            ).lowercased()
+
+            switch fileType {
+            case "zim", "knowledge", "education":
+                selectedPane = .education
+                await downloadRemoteZim(remoteURL)
+            case "map", "pmtiles":
+                selectedPane = .maps
+                await downloadRemoteMap(remoteURL)
+            default:
+                errorLine = "RoachNet couldn't tell what kind of content that App Store link should install."
+                statusLine = "Install link incomplete."
+            }
         case "wikipedia-option":
             guard let optionId = queryValue("option", in: components) ?? queryValue("optionId", in: components) else {
                 errorLine = "RoachNet couldn't tell which Wikipedia pack to install."
@@ -2747,60 +2926,132 @@ private struct RootWorkspaceView: View {
         let availableServices = serviceCatalogServices.filter { !($0.installed ?? false) }
 
         return VStack(alignment: .leading, spacing: 18) {
-            RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 16) {
-                    RoachSectionHeader(
-                        "Home",
-                        title: "Offline command grid for maps, archives, local AI, and field ops.",
-                        detail: "RoachNet keeps your maps, archives, and local AI online when everything else drops."
-                    )
+            RoachSpotlightPanel(accent: RoachPalette.magenta) {
+                VStack(alignment: .leading, spacing: 18) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 18) {
+                            HStack(alignment: .top, spacing: 16) {
+                                RoachModuleMark(
+                                    systemName: WorkspacePane.home.icon,
+                                    size: 56,
+                                    isSelected: true,
+                                    glow: true
+                                )
 
-                    Text("Run field-ready tools, browse offline references, manage local models, and keep your day-to-day workflows moving without depending on an external network.")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                                RoachSectionHeader(
+                                    "Home",
+                                    title: "One local control center for maps, models, and the next move.",
+                                    detail: "Use the command grid, pull the detached palette with \(RoachNetGlobalHotKey.hint), and keep the machine pointed at the right lane."
+                                )
+                            }
 
-                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                        RoachInfoPill(title: "Offline First", value: "Maps, Docs, AI")
-                        RoachInfoPill(title: "Runtime", value: roachClaw?.preferredMode ?? hardware?.recommendedRuntime ?? "native_local")
-                        RoachInfoPill(title: "Default Model", value: model.displayedRoachClawDefaultModel)
+                            Spacer(minLength: 16)
+
+                            HStack(spacing: 12) {
+                                Button("Open Dev") {
+                                    model.selectedPane = .dev
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+
+                                Button("RoachClaw") {
+                                    model.selectedPane = .roachClaw
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Maps") {
+                                    model.selectedPane = .maps
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .top, spacing: 16) {
+                                RoachModuleMark(
+                                    systemName: WorkspacePane.home.icon,
+                                    size: 52,
+                                    isSelected: true,
+                                    glow: true
+                                )
+
+                                RoachSectionHeader(
+                                    "Home",
+                                    title: "One local control center for maps, models, and the next move.",
+                                    detail: "Use the command grid, pull the detached palette with \(RoachNetGlobalHotKey.hint), and keep the machine pointed at the right lane."
+                                )
+                            }
+
+                            HStack(spacing: 12) {
+                                Button("Open Dev") {
+                                    model.selectedPane = .dev
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+
+                                Button("RoachClaw") {
+                                    model.selectedPane = .roachClaw
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Maps") {
+                                    model.selectedPane = .maps
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+                        }
+                    }
+
+                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
+                        RoachFeatureTile(
+                            "Runtime",
+                            title: roachClaw?.preferredMode ?? hardware?.recommendedRuntime ?? "native_local",
+                            detail: model.snapshot?.internetConnected == true
+                                ? "Network available. RoachNet can pull updates without leaving the local lane."
+                                : "Offline mode is fine. The core shell stays on the machine.",
+                            systemName: "server.rack",
+                            accent: RoachPalette.green
+                        )
+                        RoachFeatureTile(
+                            "AI Lane",
+                            title: model.displayedRoachClawDefaultModel,
+                            detail: roachClaw?.ollama.available == true
+                                ? "Contained Ollama is connected and ready for RoachClaw work."
+                                : "Use AI Control or Easy Setup to finish the local model lane.",
+                            systemName: "sparkles",
+                            accent: RoachPalette.magenta
+                        )
+                        RoachFeatureTile(
+                            "Vault",
+                            title: "\(model.snapshot?.knowledgeFiles.count ?? 0) local files",
+                            detail: "Maps, docs, notes, and archives stay grouped under one storage root.",
+                            systemName: "books.vertical.fill",
+                            accent: RoachPalette.cyan
+                        )
+                        RoachFeatureTile(
+                            "Command Bar",
+                            title: RoachNetGlobalHotKey.hint,
+                            detail: "Surface the detached palette over the desktop instead of opening the whole shell.",
+                            systemName: "command.circle",
+                            accent: RoachPalette.bronze
+                        )
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            RoachTag(model.snapshot?.internetConnected == true ? "Online now" : "Offline mode", accent: model.snapshot?.internetConnected == true ? RoachPalette.green : RoachPalette.warning)
+                            RoachTag("Local-first", accent: RoachPalette.green)
+                            RoachTag("Contained install", accent: RoachPalette.magenta)
+                            RoachTag(URL(fileURLWithPath: model.storagePath).lastPathComponent, accent: RoachPalette.cyan)
+                        }
                     }
                 }
-            }
-
-            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
-                RoachMetricCard(
-                    label: "Network State",
-                    value: model.snapshot?.internetConnected == true ? "Internet Detected" : "Offline Mode",
-                    detail: model.snapshot?.internetConnected == true
-                        ? "RoachNet can fetch updates and content packs."
-                        : "Local tools remain accessible inside the grid."
-                )
-                RoachMetricCard(
-                    label: "AI Runtime",
-                    value: roachClaw?.ollama.available == true ? "Connected" : "Not Linked",
-                    detail: roachClaw?.ollama.available == true
-                        ? "Connected via \(roachClaw?.ollama.source ?? "local") at \(roachClaw?.ollama.baseUrl ?? "configured endpoint")"
-                        : "Use AI Control or Easy Setup to connect a runtime."
-                )
-                RoachMetricCard(
-                    label: "Storage & Archives",
-                    value: "\(model.snapshot?.knowledgeFiles.count ?? 0) Files",
-                    detail: "Maps, ZIM archives, benchmarks, and knowledge files stay on your box."
-                )
-                RoachMetricCard(
-                    label: "Privacy",
-                    value: "Local-First Ops",
-                    detail: "Keep model traffic, content access, and operations close to the machine."
-                )
             }
 
             RoachInsetPanel {
                 VStack(alignment: .leading, spacing: 16) {
                     RoachSectionHeader(
                         "Command Grid",
-                        title: "Everything you need, in one calm place.",
-                        detail: "Launch installed RoachNet services and the core command surfaces from the native shell."
+                        title: "Launch what matters.",
+                        detail: "Installed modules, command surfaces, and the next install lane all stay in one native grid."
                     )
 
                     homeMenuStrip(
@@ -2911,229 +3162,130 @@ private struct RootWorkspaceView: View {
         let activeModelDownloads = model.snapshot?.downloads.filter { $0.filetype == "model" && $0.status != "failed" } ?? []
 
         return VStack(alignment: .leading, spacing: 18) {
-            RoachInsetPanel {
+            RoachSpotlightPanel(accent: RoachPalette.magenta) {
                 VStack(alignment: .leading, spacing: 16) {
-                    responsiveBar {
-                        HStack(alignment: .center, spacing: 16) {
-                            RoachModuleMark(
-                                systemName: WorkspacePane.roachClaw.icon,
-                                assetName: WorkspacePane.roachClaw.assetName,
-                                size: 56,
-                                isSelected: true,
-                                glow: true
-                            )
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 18) {
+                            HStack(alignment: .center, spacing: 16) {
+                                RoachModuleMark(
+                                    systemName: WorkspacePane.roachClaw.icon,
+                                    assetName: WorkspacePane.roachClaw.assetName,
+                                    size: 56,
+                                    isSelected: true,
+                                    glow: true
+                                )
 
-                            RoachSectionHeader(
-                                "RoachClaw",
-                                title: "Local AI, aligned.",
-                                detail: "A contained local lane first, with a cloud fallback for first boot and room to scale later."
-                            )
-                        }
-                    } actions: {
-                        Button("Open AI Control") {
-                            Task { await model.openRoute("/settings/ai", title: "AI Control") }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-                        Button("Model Store") {
-                            Task { await model.openRoute("/settings/models", title: "Model Store") }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-                        Button(model.isApplyingDefaults ? "Saving..." : "Apply Defaults") {
-                            Task { await model.applyRoachClawDefaults() }
-                        }
-                        .buttonStyle(RoachPrimaryButtonStyle())
-                        .disabled(model.isApplyingDefaults || model.snapshot == nil)
-                    }
+                                RoachSectionHeader(
+                                    "RoachClaw",
+                                    title: "Local AI, wired for the machine you are on.",
+                                    detail: "Run the contained local lane first, keep cloud optional, and let RoachBrain pull the useful context back in when it matters."
+                                )
+                            }
 
-                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                        RoachInfoPill(title: "Ollama", value: providerValue(providers["ollama"]))
-                        RoachInfoPill(title: "OpenClaw", value: providerValue(providers["openclaw"]))
-                        RoachInfoPill(title: "Workspace", value: workspaceValue(roachClaw?.workspacePath))
-                        RoachInfoPill(
-                            title: "Route",
-                            value: model.config.distributedInferenceBackend == "exo" ? "exo" : "single-machine"
-                        )
-                    }
+                            Spacer(minLength: 16)
 
-                    if let openclaw = providers["openclaw"], !openclaw.available {
-                            Text("OpenClaw isn’t running yet. RoachNet can still use local Ollama while the agent runtime catches up.")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                    } else {
-                        Text("RoachClaw stays inside this RoachNet workspace by default, so your global OpenClaw setup stays separate unless you choose to import it later.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
-                    }
-                }
-            }
-
-            RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 14) {
-                    responsiveBar {
-                        RoachSectionHeader(
-                            "Routing",
-                            title: "Keep one machine fast. Add more only when you mean it.",
-                            detail: "exo stays optional. Leave it off for the cleanest single-machine path, or point it at a cluster when you want distributed inference."
-                        )
-                    } actions: {
-                        Button("Save Route") {
-                            Task { await model.saveInferenceRoutingSettings() }
-                        }
-                        .buttonStyle(RoachPrimaryButtonStyle())
-                    }
-
-                    Picker("Inference Route", selection: $model.config.distributedInferenceBackend) {
-                        Text("Disabled").tag("disabled")
-                        Text("Exo").tag("exo")
-                    }
-                    .pickerStyle(.segmented)
-
-                    if model.config.distributedInferenceBackend == "exo" {
-                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                            RoachInlineField(
-                                title: "exo Base URL",
-                                value: $model.config.exoBaseUrl,
-                                placeholder: "http://127.0.0.1:52415"
-                            )
-                            RoachInlineField(
-                                title: "exo Model ID",
-                                value: $model.config.exoModelId,
-                                placeholder: "llama-3.2-3b"
-                            )
-                        }
-                    }
-                }
-            }
-
-            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
-                RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        RoachKicker("Models")
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Pick the first lane on purpose.")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(RoachPalette.text)
-                            Text("RoachNet can queue the recommended local model for this machine, or keep the first prompt fast by aiming at a cloud lane while the contained local path warms up.")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], alignment: .leading, spacing: 10) {
-                                Button("Quickstart Local") {
-                                    model.config.roachClawDefaultModel = recommendedQuickstartModel
-                                    model.selectedChatModel = recommendedQuickstartModel
-                                    Task { await model.applyRoachClawDefaults() }
+                            HStack(spacing: 12) {
+                                Button("AI Control") {
+                                    Task { await model.openRoute("/settings/ai", title: "AI Control") }
                                 }
-                                .buttonStyle(RoachPrimaryButtonStyle())
-                                .disabled(model.isApplyingDefaults)
+                                .buttonStyle(RoachSecondaryButtonStyle())
 
-                                if let cloudModel = cloudModels.first {
-                                    Button("Use Cloud First") {
-                                        model.selectedChatModel = cloudModel
-                                    }
-                                    .buttonStyle(RoachSecondaryButtonStyle())
-                                }
-
-                                Button("Open Model Store") {
+                                Button("Model Store") {
                                     Task { await model.openRoute("/settings/models", title: "Model Store") }
                                 }
                                 .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button(model.isApplyingDefaults ? "Saving..." : "Apply Defaults") {
+                                    Task { await model.applyRoachClawDefaults() }
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+                                .disabled(model.isApplyingDefaults || model.snapshot == nil)
                             }
                         }
-                        Text(model.recommendedLocalModelSummary)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
-                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 10) {
-                            RoachInfoPill(
-                                title: "Default",
-                                value: model.displayedRoachClawDefaultModel
-                            )
-                        RoachInfoPill(
-                            title: "Cloud Lane",
-                            value: model.hasCloudChatFallback ? "Ready" : "Not installed"
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(alignment: .center, spacing: 16) {
+                                RoachModuleMark(
+                                    systemName: WorkspacePane.roachClaw.icon,
+                                    assetName: WorkspacePane.roachClaw.assetName,
+                                    size: 52,
+                                    isSelected: true,
+                                    glow: true
+                                )
+
+                                RoachSectionHeader(
+                                    "RoachClaw",
+                                    title: "Local AI, wired for the machine you are on.",
+                                    detail: "Run the contained local lane first, keep cloud optional, and let RoachBrain pull the useful context back in when it matters."
+                                )
+                            }
+
+                            HStack(spacing: 12) {
+                                Button("AI Control") {
+                                    Task { await model.openRoute("/settings/ai", title: "AI Control") }
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Model Store") {
+                                    Task { await model.openRoute("/settings/models", title: "Model Store") }
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button(model.isApplyingDefaults ? "Saving..." : "Apply Defaults") {
+                                    Task { await model.applyRoachClawDefaults() }
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+                                .disabled(model.isApplyingDefaults || model.snapshot == nil)
+                            }
+                        }
+                    }
+
+                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
+                        RoachFeatureTile(
+                            "Ollama",
+                            title: providerValue(providers["ollama"]),
+                            detail: "Contained model lane inside this RoachNet install.",
+                            systemName: "sparkles",
+                            accent: RoachPalette.green
+                        )
+                        RoachFeatureTile(
+                            "OpenClaw",
+                            title: providerValue(providers["openclaw"]),
+                            detail: "Agent runtime for the local workbench and tool lane.",
+                            systemName: "bolt.horizontal.circle",
+                            accent: RoachPalette.magenta
+                        )
+                        RoachFeatureTile(
+                            "Workspace",
+                            title: workspaceValue(roachClaw?.workspacePath),
+                            detail: "RoachClaw stays contained unless you choose to import an external lane.",
+                            systemName: "shippingbox.fill",
+                            accent: RoachPalette.cyan
+                        )
+                        RoachFeatureTile(
+                            "RoachBrain",
+                            title: "\(model.roachBrainMemories.count) memories",
+                            detail: model.roachBrainPinnedCount > 0
+                                ? "\(model.roachBrainPinnedCount) pinned and ready for retrieval."
+                                : "Recent prompts and replies stay searchable locally.",
+                            systemName: "brain.head.profile",
+                            accent: RoachPalette.bronze
                         )
                     }
-                    if !activeModelDownloads.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            RoachKicker("Staging")
-                            Text("RoachNet is downloading the first contained local model now, so the RoachClaw lane will come online without borrowing a host Ollama install.")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                            downloadsPanel(title: "Local Model Queue", jobs: activeModelDownloads)
-                        }
-                    }
-                    if !model.recommendedLocalModels.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            RoachKicker("Recommended")
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
-                                ForEach(model.recommendedLocalModels, id: \.self) { modelName in
-                                        RoachTag(
-                                            modelName,
-                                            accent: modelName == model.config.roachClawDefaultModel ? RoachPalette.green : RoachPalette.magenta
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if let installed = roachClaw?.installedModels, !installed.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                RoachKicker("Installed")
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
-                                    ForEach(installed.prefix(8), id: \.self) { modelName in
-                                        RoachTag(
-                                            modelName,
-                                            accent: modelName == roachClaw?.resolvedDefaultModel ? RoachPalette.green : RoachPalette.muted
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            Text(
-                                model.hasCloudChatFallback
-                                    ? "No local models are ready yet. RoachNet can answer through the cloud lane first while it stages the contained default model in the background."
-                                    : "No local models are detected yet. RoachNet will stage the quickstart model first, then you can move up to the machine-sized recommendation."
-                            )
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(RoachPalette.muted)
-                        }
-                        if !cloudModels.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                RoachKicker("Cloud")
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
-                                    ForEach(cloudModels.prefix(4), id: \.self) { modelName in
-                                        RoachTag(
-                                            modelName,
-                                            accent: modelName == model.selectedChatModel ? RoachPalette.cyan : RoachPalette.cyan.opacity(0.86)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
-                RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        RoachKicker("Skills")
-                        if let skills = model.snapshot?.installedSkills, !skills.isEmpty {
-                            ForEach(skills.prefix(8)) { skill in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(skill.name)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Text(skill.slug)
-                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(RoachPalette.muted)
-                                }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            RoachTag(model.config.distributedInferenceBackend == "exo" ? "exo route" : "single-machine", accent: model.config.distributedInferenceBackend == "exo" ? RoachPalette.magenta : RoachPalette.green)
+                            RoachTag(model.displayedRoachClawDefaultModel, accent: RoachPalette.cyan)
+                            if model.hasCloudChatFallback {
+                                RoachTag("Cloud lane ready", accent: RoachPalette.cyan)
                             }
-                        } else {
-                            Text("No OpenClaw skills installed yet.")
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(RoachPalette.muted)
                         }
                     }
                 }
             }
 
-            RoachInsetPanel {
+            RoachSpotlightPanel(accent: RoachPalette.green) {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         RoachKicker("Workbench")
@@ -3160,10 +3312,60 @@ private struct RootWorkspaceView: View {
                         .menuStyle(.borderlessButton)
                     }
 
-                    if model.hasCloudChatFallback {
-                        Text("Cloud-backed Ollama models are installed, so RoachNet can fall back there if the local lane stalls.")
+                    Text(model.hasCloudChatFallback
+                        ? "Cloud-backed models are ready if the local lane needs a fast warmup."
+                        : "The contained local lane stays primary. Add a cloud lane only when you want it.")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) {
+                            Button("Quickstart Local") {
+                                model.config.roachClawDefaultModel = recommendedQuickstartModel
+                                model.selectedChatModel = recommendedQuickstartModel
+                                Task { await model.applyRoachClawDefaults() }
+                            }
+                            .buttonStyle(RoachPrimaryButtonStyle())
+                            .disabled(model.isApplyingDefaults)
+
+                            if let cloudModel = cloudModels.first {
+                                Button("Use Cloud First") {
+                                    model.selectedChatModel = cloudModel
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+
+                            Button("Save to RoachBrain") {
+                                model.saveLatestRoachClawResponseToRoachBrain()
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                            .disabled(!model.chatLines.contains(where: { $0.role == "RoachClaw" }))
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Button("Quickstart Local") {
+                                model.config.roachClawDefaultModel = recommendedQuickstartModel
+                                model.selectedChatModel = recommendedQuickstartModel
+                                Task { await model.applyRoachClawDefaults() }
+                            }
+                            .buttonStyle(RoachPrimaryButtonStyle())
+                            .disabled(model.isApplyingDefaults)
+
+                            HStack(spacing: 12) {
+                                if let cloudModel = cloudModels.first {
+                                    Button("Use Cloud First") {
+                                        model.selectedChatModel = cloudModel
+                                    }
+                                    .buttonStyle(RoachSecondaryButtonStyle())
+                                }
+
+                                Button("Save to RoachBrain") {
+                                    model.saveLatestRoachClawResponseToRoachBrain()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                                .disabled(!model.chatLines.contains(where: { $0.role == "RoachClaw" }))
+                            }
+                        }
                     }
 
                     ForEach(Array(model.chatLines.suffix(6))) { line in
@@ -3192,6 +3394,172 @@ private struct RootWorkspaceView: View {
                         }
                         .buttonStyle(RoachPrimaryButtonStyle())
                         .disabled(model.isSendingPrompt || chatModels.isEmpty)
+                    }
+                }
+            }
+
+            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            RoachKicker("RoachBrain")
+                            Spacer()
+                            Text("\(model.roachBrainMemories.count)")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(RoachPalette.muted)
+                        }
+
+                        TextField("Search local memory", text: $model.roachBrainQuery)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(RoachPalette.text)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(RoachPalette.panelRaised.opacity(0.64))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(RoachPalette.border, lineWidth: 1)
+                            )
+
+                        if model.roachBrainVisibleMatches.isEmpty {
+                            Text("Prompt RoachClaw a few times or save a reply to start building RoachBrain memory.")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(RoachPalette.muted)
+                        } else {
+                            ForEach(model.roachBrainVisibleMatches.prefix(4)) { match in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(match.memory.title)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(RoachPalette.text)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        if match.memory.pinned {
+                                            RoachTag("Pinned", accent: RoachPalette.magenta)
+                                        }
+                                    }
+
+                                    Text(match.memory.summary)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(RoachPalette.muted)
+                                        .fixedSize(horizontal: false, vertical: true)
+
+                                    if !match.memory.tags.isEmpty {
+                                        ScrollView(.horizontal, showsIndicators: false) {
+                                            HStack(spacing: 6) {
+                                                ForEach(match.memory.tags.prefix(4), id: \.self) { tag in
+                                                    RoachTag(tag, accent: RoachPalette.cyan)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .fill(Color.black.opacity(0.18))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(RoachPalette.border, lineWidth: 1)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        RoachKicker("Model Lane")
+                        Text("Pick the first lane on purpose.")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(RoachPalette.text)
+                        Text(model.recommendedLocalModelSummary)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(RoachPalette.muted)
+
+                        if !activeModelDownloads.isEmpty {
+                            downloadsPanel(title: "Local Model Queue", jobs: activeModelDownloads)
+                        }
+
+                        if !model.recommendedLocalModels.isEmpty {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
+                                ForEach(model.recommendedLocalModels, id: \.self) { modelName in
+                                    RoachTag(
+                                        modelName,
+                                        accent: modelName == model.config.roachClawDefaultModel ? RoachPalette.green : RoachPalette.magenta
+                                    )
+                                }
+                            }
+                        }
+
+                        if let installed = roachClaw?.installedModels, !installed.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                RoachKicker("Installed")
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
+                                    ForEach(installed.prefix(8), id: \.self) { modelName in
+                                        RoachTag(
+                                            modelName,
+                                            accent: modelName == roachClaw?.resolvedDefaultModel ? RoachPalette.green : RoachPalette.muted
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 14) {
+                        RoachKicker("Routing")
+                        Text("Keep one machine fast. Add exo only when you actually want the cluster lane.")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(RoachPalette.text)
+
+                        Picker("Inference Route", selection: $model.config.distributedInferenceBackend) {
+                            Text("Disabled").tag("disabled")
+                            Text("Exo").tag("exo")
+                        }
+                        .pickerStyle(.segmented)
+
+                        if model.config.distributedInferenceBackend == "exo" {
+                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
+                                RoachInlineField(
+                                    title: "exo Base URL",
+                                    value: $model.config.exoBaseUrl,
+                                    placeholder: "http://127.0.0.1:52415"
+                                )
+                                RoachInlineField(
+                                    title: "exo Model ID",
+                                    value: $model.config.exoModelId,
+                                    placeholder: "llama-3.2-3b"
+                                )
+                            }
+                        }
+
+                        Button("Save Route") {
+                            Task { await model.saveInferenceRoutingSettings() }
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+
+                        if let skills = model.snapshot?.installedSkills, !skills.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                RoachKicker("Skills")
+                                ForEach(skills.prefix(4)) { skill in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(skill.name)
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(RoachPalette.text)
+                                        Text(skill.slug)
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(RoachPalette.muted)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
