@@ -145,6 +145,7 @@ jobs:
             -r win-x64 `
             -p:Platform=x64 `
             -p:WindowsPackageType=None `
+            -p:UseRidGraph=true `
             -p:EnableMsixTooling=false `
             -p:WindowsAppSDKSelfContained=true `
             -p:SelfContained=true `
@@ -159,6 +160,7 @@ jobs:
             -r win-x64 `
             -p:Platform=x64 `
             -p:WindowsPackageType=None `
+            -p:UseRidGraph=true `
             -p:EnableMsixTooling=false `
             -p:WindowsAppSDKSelfContained=true `
             -p:SelfContained=true `
