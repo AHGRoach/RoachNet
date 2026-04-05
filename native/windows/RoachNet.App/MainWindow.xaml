@@ -36,26 +36,34 @@
                     </StackPanel>
                 </Border>
 
-                <UniformGrid Columns="3">
-                    <Border Margin="0,0,12,0" Padding="16" Background="#171C1E" CornerRadius="22">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Padding="16" Background="#171C1E" CornerRadius="22">
                         <StackPanel Spacing="8">
                             <TextBlock Text="MODEL" FontSize="11" Foreground="#93A0A5" />
                             <TextBlock Text="qwen2.5-coder:7b" FontSize="18" FontWeight="SemiBold" Foreground="#F4F7F8" />
                         </StackPanel>
                     </Border>
-                    <Border Margin="0,0,12,0" Padding="16" Background="#171C1E" CornerRadius="22">
+
+                    <Border Grid.Column="1" Padding="16" Background="#171C1E" CornerRadius="22">
                         <StackPanel Spacing="8">
                             <TextBlock Text="RUNTIME" FontSize="11" Foreground="#93A0A5" />
                             <TextBlock Text="Healthy" FontSize="18" FontWeight="SemiBold" Foreground="#F4F7F8" />
                         </StackPanel>
                     </Border>
-                    <Border Padding="16" Background="#171C1E" CornerRadius="22">
+
+                    <Border Grid.Column="2" Padding="16" Background="#171C1E" CornerRadius="22">
                         <StackPanel Spacing="8">
                             <TextBlock Text="MODE" FontSize="11" Foreground="#93A0A5" />
                             <TextBlock Text="Native" FontSize="18" FontWeight="SemiBold" Foreground="#F4F7F8" />
                         </StackPanel>
                     </Border>
-                </UniformGrid>
+                </Grid>
             </StackPanel>
         </ScrollViewer>
     </Grid>
