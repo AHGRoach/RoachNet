@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
     <UseRidGraph>true</UseRidGraph>
     <EnableMsixTooling>false</EnableMsixTooling>
   </PropertyGroup>
