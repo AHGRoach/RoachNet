@@ -148,7 +148,6 @@ public sealed partial class MainWindow : Window
         {
             Text = text,
             FontSize = fontSize,
-            LetterSpacing = letterSpacing,
             FontWeight = weight,
             Foreground = foreground,
             Margin = new Thickness(0, 0, 0, 8)
