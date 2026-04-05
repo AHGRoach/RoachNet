@@ -8,4 +8,8 @@
     <UseRidGraph>true</UseRidGraph>
     <EnableMsixTooling>false</EnableMsixTooling>
   </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' and '$(RuntimeIdentifierOverride)' != ''">
+    <RuntimeIdentifier>$(RuntimeIdentifierOverride)</RuntimeIdentifier>
+  </PropertyGroup>
 </Project>
