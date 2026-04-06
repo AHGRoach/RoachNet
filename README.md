@@ -1,89 +1,76 @@
 # RoachNet
 
-Your stuff, still here when the internet isn't.
+Local-first desktop command center.
 
-RoachNet is a local-first command center for offline maps, local AI, education, saved websites, and your own notes. It keeps the important parts of your workflow on your machine, so bad Wi-Fi, outages, and cloud slowdowns do not take the rest of your day down with them.
+RoachNet keeps maps, models, dev tools, and notes in one contained workspace instead of smearing them across the machine or leaving them in a stack of tabs.
 
 [roachnet.org](https://roachnet.org)  
-[GitHub Releases](https://github.com/AHGRoach/RoachNet/releases)
-[Support AHG Records LLC and RoachNet](https://roachnet.org/#support)
+[RoachNet Apps](https://apps.roachnet.org)  
+[API Docs](https://roachnet.org/api/)  
+[GitHub Releases](https://github.com/AHGRoach/RoachNet/releases)  
+[RoachNet iOS](https://roachnet.org/iOS/)  
 [Public Website Source](https://github.com/AHGRoach/roachnet-org)
 
-## What You Get
+## What It Ships With
 
-- `Command Deck`
-  One calm place for runtime health, maps, education, archives, and local AI.
+- `Home`
+  Command bar, launch tiles, runtime health, and the first surface you land in after setup.
 - `RoachClaw`
-  RoachNet's local AI path, built around Ollama and OpenClaw with a fast local default model.
-- `Offline Maps`
-  Curated map collections and route-aware surfaces that stay available when the network drops.
-- `Education`
-  Wikipedia and Khan Academy-style offline learning content, grouped in one place.
-- `Archives`
-  Saved websites and captured references for offline browsing.
-- `Contained Install`
-  App, runtime data, workspace, and support services stay grouped near the RoachNet install root instead of being smeared across the OS.
+  Local AI wired through Ollama and OpenClaw, with contained model lanes and an upgrade path that stays visible.
+- `Dev`
+  Native project lane with shell access, inline assist, secrets plumbing, and RoachClaw close by.
+- `Maps & Vault`
+  Routes, references, saved notes, and offline material grouped into one shelf.
+- `RoachTail`
+  Secure device pairing between the desktop lane and RoachNetiOS.
+- `Contained install`
+  App, runtime, models, workspace, and support services stay grouped near the RoachNet root.
 
-## Download
+## Install
 
 Start with `RoachNet Setup`.
 
-The installer checks the machine, prepares the local runtime, aligns RoachClaw, and then hands off into the main RoachNet app.
+The setup app checks the machine, stages the contained runtime, gives Docker as an explicit opt-in, and hands off into the native shell.
 
 - Website: [roachnet.org](https://roachnet.org)
-- macOS installer: [RoachNet-Setup-macOS.dmg](https://roachnet.org/downloads/RoachNet-Setup-macOS.dmg)
-- Releases: [github.com/AHGRoach/RoachNet/releases](https://github.com/AHGRoach/RoachNet/releases)
+- macOS installer: [RoachNet-Setup-macOS.dmg](https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-macOS.dmg)
+- Windows 11 beta: [RoachNet-Setup-windows-x64-beta.exe](https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-windows-x64-beta.exe)
+- Release feed: [github.com/AHGRoach/RoachNet/releases](https://github.com/AHGRoach/RoachNet/releases)
 
 ## Support
 
-GitHub does not allow the hosted PayPal button script that powers the support section on [roachnet.org](https://roachnet.org/#support), so the repo uses direct support links instead.
+GitHub does not host the PayPal button script used on the public site, so the repo keeps direct support links here.
 
 - [Donate to AHG Records LLC](https://www.paypal.com/cgi-bin/webscr?business=lesherist%40gmail.com&cmd=_donations&currency_code=USD&item_name=Donation+to+AHG+Records&return=https%3A%2F%2Fahgrecords.com%2Fhome)
 - [Support RoachNet development](https://www.paypal.com/ncp/payment/ZV8RL9DWQXHGE)
 
-## Current Product Direction
-
-RoachNet is moving toward fully native desktop apps:
+## Platform Status
 
 - `macOS Apple Silicon`
-  SwiftUI/AppKit shell and native installer flow
+  Current native release lane with the contained setup flow.
 - `Windows 11 x64`
-  WinUI 3 scaffold in progress
+  Native beta lane with setup and shell scaffolding.
 - `Linux`
-  GTK4/libadwaita scaffold in progress
-
-The current shipping focus is the macOS-native path, with the website and GitHub release flow centered on the native installer.
-
-## RoachClaw
-
-RoachClaw is the default local AI lane inside RoachNet.
-
-It brings Ollama and OpenClaw together so the app can:
-
-- detect local model availability
-- save a machine-appropriate default model
-- keep local chat working even when OpenClaw's agent runtime is not yet online
-- grow into agent workflows later without forcing remote providers first
-
-For this release, RoachNet prefers `qwen2.5-coder:7b` as the default local RoachClaw model because it is a better fit for everyday work plus coding on this setup than the heavier defaults we were previously surfacing.
+  Runtime and packaging work still moving toward a native desktop lane.
 
 ## Repo Layout
 
 - [`admin/`](./admin)
-  Local API, web admin, RoachClaw services, maps, archives, and content plumbing
+  Local API, runtime services, maps, archives, content installs, and RoachClaw plumbing.
 - [`native/macos/`](./native/macos)
-  Native macOS app and installer
+  SwiftUI/AppKit shell, setup app, and desktop runtime bridge.
+- [`native/windows/`](./native/windows)
+  Windows beta shell and setup surfaces.
 - [`scripts/`](./scripts)
-  Setup, runtime, native bundling, and asset preparation scripts
+  Setup, runtime, packaging, companion, and release automation.
 - [`docs/`](./docs)
-  Architecture notes, evaluations, and rewrite plans
+  Architecture, upstream notes, and rewrite planning.
 
-The public marketing site and Apps storefront now live in the separate
-[`AHGRoach/roachnet-org`](https://github.com/AHGRoach/roachnet-org) repository so the desktop app repo can stay focused on the native product and runtime.
+The public site and Apps storefront live in [`AHGRoach/roachnet-org`](https://github.com/AHGRoach/roachnet-org) so this repo can stay focused on the desktop product and runtime.
 
 ## Local Development
 
-From the repo root:
+Start the source runtime:
 
 ```bash
 npm start
@@ -95,13 +82,13 @@ No-browser boot:
 npm run start:no-browser
 ```
 
-Native macOS app build:
+Build the native macOS packages:
 
 ```bash
 node scripts/build-native-macos-apps.mjs
 ```
 
-Setup backend:
+Run the setup backend:
 
 ```bash
 npm run setup:no-browser
@@ -109,9 +96,7 @@ npm run setup:no-browser
 
 ## Upstream Attribution
 
-RoachNet started from an imported upstream base from [Crosstalk Solutions project-nomad](https://github.com/Crosstalk-Solutions/project-nomad) and is being reshaped into a calmer, product-grade local command center with native installers, local AI, contained runtime management, and a more cohesive desktop UX.
-
-See:
+RoachNet started from an imported upstream base from [Crosstalk Solutions project-nomad](https://github.com/Crosstalk-Solutions/project-nomad) and is being rewritten into a contained local-first desktop product.
 
 - [`docs/UPSTREAM.md`](./docs/UPSTREAM.md)
 - [`docs/NATIVE_REWRITE_PLAN.md`](./docs/NATIVE_REWRITE_PLAN.md)
@@ -119,4 +104,4 @@ See:
 
 ## License
 
-This repository currently carries the upstream Apache 2.0 license from the imported base. Review [`LICENSE`](./LICENSE) and [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) before changing attribution or licensing details.
+This repository still carries the upstream Apache 2.0 license. Review [`LICENSE`](./LICENSE) and [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) before changing attribution or licensing details.
