@@ -34,6 +34,16 @@ The setup app checks the machine, stages the contained runtime, gives Docker as 
 
 The packaged setup lane now ships its own portable embedded Node runtime, so Apple Silicon installs do not assume Homebrew or host-level dylib dependencies just to boot the installer.
 
+There is also a direct Homebrew lane for Apple Silicon Macs:
+
+```bash
+brew tap AHGRoach/roachnet
+brew install --cask roachnet
+open ~/RoachNet/app/RoachNet.app
+```
+
+That path skips `RoachNet Setup.app` and writes the contained RoachNet config automatically so the native app lands straight in `~/RoachNet/app`.
+
 - Website: [roachnet.org](https://roachnet.org)
 - macOS installer: [RoachNet-Setup-macOS.dmg](https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-macOS.dmg)
 - Windows 11 beta: [RoachNet-Setup-windows-x64-beta.exe](https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-windows-x64-beta.exe)
