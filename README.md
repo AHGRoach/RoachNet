@@ -44,6 +44,8 @@ open ~/RoachNet/app/RoachNet.app
 
 That path skips `RoachNet Setup.app` and writes the contained RoachNet config automatically so the native app lands straight in `~/RoachNet/app`.
 
+The direct Homebrew lane stages its compiled runtime under `~/RoachNet/storage/state/runtime-cache`, re-signs native runtime artifacts on macOS, and keeps the runtime/API surface aligned with the main native app once boot completes.
+
 - Website: [roachnet.org](https://roachnet.org)
 - macOS installer: [RoachNet-Setup-macOS.dmg](https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-macOS.dmg)
 - Windows 11 beta: [RoachNet-Setup-windows-x64-beta.exe](https://github.com/AHGRoach/RoachNet/releases/latest/download/RoachNet-Setup-windows-x64-beta.exe)

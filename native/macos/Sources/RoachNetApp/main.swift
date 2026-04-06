@@ -831,6 +831,19 @@ final class WorkspaceModel: ObservableObject {
         refreshRoachBrain()
     }
 
+    func dismissPendingLaunchIntro() {
+        guard config.pendingLaunchIntro else { return }
+
+        do {
+            var updatedConfig = config
+            updatedConfig.pendingLaunchIntro = false
+            try RoachNetRepositoryLocator.writeConfig(updatedConfig)
+            config = updatedConfig
+        } catch {
+            errorLine = error.localizedDescription
+        }
+    }
+
     deinit {
         refreshLoopTask?.cancel()
     }
@@ -2279,11 +2292,7 @@ private struct LaunchGuideSheet: View {
             }
         }
         .onAppear {
-            if playbackController.hasVideo {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    playbackController.presentVideoWindow()
-                }
-            }
+            playbackController.pause()
         }
         .onDisappear {
             playbackController.dismissVideoWindow()
@@ -2396,6 +2405,7 @@ private struct RootWorkspaceView: View {
                 if showLaunchGuide {
                     LaunchGuideSheet {
                         hasSeenLaunchGuide = true
+                        model.dismissPendingLaunchIntro()
                         showLaunchGuide = false
                     }
                     .transition(.opacity)
@@ -2423,7 +2433,7 @@ private struct RootWorkspaceView: View {
             await model.refreshRuntimeState()
             model.startPolling()
 
-            if model.setupCompleted && !hasSeenLaunchGuide {
+            if model.setupCompleted && model.config.pendingLaunchIntro && !hasSeenLaunchGuide {
                 try? await Task.sleep(for: .milliseconds(450))
                 showLaunchGuide = true
             }

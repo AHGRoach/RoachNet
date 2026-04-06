@@ -4,7 +4,6 @@ import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -31,7 +30,6 @@ const storageLogsDir = path.join(adminDir, 'storage', 'logs')
 const serverLogPath = path.join(storageLogsDir, 'roachnet-server.log')
 const launcherDebugLogPath = path.join(storageLogsDir, 'roachnet-launcher-debug.log')
 const runtimeProcessInfoPath = path.join(storageLogsDir, 'roachnet-runtime-processes.json')
-const runtimeCacheRoot = path.join(tmpdir(), 'roachnet-runtime-cache')
 const managementComposePath = path.join(repoRoot, 'ops', 'roachnet-management.compose.yml')
 
 const SERVER_BOOT_TIMEOUT_MS = 300_000
@@ -40,6 +38,8 @@ const HEALTH_POLL_INTERVAL_MS = 1_500
 const HEALTH_REQUEST_TIMEOUT_MS = 3_000
 const BUILD_RUNTIME_METADATA_FILENAME = '.roachnet-runtime.json'
 const BUILD_RUNTIME_DEPENDENCY_STAMP_FILENAME = '.roachnet-lock-hash'
+const BUILD_RUNTIME_CODESIGN_STAMP_FILENAME = '.roachnet-codesign-stamp'
+const BUILD_RUNTIME_CODESIGN_VERSION = '1'
 const BUILD_RUNTIME_MYSQL_PORT = '33306'
 const BUILD_RUNTIME_REDIS_PORT = '36379'
 const BUILD_RUNTIME_QDRANT_PORT = '36333'
@@ -319,6 +319,11 @@ function getPersistentStorageRoot() {
   return path.join(adminDir, 'storage')
 }
 
+function getContainedRuntimeCacheRoot(runtimeEnvValues) {
+  const storageRoot = normalizeStorageRoot(runtimeEnvValues?.NOMAD_STORAGE_PATH)
+  return path.join(storageRoot, 'state', 'runtime-cache')
+}
+
 function normalizeStorageRoot(candidatePath) {
   const fallbackRoot = getPersistentStorageRoot()
   const trimmedPath = candidatePath?.trim()
@@ -450,6 +455,89 @@ function getManagedRuntimeSecrets(envValues) {
   return secrets
 }
 
+function collectNativeRuntimeArtifacts(rootPath) {
+  if (!rootPath || !existsSync(rootPath)) {
+    return []
+  }
+
+  const artifacts = []
+  const pending = [rootPath]
+
+  while (pending.length > 0) {
+    const currentPath = pending.pop()
+    const entries = readdirSync(currentPath, { withFileTypes: true })
+
+    for (const entry of entries) {
+      const nextPath = path.join(currentPath, entry.name)
+
+      if (entry.isDirectory()) {
+        pending.push(nextPath)
+        continue
+      }
+
+      if (!entry.isFile()) {
+        continue
+      }
+
+      if (entry.name.endsWith('.node') || entry.name.endsWith('.dylib')) {
+        artifacts.push(nextPath)
+      }
+    }
+  }
+
+  return artifacts
+}
+
+async function stripRuntimeExtendedAttributes(targetPath) {
+  if (process.platform !== 'darwin' || !targetPath || !existsSync(targetPath)) {
+    return
+  }
+
+  for (const attributeName of ['com.apple.quarantine', 'com.apple.provenance']) {
+    try {
+      await runCommand('/usr/bin/xattr', ['-dr', attributeName, targetPath], {
+        cwd: repoRoot,
+        env: process.env,
+      })
+    } catch {
+      // Ignore missing xattrs and keep the contained runtime moving.
+    }
+  }
+}
+
+async function ensureRuntimeArtifactsSigned(runtimeDir, fingerprint) {
+  if (process.platform !== 'darwin' || !runtimeDir || !existsSync(runtimeDir)) {
+    return
+  }
+
+  const stampPath = path.join(runtimeDir, BUILD_RUNTIME_CODESIGN_STAMP_FILENAME)
+  const expectedStamp = `${BUILD_RUNTIME_CODESIGN_VERSION}:${fingerprint.dependencyHash}`
+  const currentStamp = existsSync(stampPath) ? readFileSync(stampPath, 'utf8').trim() : ''
+
+  if (currentStamp === expectedStamp) {
+    return
+  }
+
+  await stripRuntimeExtendedAttributes(runtimeDir)
+
+  const artifacts = collectNativeRuntimeArtifacts(runtimeDir)
+  for (const artifactPath of artifacts) {
+    await runCommand('/usr/bin/codesign', ['--force', '--sign', '-', artifactPath], {
+      cwd: repoRoot,
+      env: process.env,
+    })
+  }
+
+  await runCommand('/usr/bin/xattr', ['-cr', runtimeDir], {
+    cwd: repoRoot,
+    env: process.env,
+  }).catch(() => {
+    // Keep the contained runtime usable even if one artifact rejects a full recursive clear.
+  })
+
+  writeFileSync(stampPath, `${expectedStamp}\n`, 'utf8')
+}
+
 function getRuntimeEnvValues(envValues) {
   const storageRoot = normalizeStorageRoot(
     process.env.NOMAD_STORAGE_PATH?.trim() || envValues.NOMAD_STORAGE_PATH?.trim()
@@ -577,10 +665,10 @@ function wantsContainerlessRuntime(envValues) {
   return ['1', 'true', 'contained', 'containerless', 'local'].includes(rawMode.toLowerCase())
 }
 
-function getBuildRuntimeEnvValues(envValues) {
+function getBuildRuntimeEnvValues(envValues, options = {}) {
   const runtimeValues = getRuntimeEnvValues(envValues)
   const runtimeSecrets = getManagedRuntimeSecrets(envValues)
-  const containerlessMode = wantsContainerlessRuntime(runtimeValues)
+  const containerlessMode = options.forceContainerless || wantsContainerlessRuntime(runtimeValues)
 
   if (containerlessMode) {
     return {
@@ -1322,8 +1410,8 @@ function getBuildRuntimeFingerprint() {
   }
 }
 
-async function prepareBuildRuntimeTarget(envValues) {
-  const runtimeEnvValues = getBuildRuntimeEnvValues(envValues)
+async function prepareBuildRuntimeTarget(envValues, options = {}) {
+  const runtimeEnvValues = getBuildRuntimeEnvValues(envValues, options)
   const fingerprint = getBuildRuntimeFingerprint()
 
   if (!fingerprint) {
@@ -1336,6 +1424,7 @@ async function prepareBuildRuntimeTarget(envValues) {
     signature: fingerprint.signature,
   })
 
+  const runtimeCacheRoot = getContainedRuntimeCacheRoot(runtimeEnvValues)
   const runtimeDir = path.join(runtimeCacheRoot, fingerprint.signature.slice(0, 16))
   const runtimeMetadataPath = path.join(runtimeDir, BUILD_RUNTIME_METADATA_FILENAME)
   const runtimeNodeModulesPath = path.join(runtimeDir, 'node_modules')
@@ -1451,6 +1540,8 @@ async function prepareBuildRuntimeTarget(envValues) {
       runtimeDir,
     })
   }
+
+  await ensureRuntimeArtifactsSigned(runtimeDir, fingerprint)
 
   debugBoot('build-runtime:target-ready', {
     runtimeDir,
@@ -1870,11 +1961,14 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     targetKind: target.kind,
     containerless: useContainerlessRuntime,
   })
+  const buildRuntimeOptions = {
+    forceContainerless: useContainerlessRuntime,
+  }
   const resolvedTarget =
-    target.kind === 'build' ? await prepareBuildRuntimeTarget(envValues) : target
+    target.kind === 'build' ? await prepareBuildRuntimeTarget(envValues, buildRuntimeOptions) : target
   const runtimeEnvValues =
     resolvedTarget?.kind === 'build' || resolvedTarget?.kind === 'source'
-      ? getBuildRuntimeEnvValues(envValues)
+      ? getBuildRuntimeEnvValues(envValues, buildRuntimeOptions)
       : getRuntimeEnvValues(envValues)
 
   if (!resolvedTarget) {
