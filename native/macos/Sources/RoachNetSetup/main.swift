@@ -875,6 +875,20 @@ private struct SetupRootView: View {
                     .toggleStyle(.switch)
                 }
 
+                RoachInsetPanel {
+                    Toggle(isOn: $controller.config.companionEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Enable RoachTail pairing")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(RoachPalette.text)
+                            Text("Keep the private device lane on so iPhone and iPad builds can pair over the companion bridge with a one-time join code.")
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundStyle(RoachPalette.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+
                 if controller.config.useDockerContainerization {
                     SetupNativeButton(title: "Start Runtime Now", role: .secondary, isEnabled: !controller.isBusy) {
                         Task { await controller.startRuntimeAction() }
@@ -923,6 +937,7 @@ private struct SetupRootView: View {
                     RoachInfoPill(title: "Main App", value: controller.setupState?.nativeApp.installed == true ? "Installed" : "Ready")
                     RoachInfoPill(title: "RoachClaw", value: controller.config.installRoachClaw ? "Aligned" : "Skipped")
                     RoachInfoPill(title: "Runtime", value: servicesValue)
+                    RoachInfoPill(title: "RoachTail", value: controller.config.companionEnabled ? "Armed" : "Off")
                 }
             }
         }

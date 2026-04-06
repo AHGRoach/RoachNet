@@ -167,6 +167,9 @@ router
   .group(() => {
     router.get('/bootstrap', [CompanionController, 'bootstrap'])
     router.get('/runtime', [CompanionController, 'runtime'])
+    router.get('/roachtail', [CompanionController, 'roachtail'])
+    router.post('/roachtail/pair', [CompanionController, 'pairRoachTail'])
+    router.post('/roachtail/affect', [CompanionController, 'affectRoachTail'])
     router.get('/vault', [CompanionController, 'vault'])
     router.post('/services/affect', [CompanionController, 'affectService'])
     router.get('/chat/sessions', [CompanionController, 'sessionsIndex'])

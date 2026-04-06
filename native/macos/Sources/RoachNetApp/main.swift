@@ -820,6 +820,9 @@ final class WorkspaceModel: ObservableObject {
     var roachBrainPinnedCount: Int {
         roachBrainMemories.filter(\.pinned).count
     }
+    var roachTailActionInFlight: Bool {
+        activeActions.contains { $0.hasPrefix("roachtail-") }
+    }
 
     func refreshConfigOnly() {
         config = RoachNetRepositoryLocator.readConfig()
@@ -1278,6 +1281,47 @@ final class WorkspaceModel: ObservableObject {
                     jobId: job.jobId
                 )
             }
+        }
+    }
+
+    func affectRoachTail(_ action: String) async {
+        let trimmedAction = action.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAction.isEmpty else { return }
+
+        let actionID = "roachtail-\(trimmedAction)"
+        guard !activeActions.contains(actionID) else { return }
+
+        activeActions.insert(actionID)
+        errorLine = nil
+
+        switch trimmedAction {
+        case "enable":
+            statusLine = "Arming RoachTail."
+        case "disable":
+            statusLine = "Disabling RoachTail."
+        case "refresh-join-code":
+            statusLine = "Refreshing the RoachTail join code."
+        case "clear-peers":
+            statusLine = "Clearing linked RoachTail peers."
+        default:
+            statusLine = "Updating RoachTail."
+        }
+
+        defer {
+            activeActions.remove(actionID)
+        }
+
+        do {
+            let result = try await ManagedAppRuntimeBridge.shared.affectRoachTail(
+                using: config,
+                action: trimmedAction
+            )
+            try? await Task.sleep(for: .milliseconds(250))
+            snapshot = try await ManagedAppRuntimeBridge.shared.fetchSnapshot(using: config)
+            statusLine = result.message ?? "RoachTail updated."
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "RoachTail update failed."
         }
     }
 
@@ -3823,6 +3867,7 @@ private struct RootWorkspaceView: View {
     private var runtime: some View {
         let system = model.snapshot?.systemInfo
         let serverInfo = model.snapshot?.serverInfo
+        let roachTail = model.snapshot?.roachTail
         let failedDownloads = (model.snapshot?.downloads ?? []).filter { $0.status == "failed" }
 
         return VStack(alignment: .leading, spacing: 18) {
@@ -3865,6 +3910,96 @@ private struct RootWorkspaceView: View {
                                 Task { await model.clearFailedDownloads() }
                             }
                             .buttonStyle(RoachSecondaryButtonStyle())
+                        }
+                    }
+                }
+            }
+
+            if let roachTail {
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 16) {
+                        responsiveBar {
+                            RoachSectionHeader(
+                                "RoachTail",
+                                title: roachTail.enabled ? "Private device lane is armed." : "Private device lane is off.",
+                                detail: "Pair iPhone and iPad builds with a one-time code, then keep chat carryover and App installs on the private bridge."
+                            )
+                        } actions: {
+                            Toggle(
+                                isOn: Binding(
+                                    get: { model.snapshot?.roachTail.enabled ?? false },
+                                    set: { nextValue in
+                                        Task {
+                                            await model.affectRoachTail(nextValue ? "enable" : "disable")
+                                        }
+                                    }
+                                )
+                            ) {
+                                Text("Enabled")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.text)
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(model.roachTailActionInFlight)
+                            .labelsHidden()
+                        }
+
+                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                            RoachMetricCard(label: "Network", value: roachTail.networkName, detail: "Private overlay name")
+                            RoachMetricCard(label: "Peers", value: "\(roachTail.peers.count)", detail: "Linked devices")
+                            RoachMetricCard(label: "State", value: roachTail.status.capitalized, detail: "Current overlay state")
+                            RoachMetricCard(
+                                label: "Join Code",
+                                value: roachTail.joinCode ?? (roachTail.enabled ? "Pending" : "Off"),
+                                detail: roachTail.enabled ? "Use this once on the phone." : "Enable RoachTail to mint a code."
+                            )
+                        }
+
+                        if let bridgeURL = roachTail.advertisedUrl, !bridgeURL.isEmpty {
+                            RoachStatusRow(title: "Bridge URL", value: bridgeURL, accent: RoachPalette.green)
+                        } else if let companionURL = serverInfo?.companionAdvertisedUrl ?? serverInfo?.companionUrl {
+                            RoachStatusRow(title: "Bridge URL", value: companionURL, accent: RoachPalette.green)
+                        }
+
+                        HStack(spacing: 12) {
+                            Button(model.roachTailActionInFlight ? "Refreshing..." : "Refresh Join Code") {
+                                Task { await model.affectRoachTail("refresh-join-code") }
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                            .disabled(model.roachTailActionInFlight || !roachTail.enabled)
+
+                            Button(model.roachTailActionInFlight ? "Clearing..." : "Clear Peers") {
+                                Task { await model.affectRoachTail("clear-peers") }
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                            .disabled(model.roachTailActionInFlight || roachTail.peers.isEmpty)
+                        }
+
+                        if !roachTail.peers.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Linked Devices")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.text)
+
+                                ForEach(roachTail.peers.prefix(4)) { peer in
+                                    RoachStatusRow(
+                                        title: peer.name,
+                                        value: "\(peer.platform.capitalized) · \(peer.status.capitalized)\(peer.endpoint.map { " · \($0)" } ?? "")",
+                                        accent: RoachPalette.green
+                                    )
+                                }
+                            }
+                        }
+
+                        if !roachTail.notes.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(roachTail.notes.prefix(3), id: \.self) { note in
+                                    Text(note)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(RoachPalette.muted)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
                         }
                     }
                 }

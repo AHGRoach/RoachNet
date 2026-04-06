@@ -69,6 +69,38 @@ public struct RoachClawStatusResponse: Decodable, Sendable {
     public let configFilePath: String?
 }
 
+public struct ManagedRoachTailPeer: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let platform: String
+    public let status: String
+    public let endpoint: String?
+    public let lastSeenAt: String?
+    public let allowsExitNode: Bool?
+    public let tags: [String]
+}
+
+public struct ManagedRoachTailStatusResponse: Decodable, Sendable {
+    public let enabled: Bool
+    public let networkName: String
+    public let deviceName: String
+    public let deviceId: String
+    public let status: String
+    public let relayHost: String?
+    public let advertisedUrl: String?
+    public let joinCode: String?
+    public let lastUpdatedAt: String?
+    public let notes: [String]
+    public let peers: [ManagedRoachTailPeer]
+}
+
+public struct ManagedRoachTailActionResponse: Decodable, Sendable {
+    public let success: Bool?
+    public let ok: Bool?
+    public let message: String?
+    public let state: ManagedRoachTailStatusResponse?
+}
+
 public struct OllamaInstalledModel: Decodable, Identifiable, Sendable {
     public let name: String
     public let size: Int64?
@@ -227,6 +259,7 @@ public struct ManagedAppSnapshot: Sendable {
     public let downloads: [ManagedDownloadJob]
     public let providers: AIRuntimeProvidersResponse
     public let roachClaw: RoachClawStatusResponse
+    public let roachTail: ManagedRoachTailStatusResponse
     public let installedModels: [OllamaInstalledModel]
     public let installedSkills: [OpenClawInstalledSkill]
     public let knowledgeFiles: [String]
@@ -372,6 +405,10 @@ public actor ManagedAppRuntimeBridge {
             workspacePath: workspacePath,
             defaultModel: config.roachClawDefaultModel
         )
+        let fallbackRoachTailStatus = self.fallbackRoachTailStatus(
+            config: config,
+            serverInfo: serverInfo
+        )
 
         async let internetConnected = fetchOrFallback(
             "/api/system/internet-status",
@@ -402,6 +439,11 @@ public actor ManagedAppRuntimeBridge {
             "/api/roachclaw/status",
             baseURL: baseURL,
             fallback: fallbackRoachClawStatus
+        )
+        async let roachTail = fetchOrFallback(
+            "/api/companion/roachtail",
+            baseURL: baseURL,
+            fallback: fallbackRoachTailStatus
         )
         async let models = fetchOrFallback(
             "/api/ollama/installed-models",
@@ -447,6 +489,7 @@ public actor ManagedAppRuntimeBridge {
             downloads: await downloads,
             providers: await providers,
             roachClaw: await roachClaw,
+            roachTail: await roachTail,
             installedModels: await models,
             installedSkills: (await skills).skills,
             knowledgeFiles: (await files).files,
@@ -512,6 +555,26 @@ public actor ManagedAppRuntimeBridge {
             body: Payload(service_name: serviceName, action: action)
         )
         return response.message ?? "Service action queued."
+    }
+
+    public func affectRoachTail(
+        using config: RoachNetInstallerConfig,
+        action: String,
+        relayHost: String? = nil
+    ) async throws -> ManagedRoachTailActionResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let action: String
+            let relayHost: String?
+        }
+
+        return try await post(
+            "/api/companion/roachtail/affect",
+            baseURL: baseURL,
+            body: Payload(action: action, relayHost: relayHost)
+        )
     }
 
     public func downloadBaseMapAssets(using config: RoachNetInstallerConfig) async throws -> String {
@@ -878,6 +941,27 @@ public actor ManagedAppRuntimeBridge {
             ready: false,
             installedModels: [],
             configFilePath: nil
+        )
+    }
+
+    private func fallbackRoachTailStatus(
+        config: RoachNetInstallerConfig,
+        serverInfo: ManagedAppServerInfo
+    ) -> ManagedRoachTailStatusResponse {
+        ManagedRoachTailStatusResponse(
+            enabled: config.companionEnabled,
+            networkName: "RoachTail",
+            deviceName: Host.current().localizedName ?? "RoachNet desktop",
+            deviceId: "roachnet-desktop",
+            status: config.companionEnabled ? "armed" : "local-only",
+            relayHost: nil,
+            advertisedUrl: serverInfo.companionAdvertisedUrl ?? serverInfo.companionUrl,
+            joinCode: nil,
+            lastUpdatedAt: nil,
+            notes: config.companionEnabled
+                ? ["RoachTail is still warming up inside the local runtime."]
+                : ["RoachTail is off in this runtime configuration."],
+            peers: []
         )
     }
 

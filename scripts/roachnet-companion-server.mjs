@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 
 import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import process from 'node:process'
 
 const host = process.env.ROACHNET_COMPANION_HOST?.trim() || '0.0.0.0'
 const port = Number(process.env.ROACHNET_COMPANION_PORT || '38111')
 const token = process.env.ROACHNET_COMPANION_TOKEN?.trim() || ''
 const targetOrigin = process.env.ROACHNET_COMPANION_TARGET_URL?.trim() || 'http://127.0.0.1:8080'
+const storagePath =
+  process.env.NOMAD_STORAGE_PATH?.trim() || process.env.ROACHNET_HOST_STORAGE_PATH?.trim() || ''
+const roachTailStatePath = storagePath ? path.join(storagePath, 'vault', 'roachtail', 'state.json') : ''
 
 function writeJson(response, statusCode, payload) {
   const body = JSON.stringify(payload)
@@ -44,25 +50,156 @@ function extractToken(request) {
   return headerToken?.trim() || ''
 }
 
-function isAuthorized(request) {
-  if (!token) {
+function hashToken(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+async function resolvePeerToken(tokenValue, { allowDisabled = false } = {}) {
+  if (!roachTailStatePath || !tokenValue) {
+    return null
+  }
+
+  try {
+    const raw = await readFile(roachTailStatePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    if ((!parsed?.enabled && !allowDisabled) || !Array.isArray(parsed.peers)) {
+      return null
+    }
+
+    const hashed = hashToken(tokenValue)
+    return (
+      parsed.peers.find(
+        (peer) =>
+          peer &&
+          typeof peer === 'object' &&
+          typeof peer.id === 'string' &&
+          typeof peer.tokenHash === 'string' &&
+          peer.tokenHash === hashed
+      ) || null
+    )
+  } catch {
+    return null
+  }
+}
+
+function peerCanUseWhenDisabled(pathname, request) {
+  if (!pathname.startsWith('/api/companion/roachtail')) {
     return false
   }
 
-  return extractToken(request) === token
+  if (request.method === 'GET') {
+    return pathname === '/api/companion/roachtail'
+  }
+
+  return pathname === '/api/companion/roachtail/affect'
 }
 
-async function proxyRequest(request, response, pathname) {
+async function resolveAuthorization(request, pathname) {
+  const providedToken = extractToken(request)
+  if (!providedToken) {
+    return null
+  }
+
+  if (token && providedToken === token) {
+    return { kind: 'primary' }
+  }
+
+  const peer = await resolvePeerToken(providedToken, {
+    allowDisabled: peerCanUseWhenDisabled(pathname, request),
+  })
+  if (peer) {
+    return {
+      kind: 'peer',
+      peerId: peer.id,
+      peerName: typeof peer.name === 'string' ? peer.name : 'Linked device',
+    }
+  }
+
+  return null
+}
+
+function requestPeerEndpoint(request) {
+  const forwardedFor = request.headers['x-forwarded-for']
+  const forwardedValue = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
+  const firstForwarded = forwardedValue?.split(',')[0]?.trim()
+  if (firstForwarded) {
+    return firstForwarded
+  }
+
+  return request.socket.remoteAddress?.trim() || null
+}
+
+async function recordPeerActivity(authContext, request) {
+  if (!roachTailStatePath || authContext?.kind !== 'peer') {
+    return
+  }
+
+  try {
+    const raw = await readFile(roachTailStatePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.peers)) {
+      return
+    }
+
+    const peerIndex = parsed.peers.findIndex(
+      (peer) =>
+        peer &&
+        typeof peer === 'object' &&
+        typeof peer.id === 'string' &&
+        peer.id === authContext.peerId
+    )
+    if (peerIndex === -1) {
+      return
+    }
+
+    const nextState = {
+      ...parsed,
+      status: parsed.enabled ? 'connected' : parsed.status || 'local-only',
+      lastUpdatedAt: new Date().toISOString(),
+      peers: parsed.peers.map((peer, index) =>
+        index === peerIndex
+          ? {
+              ...peer,
+              status: parsed.enabled ? 'connected' : 'paired',
+              lastSeenAt: new Date().toISOString(),
+              endpoint: requestPeerEndpoint(request) || peer.endpoint || null,
+            }
+          : peer
+      ),
+    }
+
+    await writeFile(roachTailStatePath, JSON.stringify(nextState, null, 2), 'utf8')
+  } catch {
+    // Keep proxying even if peer activity could not be persisted.
+  }
+}
+
+async function proxyRequest(request, response, pathname, authContext = null) {
   const upstreamUrl = new URL(pathname, targetOrigin)
   const method = request.method || 'GET'
   const bodyBuffer = method === 'GET' || method === 'HEAD' ? null : await readBody(request)
 
+  const upstreamHeaders = {
+    Accept: 'application/json',
+    'Content-Type': request.headers['content-type'] || 'application/json',
+  }
+
+  if (authContext?.kind === 'peer') {
+    upstreamHeaders['X-RoachTail-Peer-ID'] = authContext.peerId
+    upstreamHeaders['X-RoachTail-Peer-Name'] = authContext.peerName
+  }
+  if (authContext?.kind) {
+    upstreamHeaders['X-RoachTail-Auth-Kind'] = authContext.kind
+  }
+  if (authContext?.peerId) {
+    upstreamHeaders['X-RoachTail-Auth-Peer-ID'] = authContext.peerId
+  }
+
+  await recordPeerActivity(authContext, request)
+
   const upstreamResponse = await fetch(upstreamUrl, {
     method,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': request.headers['content-type'] || 'application/json',
-    },
+    headers: upstreamHeaders,
     body: bodyBuffer && bodyBuffer.length > 0 ? bodyBuffer : undefined,
   })
 
@@ -102,6 +239,8 @@ const server = createServer(async (request, response) => {
     return
   }
 
+  const pairingRequest = pathname === '/api/companion/roachtail/pair' && request.method === 'POST'
+
   if (!pathname.startsWith('/api/companion')) {
     writeJson(response, 404, {
       error: 'Not found',
@@ -109,7 +248,9 @@ const server = createServer(async (request, response) => {
     return
   }
 
-  if (!isAuthorized(request)) {
+  const authContext = pairingRequest ? { kind: 'pairing' } : await resolveAuthorization(request, pathname)
+
+  if (!authContext) {
     writeJson(response, 401, {
       error: 'Invalid or missing companion token',
     })
@@ -117,7 +258,7 @@ const server = createServer(async (request, response) => {
   }
 
   try {
-    await proxyRequest(request, response, `${pathname}${url.search}`)
+    await proxyRequest(request, response, `${pathname}${url.search}`, authContext)
   } catch (error) {
     writeJson(response, 502, {
       error: error instanceof Error ? error.message : 'Failed to proxy companion request',
