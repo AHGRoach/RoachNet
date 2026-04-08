@@ -435,7 +435,7 @@ public enum RoachNetRepositoryLocator {
             .path
     }
 
-    public static func defaultRuntimeStatePath() -> String {
+    public static func defaultRuntimeStatePath(storagePath: String? = nil, installPath: String? = nil) -> String {
         if
             let override = ProcessInfo.processInfo.environment["ROACHNET_RUNTIME_STATE_ROOT"],
             !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -443,16 +443,15 @@ public enum RoachNetRepositoryLocator {
             return URL(fileURLWithPath: override).standardizedFileURL.path
         }
 
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        let base = support ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base
-            .appendingPathComponent("roachnet", isDirectory: true)
+        let root = storagePath ?? defaultStoragePath(installPath: installPath)
+        return URL(fileURLWithPath: root)
+            .appendingPathComponent("state", isDirectory: true)
             .appendingPathComponent("runtime-state", isDirectory: true)
             .path
     }
 
-    public static func portableRuntimeHandshakePath() -> String {
-        URL(fileURLWithPath: defaultRuntimeStatePath())
+    public static func portableRuntimeHandshakePath(storagePath: String? = nil, installPath: String? = nil) -> String {
+        URL(fileURLWithPath: defaultRuntimeStatePath(storagePath: storagePath, installPath: installPath))
             .appendingPathComponent("native-server-info.json", isDirectory: false)
             .path
     }

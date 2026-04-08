@@ -646,6 +646,12 @@ export class SystemService {
           description: 'Structured offline education content and coursework surfaced through RoachNet.',
           powered_by: 'Kolibri',
         }
+      case SERVICE_NAMES.ROACHSYNC:
+        return {
+          friendly_name: 'RoachSync',
+          description: 'Syncthing-backed private sync for the RoachNet vault, settings, and future shared installs.',
+          powered_by: 'Syncthing',
+        }
       default:
         return {}
     }

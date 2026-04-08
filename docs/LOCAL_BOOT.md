@@ -82,7 +82,7 @@ mkdir -p admin/storage/logs admin/storage/kb_uploads admin/storage/zim admin/sto
 Use the Homebrew Node 22 toolchain explicitly unless your shell already resolves to it:
 
 ```bash
-cd /Volumes/Black/TheDrive/RoachWares/Projects/Development/RoachNet/admin
+cd /path/to/RoachNet/admin
 PATH="/opt/homebrew/opt/node@22/bin:$PATH" npm ci
 PATH="/opt/homebrew/opt/node@22/bin:$PATH" node ace migration:run
 PATH="/opt/homebrew/opt/node@22/bin:$PATH" node ace db:seed
@@ -92,7 +92,7 @@ PATH="/opt/homebrew/opt/node@22/bin:$PATH" npm run dev
 For the normal local RoachNet entry path from the repo root:
 
 ```bash
-cd /Volumes/Black/TheDrive/RoachWares/Projects/Development/RoachNet
+cd /path/to/RoachNet
 npm start
 ```
 

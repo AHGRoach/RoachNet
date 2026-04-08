@@ -1,6 +1,6 @@
 {
   "name": "roachnet",
-  "version": "1.0.5",
+  "version": "1.0.0",
   "description": "RoachNet offline operations platform",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -10,6 +10,7 @@
     "setup:no-browser": "ROACHNET_SETUP_NO_BROWSER=1 node scripts/run-roachnet-setup.mjs",
     "start": "node scripts/run-roachnet.mjs",
     "start:no-browser": "ROACHNET_NO_BROWSER=1 node scripts/run-roachnet.mjs",
+    "smoke:macos-install-lanes": "node scripts/smoke-test-macos-install-lanes.mjs",
     "desktop:assets": "node scripts/prepare-native-assets.mjs",
     "desktop:dev": "npm run desktop:assets && electron .",
     "desktop:dev:setup": "npm run desktop:assets && electron installer/main.cjs",

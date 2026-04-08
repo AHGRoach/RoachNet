@@ -71,11 +71,17 @@ type RoachTailStateRecord = {
   deviceName: string
   deviceId: string
   status: string
+  transportMode: string
+  secureOverlay: boolean
   relayHost?: string | null
   advertisedUrl?: string | null
+  runtimeOrigin?: string | null
+  runtimeTunnelUrl?: string | null
   joinCode?: string | null
   joinCodeIssuedAt?: string | null
   joinCodeExpiresAt?: string | null
+  pairingPayload?: string | null
+  pairingIssuedAt?: string | null
   lastUpdatedAt?: string | null
   notes: string[]
   peers: RoachTailPeerRecord[]
@@ -90,6 +96,32 @@ type RoachTailStateSanitizeOptions = {
 }
 
 const ROACHTAIL_JOIN_CODE_TTL_MS = 10 * 60 * 1000
+
+type RoachSyncPeerRecord = {
+  id: string
+  name: string
+  deviceId: string
+  status: string
+  lastSeenAt?: string | null
+}
+
+type RoachSyncStateRecord = {
+  enabled: boolean
+  provider: string
+  networkName: string
+  deviceName: string
+  deviceId: string
+  status: string
+  folderId: string
+  folderPath: string
+  guiUrl?: string | null
+  apiUrl?: string | null
+  transportMode: string
+  secureOverlay: boolean
+  notes: string[]
+  peers: RoachSyncPeerRecord[]
+  lastUpdatedAt?: string | null
+}
 
 type RoachTailActionInput = {
   action?:
@@ -107,6 +139,11 @@ type RoachTailActionInput = {
   endpoint?: string | null
   allowsExitNode?: boolean
   tags?: string[]
+}
+
+type RoachSyncActionInput = {
+  action?: 'enable' | 'disable' | 'refresh' | 'set-folder-path' | 'clear-peers'
+  folderPath?: string | null
 }
 
 type RoachTailPairInput = {
@@ -143,15 +180,18 @@ export default class CompanionController {
   ) {}
 
   async bootstrap({ request }: HttpContext) {
-    const [runtime, vault, sessions] = await Promise.all([
+    const [runtime, vault, sessions, roachTail] = await Promise.all([
       this.runtimePayload(request),
       this.vaultPayload(request),
       this.chatService.getAllSessions(),
+      this.roachTailPayload({
+        hideJoinCode: this.isPeerRoachTailRequest(request),
+      }),
     ])
 
     return {
       appName: 'RoachNet Companion',
-      machineName: os.hostname(),
+      machineName: roachTail.deviceName || 'RoachNet desktop',
       appsCatalogUrl: 'https://apps.roachnet.org/app-store-catalog.json',
       runtime,
       vault,
@@ -167,6 +207,10 @@ export default class CompanionController {
     return this.roachTailPayload({
       hideJoinCode: this.isPeerRoachTailRequest(request),
     })
+  }
+
+  async roachsync() {
+    return this.roachSyncPayload()
   }
 
   async pairRoachTail({ request, response }: HttpContext) {
@@ -259,6 +303,39 @@ export default class CompanionController {
     } catch (error) {
       return response.status(400).json({
         error: error instanceof Error ? error.message : 'Failed to update RoachTail state',
+      })
+    }
+  }
+
+  async affectRoachSync({ request, response }: HttpContext) {
+    const payload = request.body() as RoachSyncActionInput
+    const action = payload.action?.trim() as RoachSyncActionInput['action']
+
+    if (!action || !['enable', 'disable', 'refresh', 'set-folder-path', 'clear-peers'].includes(action)) {
+      return response.status(400).json({
+        error: 'RoachSync action must be enable, disable, refresh, set-folder-path, or clear-peers.',
+      })
+    }
+
+    try {
+      const state = await this.mutateRoachSyncState(action, payload)
+      return {
+        success: true,
+        message:
+          action === 'enable'
+            ? 'RoachSync enabled.'
+            : action === 'disable'
+              ? 'RoachSync disabled.'
+              : action === 'set-folder-path'
+                ? 'RoachSync folder updated.'
+                : action === 'clear-peers'
+                  ? 'RoachSync peers cleared.'
+                  : 'RoachSync refreshed.',
+        state,
+      }
+    } catch (error) {
+      return response.status(400).json({
+        error: error instanceof Error ? error.message : 'Failed to update RoachSync state',
       })
     }
   }
@@ -496,7 +573,7 @@ export default class CompanionController {
 
   private async runtimePayload(request: HttpContext['request']) {
     const issues: RelayIssue[] = []
-    const [systemInfo, providers, roachClaw, services, downloads, installedModels, roachTail] =
+    const [systemInfo, providers, roachClaw, services, downloads, installedModels, roachTail, roachSync] =
       await Promise.all([
         this.relayJsonFallback('/api/system/info', request, null, issues),
         this.relayJsonFallback('/api/system/ai/providers', request, { providers: {} }, issues),
@@ -517,6 +594,7 @@ export default class CompanionController {
         this.roachTailPayload({
           hideJoinCode: this.isPeerRoachTailRequest(request),
         }),
+        this.roachSyncPayload(),
       ])
 
     return {
@@ -524,6 +602,7 @@ export default class CompanionController {
       providers,
       roachClaw,
       roachTail,
+      roachSync,
       services,
       downloads,
       installedModels,
@@ -768,6 +847,10 @@ export default class CompanionController {
     return this.sanitizeRoachTailState(current, options)
   }
 
+  private async roachSyncPayload(): Promise<RoachSyncStateRecord> {
+    return this.readRoachSyncState()
+  }
+
   private async readRoachTailStateRaw(): Promise<InternalRoachTailStateRecord> {
     const statePath = this.roachTailStatePath()
     const advertisedUrl =
@@ -792,20 +875,28 @@ export default class CompanionController {
       deviceName: configuredDeviceName,
       deviceId: configuredDeviceId,
       status: enabled ? 'armed' : 'local-only',
+      transportMode: relayHost ? 'tailnet-relay' : 'local-bridge',
+      secureOverlay: Boolean(relayHost),
       relayHost,
-      advertisedUrl,
+      advertisedUrl: advertisedUrl || this.buildRoachTailAdvertisedURL(relayHost, this.companionBridgeURL()),
+      runtimeOrigin: this.localBaseUrl().toString(),
+      runtimeTunnelUrl: this.buildRoachTailRuntimeURL(relayHost, advertisedUrl || this.companionBridgeURL()),
       joinCode: configuredJoinCode,
       joinCodeIssuedAt: configuredJoinCode ? new Date().toISOString() : null,
       joinCodeExpiresAt: configuredJoinCode
         ? new Date(Date.now() + ROACHTAIL_JOIN_CODE_TTL_MS).toISOString()
         : null,
+      pairingPayload: null,
+      pairingIssuedAt: configuredJoinCode ? new Date().toISOString() : null,
       lastUpdatedAt: new Date().toISOString(),
       notes: [
         'RoachTail keeps the companion lane ready for private device-to-device control.',
         enabled
           ? 'This desktop is ready to advertise a private control lane to linked devices.'
           : 'Enable RoachTail to group mobile and desktop lanes behind a private overlay.',
-        'Future mesh peers can reuse the same bridge and install-intent flow that powers RoachNet iOS.',
+        relayHost
+          ? 'The advertised bridge is already pointing at the secure relay host instead of the raw local address.'
+          : 'Add a RoachTail relay host when you want phones and remote devices to stay off the raw machine IP.',
       ],
       peers: [],
     }
@@ -854,11 +945,25 @@ export default class CompanionController {
             : peers.length > 0
               ? 'connected'
               : fallback.status,
+        transportMode:
+          typeof parsed.transportMode === 'string'
+            ? parsed.transportMode
+            : fallback.transportMode,
+        secureOverlay:
+          typeof parsed.secureOverlay === 'boolean'
+            ? parsed.secureOverlay
+            : fallback.secureOverlay,
         relayHost: typeof parsed.relayHost === 'string' ? parsed.relayHost : fallback.relayHost,
         advertisedUrl:
           typeof parsed.advertisedUrl === 'string'
             ? parsed.advertisedUrl
             : fallback.advertisedUrl,
+        runtimeOrigin:
+          typeof parsed.runtimeOrigin === 'string' ? parsed.runtimeOrigin : fallback.runtimeOrigin,
+        runtimeTunnelUrl:
+          typeof parsed.runtimeTunnelUrl === 'string'
+            ? parsed.runtimeTunnelUrl
+            : fallback.runtimeTunnelUrl,
         joinCode: typeof parsed.joinCode === 'string' ? parsed.joinCode : fallback.joinCode,
         joinCodeIssuedAt:
           typeof parsed.joinCodeIssuedAt === 'string'
@@ -868,6 +973,12 @@ export default class CompanionController {
           typeof parsed.joinCodeExpiresAt === 'string'
             ? parsed.joinCodeExpiresAt
             : fallback.joinCodeExpiresAt,
+        pairingPayload:
+          typeof parsed.pairingPayload === 'string' ? parsed.pairingPayload : fallback.pairingPayload,
+        pairingIssuedAt:
+          typeof parsed.pairingIssuedAt === 'string'
+            ? parsed.pairingIssuedAt
+            : fallback.pairingIssuedAt,
         lastUpdatedAt:
           typeof parsed.lastUpdatedAt === 'string'
             ? parsed.lastUpdatedAt
@@ -886,11 +997,16 @@ export default class CompanionController {
     state: InternalRoachTailStateRecord,
     options: RoachTailStateSanitizeOptions = {}
   ): RoachTailStateRecord {
+    const pairingPayload =
+      options.hideJoinCode || !state.joinCode ? null : this.buildRoachTailPairingPayload(state)
+
     return {
       ...state,
       joinCode: options.hideJoinCode ? null : state.joinCode ?? null,
       joinCodeIssuedAt: options.hideJoinCode ? null : state.joinCodeIssuedAt ?? null,
       joinCodeExpiresAt: options.hideJoinCode ? null : state.joinCodeExpiresAt ?? null,
+      pairingPayload,
+      pairingIssuedAt: options.hideJoinCode ? null : state.pairingIssuedAt ?? state.joinCodeIssuedAt ?? null,
       peers: state.peers.map((peer) => ({
         id: peer.id,
         name: peer.name,
@@ -931,13 +1047,21 @@ export default class CompanionController {
           next.joinCode = joinCodeBundle.joinCode
           next.joinCodeIssuedAt = joinCodeBundle.issuedAt
           next.joinCodeExpiresAt = joinCodeBundle.expiresAt
+          next.pairingIssuedAt = joinCodeBundle.issuedAt
         }
         next.enabled = true
         next.status = next.peers.length > 0 ? 'connected' : 'armed'
+        next.transportMode = next.relayHost ? 'tailnet-relay' : 'local-bridge'
+        next.secureOverlay = Boolean(next.relayHost)
+        next.advertisedUrl = this.buildRoachTailAdvertisedURL(next.relayHost, this.companionBridgeURL())
+        next.runtimeOrigin = this.localBaseUrl().toString()
+        next.runtimeTunnelUrl = this.buildRoachTailRuntimeURL(next.relayHost, next.advertisedUrl)
         next.notes = [
           'RoachTail is armed and ready to pair new devices.',
-          'Use the join code from your phone or tablet to register a private control peer.',
-          'The companion lane keeps chat carryover, runtime control, and install intents grouped behind the same private overlay.',
+          'Use the join code or QR payload from the desktop to register a private control peer.',
+          next.secureOverlay
+            ? 'The advertised bridge is already pinned to the secure RoachTail relay host.'
+            : 'Add a relay host when you want the private bridge to stop advertising the raw machine address.',
         ]
         break
       case 'disable':
@@ -946,6 +1070,8 @@ export default class CompanionController {
         next.joinCode = null
         next.joinCodeIssuedAt = null
         next.joinCodeExpiresAt = null
+        next.pairingPayload = null
+        next.pairingIssuedAt = null
         next.notes = [
           'RoachTail is disabled and the desktop has fallen back to the local-only companion lane.',
           'Existing peer records are kept so you can re-arm the mesh without rebuilding every device link.',
@@ -957,12 +1083,18 @@ export default class CompanionController {
           next.joinCode = joinCodeBundle.joinCode
           next.joinCodeIssuedAt = joinCodeBundle.issuedAt
           next.joinCodeExpiresAt = joinCodeBundle.expiresAt
+          next.pairingIssuedAt = joinCodeBundle.issuedAt
         }
         next.enabled = true
         next.status = next.peers.length > 0 ? 'connected' : 'armed'
+        next.transportMode = next.relayHost ? 'tailnet-relay' : 'local-bridge'
+        next.secureOverlay = Boolean(next.relayHost)
+        next.advertisedUrl = this.buildRoachTailAdvertisedURL(next.relayHost, this.companionBridgeURL())
+        next.runtimeOrigin = this.localBaseUrl().toString()
+        next.runtimeTunnelUrl = this.buildRoachTailRuntimeURL(next.relayHost, next.advertisedUrl)
         next.notes = [
           'RoachTail issued a fresh join code for the next device pair.',
-          'Share the new code only with devices you want on the private control lane.',
+          'Share the new code or QR payload only with devices you want on the private control lane.',
         ]
         break
       case 'clear-peers':
@@ -975,6 +1107,11 @@ export default class CompanionController {
         break
       case 'set-relay-host':
         next.relayHost = payload.relayHost?.trim() || null
+        next.transportMode = next.relayHost ? 'tailnet-relay' : 'local-bridge'
+        next.secureOverlay = Boolean(next.relayHost)
+        next.advertisedUrl = this.buildRoachTailAdvertisedURL(next.relayHost, this.companionBridgeURL())
+        next.runtimeOrigin = this.localBaseUrl().toString()
+        next.runtimeTunnelUrl = this.buildRoachTailRuntimeURL(next.relayHost, next.advertisedUrl)
         next.notes = [
           next.relayHost
             ? `RoachTail will advertise the relay host ${next.relayHost}.`
@@ -1007,11 +1144,17 @@ export default class CompanionController {
         }
         next.enabled = true
         next.status = 'connected'
+        next.transportMode = next.relayHost ? 'tailnet-relay' : 'local-bridge'
+        next.secureOverlay = Boolean(next.relayHost)
+        next.advertisedUrl = this.buildRoachTailAdvertisedURL(next.relayHost, this.companionBridgeURL())
+        next.runtimeOrigin = this.localBaseUrl().toString()
+        next.runtimeTunnelUrl = this.buildRoachTailRuntimeURL(next.relayHost, next.advertisedUrl)
         if (!next.joinCode || !this.isRoachTailJoinCodeFresh(next)) {
           const joinCodeBundle = this.issueRoachTailJoinCode()
           next.joinCode = joinCodeBundle.joinCode
           next.joinCodeIssuedAt = joinCodeBundle.issuedAt
           next.joinCodeExpiresAt = joinCodeBundle.expiresAt
+          next.pairingIssuedAt = joinCodeBundle.issuedAt
         }
         next.notes = [
           `${peerName} joined the RoachTail control lane.`,
@@ -1096,6 +1239,11 @@ export default class CompanionController {
     }
 
     next.status = 'connected'
+    next.transportMode = next.relayHost ? 'tailnet-relay' : 'local-bridge'
+    next.secureOverlay = Boolean(next.relayHost)
+    next.advertisedUrl = this.buildRoachTailAdvertisedURL(next.relayHost, this.companionBridgeURL())
+    next.runtimeOrigin = this.localBaseUrl().toString()
+    next.runtimeTunnelUrl = this.buildRoachTailRuntimeURL(next.relayHost, next.advertisedUrl)
     next.lastUpdatedAt = new Date().toISOString()
     next.notes = [
       `${peerName} paired over RoachTail.`,
@@ -1110,7 +1258,7 @@ export default class CompanionController {
       message: `${peerName} paired with RoachTail.`,
       token: pairToken,
       peerId,
-      bridgeUrl: this.companionBridgeURL(),
+      bridgeUrl: this.buildRoachTailAdvertisedURL(next.relayHost, this.companionBridgeURL()),
       state: this.sanitizeRoachTailState(next),
     }
   }
@@ -1127,6 +1275,43 @@ export default class CompanionController {
       issuedAt,
       expiresAt: new Date(Date.now() + ROACHTAIL_JOIN_CODE_TTL_MS).toISOString(),
     }
+  }
+
+  private buildRoachTailAdvertisedURL(relayHost?: string | null, fallbackUrl?: string | null) {
+    const trimmedRelay = relayHost?.trim()
+    if (trimmedRelay) {
+      if (/^https?:\/\//i.test(trimmedRelay)) {
+        return trimmedRelay
+      }
+      return `https://${trimmedRelay}`
+    }
+
+    return fallbackUrl?.trim() || null
+  }
+
+  private buildRoachTailRuntimeURL(relayHost?: string | null, fallbackUrl?: string | null) {
+    return this.buildRoachTailAdvertisedURL(relayHost, fallbackUrl)
+  }
+
+  private buildRoachTailPairingPayload(state: InternalRoachTailStateRecord) {
+    if (!state.joinCode) {
+      return null
+    }
+
+    return JSON.stringify({
+      schema: 'roachnet.roachtail.v1',
+      version: 1,
+      networkName: state.networkName,
+      deviceName: state.deviceName,
+      deviceId: state.deviceId,
+      joinCode: state.joinCode,
+      joinCodeExpiresAt: state.joinCodeExpiresAt ?? null,
+      bridgeUrl: state.advertisedUrl ?? this.companionBridgeURL(),
+      runtimeOrigin: state.runtimeOrigin ?? this.localBaseUrl().toString(),
+      runtimeTunnelUrl: state.runtimeTunnelUrl ?? state.advertisedUrl ?? this.companionBridgeURL(),
+      transportMode: state.transportMode,
+      secureOverlay: state.secureOverlay,
+    })
   }
 
   private isRoachTailJoinCodeFresh(state: InternalRoachTailStateRecord) {
@@ -1158,6 +1343,149 @@ export default class CompanionController {
   private roachTailStatePath() {
     const storagePath = this.storagePath()
     return storagePath ? path.join(storagePath, 'vault', 'roachtail', 'state.json') : null
+  }
+
+  private async readRoachSyncState(): Promise<RoachSyncStateRecord> {
+    const storagePath = this.storagePath()
+    const folderPath = storagePath ? path.join(storagePath, 'vault') : path.join(os.homedir(), 'RoachNet', 'vault')
+    const statePath = storagePath ? path.join(storagePath, 'vault', 'roachsync', 'state.json') : null
+    const fallback: RoachSyncStateRecord = {
+      enabled: false,
+      provider: 'Syncthing',
+      networkName: 'RoachSync',
+      deviceName:
+        process.env.ROACHSYNC_DEVICE_NAME?.trim() ||
+        process.env.ROACHNET_DEVICE_NAME?.trim() ||
+        'RoachNet desktop',
+      deviceId: process.env.ROACHSYNC_DEVICE_ID?.trim() || `rs-${randomUUID().slice(0, 8)}`,
+      status: 'idle',
+      folderId: 'roachnet-vault',
+      folderPath,
+      guiUrl: 'http://127.0.0.1:8384',
+      apiUrl: 'http://127.0.0.1:8384/rest',
+      transportMode: process.env.ROACHTAIL_RELAY_HOST?.trim() ? 'tailnet-relay' : 'local-bridge',
+      secureOverlay: Boolean(process.env.ROACHTAIL_RELAY_HOST?.trim()),
+      notes: [
+        'RoachSync is the Syncthing-backed lane for vault sync, settings carryover, and future shared install state.',
+        'The contained sync folder points at the RoachNet vault so app data stays grouped instead of leaking across the host.',
+      ],
+      peers: [],
+      lastUpdatedAt: new Date().toISOString(),
+    }
+
+    if (!statePath) {
+      return fallback
+    }
+
+    try {
+      const raw = await readFile(statePath, 'utf8')
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') {
+        return fallback
+      }
+
+      return {
+        enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : fallback.enabled,
+        provider: typeof parsed.provider === 'string' ? parsed.provider : fallback.provider,
+        networkName: typeof parsed.networkName === 'string' ? parsed.networkName : fallback.networkName,
+        deviceName: typeof parsed.deviceName === 'string' ? parsed.deviceName : fallback.deviceName,
+        deviceId: typeof parsed.deviceId === 'string' ? parsed.deviceId : fallback.deviceId,
+        status: typeof parsed.status === 'string' ? parsed.status : fallback.status,
+        folderId: typeof parsed.folderId === 'string' ? parsed.folderId : fallback.folderId,
+        folderPath: typeof parsed.folderPath === 'string' ? parsed.folderPath : fallback.folderPath,
+        guiUrl: typeof parsed.guiUrl === 'string' ? parsed.guiUrl : fallback.guiUrl,
+        apiUrl: typeof parsed.apiUrl === 'string' ? parsed.apiUrl : fallback.apiUrl,
+        transportMode:
+          typeof parsed.transportMode === 'string' ? parsed.transportMode : fallback.transportMode,
+        secureOverlay:
+          typeof parsed.secureOverlay === 'boolean' ? parsed.secureOverlay : fallback.secureOverlay,
+        notes: Array.isArray(parsed.notes)
+          ? parsed.notes.filter((value: unknown) => typeof value === 'string')
+          : fallback.notes,
+        peers: Array.isArray(parsed.peers)
+          ? parsed.peers
+              .filter((value: unknown) => value && typeof value === 'object')
+              .map((peer: Record<string, unknown>, index: number) => ({
+                id: typeof peer.id === 'string' ? peer.id : `roachsync-peer-${index}`,
+                name: typeof peer.name === 'string' ? peer.name : `RoachSync peer ${index + 1}`,
+                deviceId: typeof peer.deviceId === 'string' ? peer.deviceId : `peer-${index}`,
+                status: typeof peer.status === 'string' ? peer.status : 'linked',
+                lastSeenAt: typeof peer.lastSeenAt === 'string' ? peer.lastSeenAt : null,
+              }))
+          : fallback.peers,
+        lastUpdatedAt:
+          typeof parsed.lastUpdatedAt === 'string' ? parsed.lastUpdatedAt : fallback.lastUpdatedAt,
+      }
+    } catch {
+      return fallback
+    }
+  }
+
+  private async mutateRoachSyncState(
+    action: NonNullable<RoachSyncActionInput['action']>,
+    payload: RoachSyncActionInput
+  ): Promise<RoachSyncStateRecord> {
+    const storagePath = this.storagePath()
+    if (!storagePath) {
+      throw new Error('RoachSync cannot persist state until the contained RoachNet storage lane exists.')
+    }
+
+    const statePath = path.join(storagePath, 'vault', 'roachsync', 'state.json')
+    await mkdir(path.dirname(statePath), { recursive: true })
+
+    const current = await this.readRoachSyncState()
+    const next: RoachSyncStateRecord = {
+      ...current,
+      transportMode: process.env.ROACHTAIL_RELAY_HOST?.trim() ? 'tailnet-relay' : 'local-bridge',
+      secureOverlay: Boolean(process.env.ROACHTAIL_RELAY_HOST?.trim()),
+      lastUpdatedAt: new Date().toISOString(),
+      peers: current.peers.map((peer) => ({ ...peer })),
+      notes: [...current.notes],
+    }
+
+    switch (action) {
+      case 'enable':
+        next.enabled = true
+        next.status = next.peers.length > 0 ? 'syncing' : 'armed'
+        next.notes = [
+          'RoachSync is armed and ready to keep the RoachNet vault moving between devices.',
+          'Syncthing will keep the contained vault path as the sync root instead of spilling state across the host.',
+        ]
+        break
+      case 'disable':
+        next.enabled = false
+        next.status = 'idle'
+        next.notes = [
+          'RoachSync is disabled and the vault stays local to this machine.',
+          'Existing peer records stay on disk so you can re-arm the sync lane later.',
+        ]
+        break
+      case 'refresh':
+        next.status = next.enabled ? (next.peers.length > 0 ? 'syncing' : 'armed') : 'idle'
+        next.notes = [
+          'RoachSync refreshed its contained state.',
+          'Use this after changing relay or folder settings to keep the sync lane aligned.',
+        ]
+        break
+      case 'set-folder-path':
+        next.folderPath = payload.folderPath?.trim() || next.folderPath
+        next.notes = [
+          `RoachSync now points at ${next.folderPath}.`,
+          'Keep this inside the contained RoachNet storage lane when you want backups and resets to stay one-shot.',
+        ]
+        break
+      case 'clear-peers':
+        next.peers = []
+        next.status = next.enabled ? 'armed' : 'idle'
+        next.notes = [
+          'RoachSync peer records were cleared.',
+          'Add devices again from a clean sync slate when you are ready.',
+        ]
+        break
+    }
+
+    await writeFile(statePath, JSON.stringify(next, null, 2), 'utf8')
+    return next
   }
 
   private companionBridgeURL() {

@@ -86,9 +86,16 @@ public struct ManagedRoachTailStatusResponse: Decodable, Sendable {
     public let deviceName: String
     public let deviceId: String
     public let status: String
+    public let transportMode: String?
+    public let secureOverlay: Bool?
     public let relayHost: String?
     public let advertisedUrl: String?
+    public let runtimeOrigin: String?
+    public let runtimeTunnelUrl: String?
     public let joinCode: String?
+    public let joinCodeExpiresAt: String?
+    public let pairingPayload: String?
+    public let pairingIssuedAt: String?
     public let lastUpdatedAt: String?
     public let notes: [String]
     public let peers: [ManagedRoachTailPeer]
@@ -99,6 +106,32 @@ public struct ManagedRoachTailActionResponse: Decodable, Sendable {
     public let ok: Bool?
     public let message: String?
     public let state: ManagedRoachTailStatusResponse?
+}
+
+public struct ManagedRoachSyncPeer: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let deviceId: String
+    public let status: String
+    public let lastSeenAt: String?
+}
+
+public struct ManagedRoachSyncStatusResponse: Decodable, Sendable {
+    public let enabled: Bool
+    public let provider: String
+    public let networkName: String
+    public let deviceName: String
+    public let deviceId: String
+    public let status: String
+    public let folderId: String
+    public let folderPath: String
+    public let guiUrl: String?
+    public let apiUrl: String?
+    public let transportMode: String?
+    public let secureOverlay: Bool?
+    public let notes: [String]
+    public let peers: [ManagedRoachSyncPeer]
+    public let lastUpdatedAt: String?
 }
 
 public struct OllamaInstalledModel: Decodable, Identifiable, Sendable {
@@ -260,6 +293,7 @@ public struct ManagedAppSnapshot: Sendable {
     public let providers: AIRuntimeProvidersResponse
     public let roachClaw: RoachClawStatusResponse
     public let roachTail: ManagedRoachTailStatusResponse
+    public let roachSync: ManagedRoachSyncStatusResponse
     public let installedModels: [OllamaInstalledModel]
     public let installedSkills: [OpenClawInstalledSkill]
     public let knowledgeFiles: [String]
@@ -301,7 +335,7 @@ public actor ManagedAppRuntimeBridge {
             ])
         }
 
-        let infoURL = try containedServerInfoURL()
+        let infoURL = try containedServerInfoURL(using: config)
         serverInfoURL = infoURL
 
         guard let node = RoachNetRepositoryLocator.preferredPortableNodeBinary() else {
@@ -395,6 +429,7 @@ public actor ManagedAppRuntimeBridge {
             config: config,
             serverInfo: serverInfo
         )
+        let fallbackRoachSyncStatus = self.fallbackRoachSyncStatus(config: config)
 
         async let internetConnected = fetchOrFallback(
             "/api/system/internet-status",
@@ -430,6 +465,11 @@ public actor ManagedAppRuntimeBridge {
             "/api/companion/roachtail",
             baseURL: baseURL,
             fallback: fallbackRoachTailStatus
+        )
+        async let roachSync = fetchOrFallback(
+            "/api/companion/roachsync",
+            baseURL: baseURL,
+            fallback: fallbackRoachSyncStatus
         )
         async let models = fetchOrFallback(
             "/api/ollama/installed-models",
@@ -476,6 +516,7 @@ public actor ManagedAppRuntimeBridge {
             providers: await providers,
             roachClaw: await roachClaw,
             roachTail: await roachTail,
+            roachSync: await roachSync,
             installedModels: await models,
             installedSkills: (await skills).skills,
             knowledgeFiles: (await files).files,
@@ -809,6 +850,7 @@ public actor ManagedAppRuntimeBridge {
         let normalizedWorkspacePath = defaultWorkspacePath(from: config)
         let normalizedLocalBinPath = RoachNetRepositoryLocator.defaultLocalBinPath(installPath: normalizedInstallPath)
         let normalizedOllamaModelsPath = RoachNetRepositoryLocator.defaultOllamaModelsPath(storagePath: normalizedStoragePath)
+        let normalizedRuntimeStatePath = runtimeStateRoot(using: config)
         let normalizedContainerlessMode = config.useDockerContainerization ? "0" : "1"
         let normalizedNodeBinDirectory = nodeBinary == "/usr/bin/env"
             ? nil
@@ -816,7 +858,7 @@ public actor ManagedAppRuntimeBridge {
 
         environment["ROACHNET_NO_BROWSER"] = "1"
         environment["ROACHNET_REPO_ROOT"] = repoRoot.path
-        environment["ROACHNET_RUNTIME_STATE_ROOT"] = RoachNetRepositoryLocator.defaultRuntimeStatePath()
+        environment["ROACHNET_RUNTIME_STATE_ROOT"] = normalizedRuntimeStatePath
         environment["ROACHNET_LOCAL_BIN_PATH"] = normalizedLocalBinPath
         environment["ROACHNET_NODE_BINARY"] = nodeBinary
         environment["ROACHNET_REQUIRE_PORTABLE_NODE"] = "1"
@@ -855,14 +897,40 @@ public actor ManagedAppRuntimeBridge {
         return environment
     }
 
-    private func containedServerInfoURL() throws -> URL {
-        let url = URL(fileURLWithPath: RoachNetRepositoryLocator.portableRuntimeHandshakePath())
+    private func containedServerInfoURL(using config: RoachNetInstallerConfig) throws -> URL {
+        let url = URL(fileURLWithPath: runtimeHandshakePath(using: config))
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         try? FileManager.default.removeItem(at: url)
         return url
+    }
+
+    private func runtimeStateRoot(using config: RoachNetInstallerConfig) -> String {
+        let normalizedStoragePath = config.storagePath.isEmpty
+            ? RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath)
+            : config.storagePath
+        let normalizedInstallPath = config.installPath.isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
+        return RoachNetRepositoryLocator.defaultRuntimeStatePath(
+            storagePath: normalizedStoragePath,
+            installPath: normalizedInstallPath
+        )
+    }
+
+    private func runtimeHandshakePath(using config: RoachNetInstallerConfig) -> String {
+        let normalizedStoragePath = config.storagePath.isEmpty
+            ? RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath)
+            : config.storagePath
+        let normalizedInstallPath = config.installPath.isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
+        return RoachNetRepositoryLocator.portableRuntimeHandshakePath(
+            storagePath: normalizedStoragePath,
+            installPath: normalizedInstallPath
+        )
     }
 
     private func runtimeLogPath(using config: RoachNetInstallerConfig) -> String {
@@ -921,7 +989,7 @@ public actor ManagedAppRuntimeBridge {
         let fileManager = FileManager.default
         let runtimeCacheRoot = runtimeCacheRoot(using: updatedConfig)
         let runtimeProcessStatePath = runtimeProcessStatePath(using: updatedConfig)
-        let handshakePath = RoachNetRepositoryLocator.portableRuntimeHandshakePath()
+        let handshakePath = runtimeHandshakePath(using: updatedConfig)
 
         if fileManager.fileExists(atPath: runtimeCacheRoot) {
             try? fileManager.removeItem(atPath: runtimeCacheRoot)
@@ -1064,14 +1132,41 @@ public actor ManagedAppRuntimeBridge {
             deviceName: Host.current().localizedName ?? "RoachNet desktop",
             deviceId: "roachnet-desktop",
             status: config.companionEnabled ? "armed" : "local-only",
+            transportMode: "local-bridge",
+            secureOverlay: false,
             relayHost: nil,
             advertisedUrl: serverInfo.companionAdvertisedUrl ?? serverInfo.companionUrl,
+            runtimeOrigin: serverInfo.webUrl,
+            runtimeTunnelUrl: serverInfo.companionAdvertisedUrl ?? serverInfo.companionUrl,
             joinCode: nil,
+            joinCodeExpiresAt: nil,
+            pairingPayload: nil,
+            pairingIssuedAt: nil,
             lastUpdatedAt: nil,
             notes: config.companionEnabled
                 ? ["RoachTail is still warming up inside the local runtime."]
                 : ["RoachTail is off in this runtime configuration."],
             peers: []
+        )
+    }
+
+    private func fallbackRoachSyncStatus(config: RoachNetInstallerConfig) -> ManagedRoachSyncStatusResponse {
+        ManagedRoachSyncStatusResponse(
+            enabled: false,
+            provider: "Syncthing",
+            networkName: "RoachSync",
+            deviceName: Host.current().localizedName ?? "RoachNet desktop",
+            deviceId: "roachsync-desktop",
+            status: "idle",
+            folderId: "roachnet-vault",
+            folderPath: RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath),
+            guiUrl: "http://127.0.0.1:8384",
+            apiUrl: "http://127.0.0.1:8384/rest",
+            transportMode: config.companionEnabled ? "local-bridge" : "local-only",
+            secureOverlay: false,
+            notes: ["RoachSync has not been armed yet in this runtime configuration."],
+            peers: [],
+            lastUpdatedAt: nil
         )
     }
 
