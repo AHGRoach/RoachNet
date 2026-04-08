@@ -11,6 +11,7 @@ import logger from '@adonisjs/core/services/logger'
 import type {
   ApplyRoachClawRequest,
   ApplyRoachClawResponse,
+  RoachClawPortableProfile,
   RoachClawStatusResponse,
 } from '../../types/roachclaw.js'
 import { getErrorMessage } from '../utils/errors.js'
@@ -18,6 +19,7 @@ import { findCommandPath } from '../utils/process.js'
 import { PREFERRED_ROACHCLAW_MODELS } from '../../constants/ollama.js'
 
 const ROACHCLAW_OPENCLAW_STATE_DIRNAME = '.openclaw-runtime'
+const ROACHCLAW_PROFILE_VERSION = 2
 
 @inject()
 export class RoachClawService {
@@ -45,19 +47,28 @@ export class RoachClawService {
   }
 
   public async getStatus(): Promise<RoachClawStatusResponse> {
-    const [ollama, openclaw, cliStatus, defaultModel] = await Promise.all([
-      this.aiRuntimeService.getProvider('ollama'),
-      this.aiRuntimeService.getProvider('openclaw'),
-      this.openClawService.getSkillCliStatus(),
-      KVStore.getValue('ai.roachclawDefaultModel'),
-    ])
+    const [ollama, openclaw, cliStatus, defaultModel, storedOllamaBaseUrl, storedOpenClawBaseUrl] =
+      await Promise.all([
+        this.aiRuntimeService.getProvider('ollama'),
+        this.aiRuntimeService.getProvider('openclaw'),
+        this.openClawService.getSkillCliStatus(),
+        KVStore.getValue('ai.roachclawDefaultModel'),
+        KVStore.getValue('ai.ollamaBaseUrl'),
+        KVStore.getValue('ai.openclawBaseUrl'),
+      ])
 
     let installedModels: string[] = []
     if (ollama.available) {
       try {
-        installedModels = (await this.withTimeout(this.ollamaService.getModels(), 2_500, []))
-          .map((model) => model.name)
-          .filter((modelName) => !modelName.endsWith(':cloud'))
+        installedModels = (
+          await this.withTimeout<Array<{ name: string }>>(
+            this.ollamaService.getModels() as Promise<Array<{ name: string }>>,
+            2_500,
+            []
+          )
+        )
+          .map((model: { name: string }) => model.name)
+          .filter((modelName: string) => !modelName.endsWith(':cloud'))
       } catch {
         installedModels = []
       }
@@ -75,6 +86,18 @@ export class RoachClawService {
     const configFilePath = cliStatus.openclawAvailable
       ? (await this.tryGetOpenClawConfigPath(cliStatus.workspacePath))
       : null
+    const portableProfile = this.buildPortableProfile({
+      workspacePath: cliStatus.workspacePath,
+      model: resolvedDefaultModel || defaultModel,
+      preferredMode,
+      installedModels,
+      preferredModels: [...PREFERRED_ROACHCLAW_MODELS],
+      ollamaBaseUrl: ollama.baseUrl || (storedOllamaBaseUrl as string | null) || env.get('OLLAMA_BASE_URL') || null,
+      openclawBaseUrl:
+        openclaw.baseUrl || (storedOpenClawBaseUrl as string | null) || env.get('OPENCLAW_BASE_URL') || null,
+      configFilePath,
+      updatedAt: new Date().toISOString(),
+    })
 
     return {
       label: 'RoachClaw',
@@ -89,7 +112,13 @@ export class RoachClawService {
       installedModels,
       preferredModels: [...PREFERRED_ROACHCLAW_MODELS],
       configFilePath,
+      portableProfile,
     }
+  }
+
+  public async getPortableProfile(): Promise<RoachClawPortableProfile> {
+    const status = await this.getStatus()
+    return status.portableProfile!
   }
 
   public async applyOnboarding(payload: ApplyRoachClawRequest): Promise<ApplyRoachClawResponse> {
@@ -137,6 +166,11 @@ export class RoachClawService {
     await this.writeRoachClawProfile({
       workspacePath,
       model: normalizedModel,
+      preferredMode: 'openclaw',
+      installedModels: currentModels.includes(normalizedModel)
+        ? currentModels
+        : [...currentModels, normalizedModel],
+      preferredModels: [...PREFERRED_ROACHCLAW_MODELS],
       ollamaBaseUrl,
       openclawBaseUrl,
       configFilePath,
@@ -165,9 +199,9 @@ export class RoachClawService {
 
   private async getInstalledModelNames(): Promise<string[]> {
     try {
-      return (await this.ollamaService.getModels())
-        .map((model) => model.name)
-        .filter((modelName) => !modelName.endsWith(':cloud'))
+      return (await (this.ollamaService.getModels() as Promise<Array<{ name: string }>>))
+        .map((model: { name: string }) => model.name)
+        .filter((modelName: string) => !modelName.endsWith(':cloud'))
     } catch {
       return []
     }
@@ -371,26 +405,29 @@ export class RoachClawService {
 
   private async writeRoachClawProfile(input: {
     workspacePath: string
-    model: string
+    model: string | null
+    preferredMode: 'ollama' | 'openclaw' | 'offline'
+    installedModels: string[]
+    preferredModels: string[]
     ollamaBaseUrl: string
     openclawBaseUrl: string
     configFilePath: string | null
   }) {
-    const profilePath = path.join(input.workspacePath, 'roachclaw.profile.json')
+    const profile = this.buildPortableProfile({
+      workspacePath: input.workspacePath,
+      model: input.model,
+      preferredMode: input.preferredMode,
+      installedModels: input.installedModels,
+      preferredModels: input.preferredModels,
+      ollamaBaseUrl: input.ollamaBaseUrl,
+      openclawBaseUrl: input.openclawBaseUrl,
+      configFilePath: input.configFilePath,
+      updatedAt: new Date().toISOString(),
+    })
+
     await writeFile(
-      profilePath,
-      JSON.stringify(
-        {
-          name: 'RoachClaw',
-          model: input.model,
-          ollamaBaseUrl: input.ollamaBaseUrl,
-          openclawBaseUrl: input.openclawBaseUrl,
-          configFilePath: input.configFilePath,
-          updatedAt: new Date().toISOString(),
-        },
-        null,
-        2
-      ) + '\n',
+      profile.profilePath,
+      JSON.stringify(profile, null, 2) + '\n',
       'utf8'
     )
   }
@@ -412,6 +449,9 @@ export class RoachClawService {
       await this.writeRoachClawProfile({
         workspacePath: input.workspacePath,
         model: input.model,
+        preferredMode: 'openclaw',
+        installedModels: await this.getInstalledModelNames(),
+        preferredModels: [...PREFERRED_ROACHCLAW_MODELS],
         ollamaBaseUrl: input.ollamaBaseUrl,
         openclawBaseUrl: input.openclawBaseUrl,
         configFilePath,
@@ -427,5 +467,75 @@ export class RoachClawService {
         `[RoachClawService] Background OpenClaw reconciliation did not finish cleanly: ${getErrorMessage(error)}`
       )
     }
+  }
+
+  private buildPortableProfile(input: {
+    workspacePath: string
+    model: string | null
+    preferredMode: 'ollama' | 'openclaw' | 'offline'
+    installedModels: string[]
+    preferredModels: string[]
+    ollamaBaseUrl: string | null
+    openclawBaseUrl: string | null
+    configFilePath: string | null
+    updatedAt: string
+  }): RoachClawPortableProfile {
+    const workspacePath = path.resolve(input.workspacePath)
+    const stateDir = path.join(workspacePath, ROACHCLAW_OPENCLAW_STATE_DIRNAME)
+    const portableRoot = this.resolvePortableRoot(workspacePath)
+    const contained =
+      process.env.ROACHNET_NATIVE_ONLY === '1' ||
+      Boolean(process.env.ROACHNET_STORAGE_PATH?.trim() || process.env.NOMAD_STORAGE_PATH?.trim()) ||
+      (path.basename(workspacePath) === 'openclaw' && path.basename(path.dirname(workspacePath)) === 'storage')
+    const runtimeHints: RoachClawPortableProfile['runtimeHints'] = {
+      contained,
+      launchMode: contained ? 'native-contained' : 'configured-runtime',
+      notes: [
+        contained
+          ? 'RoachClaw is pinned to the contained RoachNet runtime lane.'
+          : 'RoachClaw is using configured runtime endpoints outside the contained lane.',
+        input.model
+          ? `RoachClaw will prefer ${input.model} first.`
+          : 'RoachClaw will fall back to the first available preferred local model.',
+        input.openclawBaseUrl
+          ? `OpenClaw endpoint: ${input.openclawBaseUrl}`
+          : 'OpenClaw will stay on runtime discovery until an endpoint is pinned.',
+      ],
+    }
+
+    return {
+      profileVersion: ROACHCLAW_PROFILE_VERSION,
+      label: 'RoachClaw',
+      profilePath: path.join(workspacePath, 'roachclaw.profile.json'),
+      portableRoot,
+      workspacePath,
+      stateDir,
+      configFilePath: input.configFilePath,
+      preferredMode: input.preferredMode,
+      defaultModel: input.model,
+      preferredModels: [...input.preferredModels],
+      installedModels: [...input.installedModels],
+      providerEndpoints: {
+        ollamaBaseUrl: input.ollamaBaseUrl,
+        openclawBaseUrl: input.openclawBaseUrl,
+      },
+      runtimeHints,
+      updatedAt: input.updatedAt,
+    }
+  }
+
+  private resolvePortableRoot(workspacePath: string): string {
+    const explicitPortableRoot =
+      process.env.ROACHNET_STORAGE_PATH?.trim() || process.env.NOMAD_STORAGE_PATH?.trim()
+
+    if (explicitPortableRoot) {
+      return path.resolve(explicitPortableRoot)
+    }
+
+    if (path.basename(workspacePath) === 'openclaw') {
+      return path.dirname(workspacePath)
+    }
+
+    return path.dirname(workspacePath)
   }
 }

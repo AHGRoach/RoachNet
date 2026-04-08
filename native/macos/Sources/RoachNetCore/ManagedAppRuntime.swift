@@ -56,6 +56,34 @@ public struct RoachClawStatusResponse: Decodable, Sendable {
         public let runner: String
     }
 
+    public struct PortableProfile: Decodable, Sendable {
+        public struct ProviderEndpoints: Decodable, Sendable {
+            public let ollamaBaseUrl: String?
+            public let openclawBaseUrl: String?
+        }
+
+        public struct RuntimeHints: Decodable, Sendable {
+            public let contained: Bool
+            public let launchMode: String
+            public let notes: [String]
+        }
+
+        public let profileVersion: Int
+        public let label: String
+        public let profilePath: String
+        public let portableRoot: String
+        public let workspacePath: String
+        public let stateDir: String
+        public let configFilePath: String?
+        public let preferredMode: String
+        public let defaultModel: String?
+        public let preferredModels: [String]
+        public let installedModels: [String]
+        public let providerEndpoints: ProviderEndpoints
+        public let runtimeHints: RuntimeHints
+        public let updatedAt: String
+    }
+
     public let label: String
     public let ollama: AIRuntimeStatusResponse
     public let openclaw: AIRuntimeStatusResponse
@@ -66,7 +94,9 @@ public struct RoachClawStatusResponse: Decodable, Sendable {
     public let preferredMode: String?
     public let ready: Bool?
     public let installedModels: [String]
+    public let preferredModels: [String]?
     public let configFilePath: String?
+    public let portableProfile: PortableProfile?
 }
 
 public struct ManagedRoachTailPeer: Decodable, Identifiable, Sendable {
@@ -106,6 +136,13 @@ public struct ManagedRoachTailActionResponse: Decodable, Sendable {
     public let ok: Bool?
     public let message: String?
     public let state: ManagedRoachTailStatusResponse?
+}
+
+public struct ManagedRoachSyncActionResponse: Decodable, Sendable {
+    public let success: Bool?
+    public let ok: Bool?
+    public let message: String?
+    public let state: ManagedRoachSyncStatusResponse?
 }
 
 public struct ManagedRoachSyncPeer: Decodable, Identifiable, Sendable {
@@ -429,7 +466,10 @@ public actor ManagedAppRuntimeBridge {
             config: config,
             serverInfo: serverInfo
         )
-        let fallbackRoachSyncStatus = self.fallbackRoachSyncStatus(config: config)
+        let fallbackRoachSyncStatus = self.fallbackRoachSyncStatus(
+            config: config,
+            serverInfo: serverInfo
+        )
 
         async let internetConnected = fetchOrFallback(
             "/api/system/internet-status",
@@ -601,6 +641,26 @@ public actor ManagedAppRuntimeBridge {
             "/api/companion/roachtail/affect",
             baseURL: baseURL,
             body: Payload(action: action, relayHost: relayHost)
+        )
+    }
+
+    public func affectRoachSync(
+        using config: RoachNetInstallerConfig,
+        action: String,
+        folderPath: String? = nil
+    ) async throws -> ManagedRoachSyncActionResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let action: String
+            let folderPath: String?
+        }
+
+        return try await post(
+            "/api/companion/roachsync/affect",
+            baseURL: baseURL,
+            body: Payload(action: action, folderPath: folderPath)
         )
     }
 
@@ -872,6 +932,8 @@ public actor ManagedAppRuntimeBridge {
         environment["ROACHNET_CONTAINERLESS_MODE"] = normalizedContainerlessMode
         environment["ROACHNET_DISABLE_QUEUE"] = normalizedContainerlessMode == "1" ? "1" : "0"
         environment["ROACHNET_ROACHCLAW_DEFAULT_MODEL"] = config.roachClawDefaultModel
+        environment["ROACHNET_LOCAL_HOSTNAME"] =
+            ProcessInfo.processInfo.environment["ROACHNET_LOCAL_HOSTNAME"] ?? "RoachNet"
         environment["ROACHNET_COMPANION_ENABLED"] = config.companionEnabled ? "1" : "0"
         environment["ROACHNET_COMPANION_HOST"] = config.companionHost
         environment["ROACHNET_COMPANION_PORT"] = String(config.companionPort)
@@ -1118,7 +1180,9 @@ public actor ManagedAppRuntimeBridge {
             preferredMode: "offline",
             ready: false,
             installedModels: [],
-            configFilePath: nil
+            preferredModels: [],
+            configFilePath: nil,
+            portableProfile: nil
         )
     }
 
@@ -1150,8 +1214,16 @@ public actor ManagedAppRuntimeBridge {
         )
     }
 
-    private func fallbackRoachSyncStatus(config: RoachNetInstallerConfig) -> ManagedRoachSyncStatusResponse {
-        ManagedRoachSyncStatusResponse(
+    private func fallbackRoachSyncStatus(
+        config: RoachNetInstallerConfig,
+        serverInfo: ManagedAppServerInfo
+    ) -> ManagedRoachSyncStatusResponse {
+        let syncBaseURL = publicRoachNetURL(
+            port: "8384",
+            path: "",
+            fallback: serverInfo.webUrl
+        )
+        return ManagedRoachSyncStatusResponse(
             enabled: false,
             provider: "Syncthing",
             networkName: "RoachSync",
@@ -1160,14 +1232,38 @@ public actor ManagedAppRuntimeBridge {
             status: "idle",
             folderId: "roachnet-vault",
             folderPath: RoachNetRepositoryLocator.defaultStoragePath(installPath: config.installPath),
-            guiUrl: "http://127.0.0.1:8384",
-            apiUrl: "http://127.0.0.1:8384/rest",
+            guiUrl: syncBaseURL,
+            apiUrl: "\(syncBaseURL)/rest",
             transportMode: config.companionEnabled ? "local-bridge" : "local-only",
             secureOverlay: false,
             notes: ["RoachSync has not been armed yet in this runtime configuration."],
             peers: [],
             lastUpdatedAt: nil
         )
+    }
+
+    private func publicRoachNetURL(
+        port: String,
+        path: String,
+        fallback: String?
+    ) -> String {
+        if
+            let fallback,
+            let baseURL = URL(string: fallback)
+        {
+            var components = URLComponents()
+            components.scheme = baseURL.scheme ?? "http"
+            components.host = baseURL.host ?? (ProcessInfo.processInfo.environment["ROACHNET_LOCAL_HOSTNAME"] ?? "RoachNet")
+            components.port = Int(port)
+            components.path = path
+            if let rendered = components.url?.absoluteString {
+                return rendered
+            }
+        }
+
+        let host = ProcessInfo.processInfo.environment["ROACHNET_LOCAL_HOSTNAME"] ?? "RoachNet"
+        let suffix = path.hasPrefix("/") || path.isEmpty ? path : "/\(path)"
+        return "http://\(host):\(port)\(suffix)"
     }
 
     private func fallbackRuntimeStatus(provider: String) -> AIRuntimeStatusResponse {
