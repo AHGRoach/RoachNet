@@ -195,6 +195,7 @@ export default function AISettingsPage(props: {
     queryFn: () => api.getRoachClawStatus(),
     staleTime: 15_000,
   })
+  const roachClawPortableProfile = roachClawStatus?.portableProfile
 
   const { data: installedOpenClawSkills } = useQuery({
     queryKey: ['openclaw', 'skills', 'installed'],
@@ -591,6 +592,23 @@ export default function AISettingsPage(props: {
                       <p>
                         OpenClaw config: <span className="text-text-primary break-all">{roachClawStatus?.configFilePath || 'Unavailable'}</span>
                       </p>
+                      {roachClawPortableProfile && (
+                        <>
+                          <p>
+                            Portable root:{' '}
+                            <span className="text-text-primary break-all">{roachClawPortableProfile.portableRoot}</span>
+                          </p>
+                          <p>
+                            State dir:{' '}
+                            <span className="text-text-primary break-all">{roachClawPortableProfile.stateDir}</span>
+                          </p>
+                          <div className="pt-2">
+                            <span className="rounded-full border border-border-default bg-surface-primary px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-desert-green-light">
+                              {roachClawPortableProfile.runtimeHints.contained ? 'Contained lane' : 'Configured lane'}
+                            </span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

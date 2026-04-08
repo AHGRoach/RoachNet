@@ -136,6 +136,7 @@ router
 
 router
   .group(() => {
+    router.get('/profile', [RoachClawController, 'getPortableProfile'])
     router.get('/status', [RoachClawController, 'getStatus'])
     router.post('/apply', [RoachClawController, 'apply'])
   })

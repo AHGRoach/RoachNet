@@ -10,6 +10,10 @@ export default class RoachClawController {
     return this.roachClawService.getStatus()
   }
 
+  async getPortableProfile({}: HttpContext) {
+    return this.roachClawService.getPortableProfile()
+  }
+
   async apply({ request, response }: HttpContext) {
     try {
       const payload = request.only(['model', 'workspacePath', 'ollamaBaseUrl', 'openclawBaseUrl'])
