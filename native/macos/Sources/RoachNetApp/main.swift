@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 import AVKit
 import Carbon
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import WebKit
 import RoachNetCore
 import RoachNetDesign
@@ -823,6 +825,9 @@ final class WorkspaceModel: ObservableObject {
     var roachTailActionInFlight: Bool {
         activeActions.contains { $0.hasPrefix("roachtail-") }
     }
+    var roachSyncActionInFlight: Bool {
+        activeActions.contains { $0.hasPrefix("roachsync-") }
+    }
 
     func refreshConfigOnly() {
         config = RoachNetRepositoryLocator.readConfig()
@@ -1335,6 +1340,46 @@ final class WorkspaceModel: ObservableObject {
         } catch {
             errorLine = error.localizedDescription
             statusLine = "RoachTail update failed."
+        }
+    }
+
+    func affectRoachSync(_ action: String, folderPath: String? = nil) async {
+        let trimmedAction = action.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAction.isEmpty else { return }
+
+        let actionID = "roachsync-\(trimmedAction)"
+        guard !activeActions.contains(actionID) else { return }
+
+        activeActions.insert(actionID)
+        errorLine = nil
+
+        switch trimmedAction {
+        case "enable":
+            statusLine = "Arming RoachSync."
+        case "disable":
+            statusLine = "Disabling RoachSync."
+        case "clear-peers":
+            statusLine = "Clearing linked RoachSync peers."
+        default:
+            statusLine = "Refreshing RoachSync."
+        }
+
+        defer {
+            activeActions.remove(actionID)
+        }
+
+        do {
+            let result = try await ManagedAppRuntimeBridge.shared.affectRoachSync(
+                using: config,
+                action: trimmedAction,
+                folderPath: folderPath
+            )
+            try? await Task.sleep(for: .milliseconds(250))
+            snapshot = try await ManagedAppRuntimeBridge.shared.fetchSnapshot(using: config)
+            statusLine = result.message ?? "RoachSync updated."
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "RoachSync update failed."
         }
     }
 
@@ -3878,6 +3923,7 @@ private struct RootWorkspaceView: View {
         let system = model.snapshot?.systemInfo
         let serverInfo = model.snapshot?.serverInfo
         let roachTail = model.snapshot?.roachTail
+        let roachSync = model.snapshot?.roachSync
         let failedDownloads = (model.snapshot?.downloads ?? []).filter { $0.status == "failed" }
 
         return VStack(alignment: .leading, spacing: 18) {
@@ -4004,6 +4050,133 @@ private struct RootWorkspaceView: View {
                         if !roachTail.notes.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(roachTail.notes.prefix(3), id: \.self) { note in
+                                    Text(note)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(RoachPalette.muted)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+
+                        if let pairingPayload = roachTail.pairingPayload,
+                           !pairingPayload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                           let qrCode = qrCodeImage(from: pairingPayload)
+                        {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Phone Pairing")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.text)
+
+                                HStack(alignment: .top, spacing: 16) {
+                                    Image(nsImage: qrCode)
+                                        .interpolation(.none)
+                                        .resizable()
+                                        .frame(width: 158, height: 158)
+                                        .padding(10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                                .fill(Color.white.opacity(0.96))
+                                        )
+
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Scan this in RoachNetiOS to load the bridge URL and one-time join code.")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(RoachPalette.text)
+                                            .fixedSize(horizontal: false, vertical: true)
+
+                                        if let expiresAt = roachTail.joinCodeExpiresAt, !expiresAt.isEmpty {
+                                            Text("Code rotates at \(expiresAt).")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(RoachPalette.muted)
+                                        }
+
+                                        Text("The QR carries bridge and transport hints only. The phone still mints its own private peer token during pairing.")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(RoachPalette.muted)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let roachSync {
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 16) {
+                        responsiveBar {
+                            RoachSectionHeader(
+                                "RoachSync",
+                                title: roachSync.enabled ? "Contained sync lane is armed." : "Contained sync lane is off.",
+                                detail: "Keep the vault, settings, and future shared installs grouped under one private sync lane instead of loose host folders."
+                            )
+                        } actions: {
+                            Toggle(
+                                isOn: Binding(
+                                    get: { model.snapshot?.roachSync.enabled ?? false },
+                                    set: { nextValue in
+                                        Task {
+                                            await model.affectRoachSync(nextValue ? "enable" : "disable")
+                                        }
+                                    }
+                                )
+                            ) {
+                                Text("Enabled")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.text)
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(model.roachSyncActionInFlight)
+                            .labelsHidden()
+                        }
+
+                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                            RoachMetricCard(label: "Network", value: roachSync.networkName, detail: "Private sync lane")
+                            RoachMetricCard(label: "Peers", value: "\(roachSync.peers.count)", detail: "Linked devices")
+                            RoachMetricCard(label: "State", value: roachSync.status.capitalized, detail: "Current sync state")
+                            RoachMetricCard(label: "Folder", value: roachSync.folderId, detail: "Contained sync target")
+                        }
+
+                        RoachStatusRow(title: "Folder Path", value: roachSync.folderPath, accent: RoachPalette.green)
+
+                        if let guiURL = roachSync.guiUrl, !guiURL.isEmpty {
+                            RoachStatusRow(title: "Control URL", value: guiURL, accent: RoachPalette.green)
+                        }
+
+                        HStack(spacing: 12) {
+                            Button(model.roachSyncActionInFlight ? "Refreshing..." : "Refresh Sync") {
+                                Task { await model.affectRoachSync("refresh") }
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                            .disabled(model.roachSyncActionInFlight)
+
+                            Button(model.roachSyncActionInFlight ? "Clearing..." : "Clear Peers") {
+                                Task { await model.affectRoachSync("clear-peers") }
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                            .disabled(model.roachSyncActionInFlight || roachSync.peers.isEmpty)
+                        }
+
+                        if !roachSync.peers.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("RoachSync Peers")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.text)
+
+                                ForEach(roachSync.peers.prefix(4)) { peer in
+                                    RoachStatusRow(
+                                        title: peer.name,
+                                        value: "\(peer.status.capitalized)\(peer.lastSeenAt.map { " · \($0)" } ?? "")",
+                                        accent: RoachPalette.green
+                                    )
+                                }
+                            }
+                        }
+
+                        if !roachSync.notes.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(roachSync.notes.prefix(3), id: \.self) { note in
                                     Text(note)
                                         .font(.system(size: 12, weight: .medium))
                                         .foregroundStyle(RoachPalette.muted)
@@ -4474,6 +4647,29 @@ private struct RootWorkspaceView: View {
         }
 
         return "Memory tier"
+    }
+
+    private func qrCodeImage(from payload: String) -> NSImage? {
+        let normalized = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+
+        let filter = CIFilter.qrCodeGenerator()
+        filter.setValue(Data(normalized.utf8), forKey: "inputMessage")
+        filter.correctionLevel = "M"
+
+        guard let outputImage = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)) else {
+            return nil
+        }
+
+        let context = CIContext(options: nil)
+        guard let cgImage = context.createCGImage(outputImage, from: outputImage.extent) else {
+            return nil
+        }
+
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: outputImage.extent.width, height: outputImage.extent.height)
+        )
     }
 
     private func logPathValue(_ serverInfo: ManagedAppServerInfo?) -> String {

@@ -138,6 +138,13 @@ public struct ManagedRoachTailActionResponse: Decodable, Sendable {
     public let state: ManagedRoachTailStatusResponse?
 }
 
+public struct ManagedRoachSyncActionResponse: Decodable, Sendable {
+    public let success: Bool?
+    public let ok: Bool?
+    public let message: String?
+    public let state: ManagedRoachSyncStatusResponse?
+}
+
 public struct ManagedRoachSyncPeer: Decodable, Identifiable, Sendable {
     public let id: String
     public let name: String
@@ -634,6 +641,26 @@ public actor ManagedAppRuntimeBridge {
             "/api/companion/roachtail/affect",
             baseURL: baseURL,
             body: Payload(action: action, relayHost: relayHost)
+        )
+    }
+
+    public func affectRoachSync(
+        using config: RoachNetInstallerConfig,
+        action: String,
+        folderPath: String? = nil
+    ) async throws -> ManagedRoachSyncActionResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let action: String
+            let folderPath: String?
+        }
+
+        return try await post(
+            "/api/companion/roachsync/affect",
+            baseURL: baseURL,
+            body: Payload(action: action, folderPath: folderPath)
         )
     }
 

@@ -3,7 +3,7 @@
 # RoachNet — Disk Collector Migration Script
 #
 # Script                | RoachNet Disk Collector Migration Script
-# Version               | 1.0.0
+# Version               | 1.0.6
 # Author                | Crosstalk Solutions, LLC
 # Website               | https://crosstalksolutions.com
 #
