@@ -56,6 +56,34 @@ public struct RoachClawStatusResponse: Decodable, Sendable {
         public let runner: String
     }
 
+    public struct PortableProfile: Decodable, Sendable {
+        public struct ProviderEndpoints: Decodable, Sendable {
+            public let ollamaBaseUrl: String?
+            public let openclawBaseUrl: String?
+        }
+
+        public struct RuntimeHints: Decodable, Sendable {
+            public let contained: Bool
+            public let launchMode: String
+            public let notes: [String]
+        }
+
+        public let profileVersion: Int
+        public let label: String
+        public let profilePath: String
+        public let portableRoot: String
+        public let workspacePath: String
+        public let stateDir: String
+        public let configFilePath: String?
+        public let preferredMode: String
+        public let defaultModel: String?
+        public let preferredModels: [String]
+        public let installedModels: [String]
+        public let providerEndpoints: ProviderEndpoints
+        public let runtimeHints: RuntimeHints
+        public let updatedAt: String
+    }
+
     public let label: String
     public let ollama: AIRuntimeStatusResponse
     public let openclaw: AIRuntimeStatusResponse
@@ -66,7 +94,9 @@ public struct RoachClawStatusResponse: Decodable, Sendable {
     public let preferredMode: String?
     public let ready: Bool?
     public let installedModels: [String]
+    public let preferredModels: [String]?
     public let configFilePath: String?
+    public let portableProfile: PortableProfile?
 }
 
 public struct ManagedRoachTailPeer: Decodable, Identifiable, Sendable {
@@ -1050,7 +1080,9 @@ public actor ManagedAppRuntimeBridge {
             preferredMode: "offline",
             ready: false,
             installedModels: [],
-            configFilePath: nil
+            preferredModels: [],
+            configFilePath: nil,
+            portableProfile: nil
         )
     }
 
