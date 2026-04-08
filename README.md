@@ -37,8 +37,9 @@ The packaged setup lane now ships its own portable embedded Node runtime, so App
 There is also a direct Homebrew lane for Apple Silicon Macs:
 
 ```bash
-brew tap AHGRoach/roachnet
-brew install --cask roachnet
+brew update
+brew tap --force AHGRoach/roachnet
+brew install --cask --no-quarantine roachnet
 open ~/RoachNet/app/RoachNet.app
 ```
 

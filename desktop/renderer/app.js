@@ -914,11 +914,11 @@ function renderSetupPanel(desktopState) {
         <div class="field-grid">
           <label class="field wide">
             <span class="field-label">Install Path</span>
-            <input data-config-field name="installPath" value="${escapeHtml(config.installPath || '')}" placeholder="/Users/roach/RoachNet" />
+            <input data-config-field name="installPath" value="${escapeHtml(config.installPath || '')}" placeholder="~/RoachNet" />
           </label>
           <label class="field wide">
             <span class="field-label">Desktop App Path</span>
-            <input data-config-field name="installedAppPath" value="${escapeHtml(config.installedAppPath || '')}" placeholder="/Users/roach/RoachNet/app/RoachNet.app" />
+            <input data-config-field name="installedAppPath" value="${escapeHtml(config.installedAppPath || '')}" placeholder="~/RoachNet/app/RoachNet.app" />
           </label>
           <label class="field">
             <span class="field-label">Source Mode</span>
@@ -1699,7 +1699,7 @@ function renderRoachClawStudio() {
           </label>
           <label class="field wide">
             <span class="field-label">OpenClaw Workspace</span>
-            <input data-ai-field name="workspacePath" value="${escapeHtml(aiDraft.workspacePath || '')}" placeholder="/Users/roach/RoachNet/storage/openclaw" />
+            <input data-ai-field name="workspacePath" value="${escapeHtml(aiDraft.workspacePath || '')}" placeholder="~/RoachNet/storage/openclaw" />
           </label>
           <label class="field">
             <span class="field-label">Ollama Base URL</span>

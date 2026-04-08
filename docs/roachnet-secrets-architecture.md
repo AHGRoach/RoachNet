@@ -150,11 +150,11 @@ This slice does not yet:
 
 Primary implementation files:
 
-- `/Users/roach/DEVPROJECTS/RoachNet/native/macos/Sources/RoachNetCore/RoachNetDeveloperSupport.swift`
-- `/Users/roach/DEVPROJECTS/RoachNet/native/macos/Sources/RoachNetCore/RuntimeModels.swift`
-- `/Users/roach/DEVPROJECTS/RoachNet/native/macos/Sources/RoachNetCore/ManagedAppRuntime.swift`
-- `/Users/roach/DEVPROJECTS/RoachNet/native/macos/Sources/RoachNetApp/DevWorkspaceView.swift`
-- `/Users/roach/DEVPROJECTS/RoachNet/scripts/run-roachnet.mjs`
+- `native/macos/Sources/RoachNetCore/RoachNetDeveloperSupport.swift`
+- `native/macos/Sources/RoachNetCore/RuntimeModels.swift`
+- `native/macos/Sources/RoachNetCore/ManagedAppRuntime.swift`
+- `native/macos/Sources/RoachNetApp/DevWorkspaceView.swift`
+- `scripts/run-roachnet.mjs`
 
 Operational secret owners:
 

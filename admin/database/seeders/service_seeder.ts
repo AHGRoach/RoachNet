@@ -159,6 +159,43 @@ export default class ServiceSeeder extends BaseSeeder {
       is_dependency_service: false,
       depends_on: null,
     },
+    {
+      service_name: SERVICE_NAMES.ROACHSYNC,
+      friendly_name: 'RoachSync',
+      powered_by: 'Syncthing',
+      display_order: 4,
+      description: 'Private device sync for the RoachNet vault, app settings, and future multi-device state.',
+      icon: 'IconArrowsExchange',
+      container_image: 'syncthing/syncthing:latest',
+      source_repo: 'https://github.com/syncthing/syncthing',
+      container_command: null,
+      container_config: JSON.stringify({
+        HostConfig: {
+          RestartPolicy: { Name: 'unless-stopped' },
+          PortBindings: {
+            '8384/tcp': [{ HostPort: '8384' }],
+            '22000/tcp': [{ HostPort: '22000' }],
+            '22000/udp': [{ HostPort: '22000' }],
+            '21027/udp': [{ HostPort: '21027' }],
+          },
+          Binds: [
+            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/roachsync/config:/var/syncthing/config`,
+            `${ServiceSeeder.NOMAD_STORAGE_ABS_PATH}/vault:/var/syncthing/vault`,
+          ],
+        },
+        ExposedPorts: {
+          '8384/tcp': {},
+          '22000/tcp': {},
+          '22000/udp': {},
+          '21027/udp': {},
+        },
+      }),
+      ui_location: '8384',
+      installed: false,
+      installation_status: 'idle',
+      is_dependency_service: false,
+      depends_on: null,
+    },
   ]
 
   async run() {

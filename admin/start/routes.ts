@@ -170,6 +170,8 @@ router
     router.get('/roachtail', [CompanionController, 'roachtail'])
     router.post('/roachtail/pair', [CompanionController, 'pairRoachTail'])
     router.post('/roachtail/affect', [CompanionController, 'affectRoachTail'])
+    router.get('/roachsync', [CompanionController, 'roachsync'])
+    router.post('/roachsync/affect', [CompanionController, 'affectRoachSync'])
     router.get('/vault', [CompanionController, 'vault'])
     router.post('/services/affect', [CompanionController, 'affectService'])
     router.get('/chat/sessions', [CompanionController, 'sessionsIndex'])

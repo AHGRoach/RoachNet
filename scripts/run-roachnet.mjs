@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
@@ -384,11 +384,7 @@ function getManagedRuntimeStateRoot(envValues) {
     return explicitRoot
   }
 
-  if (process.platform === 'darwin' && process.env.HOME) {
-    return path.join(process.env.HOME, 'Library', 'Application Support', 'roachnet', 'runtime-state')
-  }
-
-  return path.join(getRuntimeEnvValues(envValues).NOMAD_STORAGE_PATH, 'runtime-state')
+  return path.join(normalizeStorageRoot(getRuntimeEnvValues(envValues).NOMAD_STORAGE_PATH), 'state', 'runtime-state')
 }
 
 function getManagedComposeInstallKey(envValues) {
@@ -550,6 +546,65 @@ async function ensureRuntimeArtifactsSigned(runtimeDir, fingerprint) {
   })
 
   writeFileSync(stampPath, `${expectedStamp}\n`, 'utf8')
+}
+
+function resolveComparablePath(targetPath) {
+  try {
+    return realpathSync(targetPath)
+  } catch {
+    return path.resolve(targetPath)
+  }
+}
+
+function matchesBundledDependencyTarget(runtimeNodeModulesPath, bundledRuntimeNodeModulesPath) {
+  if (!existsSync(runtimeNodeModulesPath)) {
+    return false
+  }
+
+  try {
+    if (!lstatSync(runtimeNodeModulesPath).isSymbolicLink()) {
+      return false
+    }
+  } catch {
+    return false
+  }
+
+  return resolveComparablePath(runtimeNodeModulesPath) === resolveComparablePath(bundledRuntimeNodeModulesPath)
+}
+
+function pathExistsIncludingBrokenSymlink(targetPath) {
+  try {
+    lstatSync(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function refreshBundledRuntimeDependencies(
+  runtimeNodeModulesPath,
+  bundledRuntimeNodeModulesPath,
+  runtimeDependencyStampPath,
+  fingerprint
+) {
+  if (pathExistsIncludingBrokenSymlink(runtimeNodeModulesPath)) {
+    rmSync(runtimeNodeModulesPath, { recursive: true, force: true })
+  }
+
+  if (process.platform === 'win32') {
+    await cp(bundledRuntimeNodeModulesPath, runtimeNodeModulesPath, {
+      recursive: true,
+      force: true,
+      dereference: false,
+    })
+  } else {
+    const runtimeNodeModulesParent = resolveComparablePath(path.dirname(runtimeNodeModulesPath))
+    const bundledRuntimeNodeModulesRealPath = resolveComparablePath(bundledRuntimeNodeModulesPath)
+    const relativeTarget = path.relative(runtimeNodeModulesParent, bundledRuntimeNodeModulesRealPath)
+    symlinkSync(relativeTarget, runtimeNodeModulesPath, 'dir')
+  }
+
+  writeFileSync(runtimeDependencyStampPath, `${fingerprint.dependencyHash}\n`, 'utf8')
 }
 
 function getRuntimeEnvValues(envValues) {
@@ -1505,30 +1560,43 @@ async function prepareBuildRuntimeTarget(envValues, options = {}) {
     'utf8'
   )
 
+  const bundledHasCoreDependency = existsSync(path.join(bundledRuntimeNodeModulesPath, '@adonisjs', 'core'))
+  let installedHash = existsSync(runtimeDependencyStampPath)
+    ? readFileSync(runtimeDependencyStampPath, 'utf8').trim()
+    : ''
+  let hasCoreDependency = existsSync(path.join(runtimeNodeModulesPath, '@adonisjs', 'core'))
+
   if (
-    !existsSync(runtimeNodeModulesPath) &&
-    existsSync(path.join(bundledRuntimeNodeModulesPath, '@adonisjs', 'core'))
+    bundledHasCoreDependency &&
+    (
+      !hasCoreDependency ||
+      installedHash !== fingerprint.dependencyHash ||
+      (process.platform !== 'win32' &&
+        existsSync(runtimeNodeModulesPath) &&
+        !matchesBundledDependencyTarget(runtimeNodeModulesPath, bundledRuntimeNodeModulesPath))
+    )
   ) {
     debugBoot('build-runtime:seed-bundled-deps-start', {
       runtimeDir,
       bundledRuntimeNodeModulesPath,
+      mode: process.platform === 'win32' ? 'copy' : 'symlink',
     })
     console.log('Seeding the compiled RoachNet runtime from bundled production dependencies...')
-    await cp(bundledRuntimeNodeModulesPath, runtimeNodeModulesPath, {
-      recursive: true,
-      force: true,
-      dereference: false,
-    })
-    writeFileSync(runtimeDependencyStampPath, `${fingerprint.dependencyHash}\n`, 'utf8')
+    await refreshBundledRuntimeDependencies(
+      runtimeNodeModulesPath,
+      bundledRuntimeNodeModulesPath,
+      runtimeDependencyStampPath,
+      fingerprint
+    )
     debugBoot('build-runtime:seed-bundled-deps-ready', {
       runtimeDir,
+      mode: process.platform === 'win32' ? 'copy' : 'symlink',
     })
+    installedHash = existsSync(runtimeDependencyStampPath)
+      ? readFileSync(runtimeDependencyStampPath, 'utf8').trim()
+      : ''
+    hasCoreDependency = existsSync(path.join(runtimeNodeModulesPath, '@adonisjs', 'core'))
   }
-
-  const installedHash = existsSync(runtimeDependencyStampPath)
-    ? readFileSync(runtimeDependencyStampPath, 'utf8').trim()
-    : ''
-  const hasCoreDependency = existsSync(path.join(runtimeNodeModulesPath, '@adonisjs', 'core'))
 
   if (!hasCoreDependency || installedHash !== fingerprint.dependencyHash) {
     debugBoot('build-runtime:install-deps-start', {

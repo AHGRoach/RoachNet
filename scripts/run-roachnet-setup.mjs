@@ -1819,9 +1819,9 @@ async function waitForChildExit(child, timeoutMs) {
 function getPreferredNodeBinary() {
   const candidates = [
     process.env.ROACHNET_NODE_BINARY,
+    process.execPath,
     '/opt/homebrew/opt/node@22/bin/node',
     '/usr/local/opt/node@22/bin/node',
-    process.execPath,
     'node',
   ]
 
@@ -1839,6 +1839,36 @@ function getPreferredNpmBinary(nodeBinary) {
 
   return candidatePaths.find((candidate) => !candidate.includes(path.sep) || existsSync(candidate)) ||
     (process.platform === 'win32' ? 'npm.cmd' : 'npm')
+}
+
+function resolveInstalledAppNodeBinary(configOrInstallPath, installedAppPath) {
+  const installPath =
+    typeof configOrInstallPath === 'string'
+      ? normalizeInputPath(configOrInstallPath)
+      : normalizeInputPath(configOrInstallPath?.installPath || getDefaultInstallPath())
+  const appPath = normalizeInputPath(
+    installedAppPath ||
+      (typeof configOrInstallPath === 'object' && configOrInstallPath?.installedAppPath) ||
+      getCanonicalInstalledAppPath(installPath)
+  )
+
+  const candidates = [
+    path.join(appPath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'node'),
+    path.join(
+      installPath,
+      'app',
+      'RoachNet.app',
+      'Contents',
+      'Resources',
+      'EmbeddedRuntime',
+      'node',
+      'bin',
+      'node'
+    ),
+    getPreferredNodeBinary(),
+  ]
+
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || getPreferredNodeBinary()
 }
 
 function getShellEnv() {
@@ -2176,8 +2206,6 @@ function shouldIncludeBundledSourcePath(relativePath) {
     normalizedPath === 'admin/storage' ||
     normalizedPath.startsWith('admin/node_modules/') ||
     normalizedPath.startsWith('admin/storage/') ||
-    normalizedPath === 'admin/build/node_modules' ||
-    normalizedPath.startsWith('admin/build/node_modules/') ||
     normalizedPath.startsWith('installer/node_modules/') ||
     normalizedPath.includes('/node_modules_node') ||
     normalizedPath.includes('/storage/logs/') ||
@@ -2261,9 +2289,40 @@ async function ensureRepository(config, repoPath, task) {
 }
 
 async function smokeTestInstalledRuntime(config, envValues, task) {
-  const nodeBinary = getPreferredNodeBinary()
+  const nodeBinary = resolveInstalledAppNodeBinary(config)
   const launcherPath = path.join(config.installPath, 'scripts', 'run-roachnet.mjs')
   const healthUrl = new URL('/api/health', envValues.URL).toString()
+  const storagePath = normalizeInputPath(config.storagePath || envValues.NOMAD_STORAGE_PATH || path.join(config.installPath, 'storage'))
+  const runtimeStateRoot = normalizeInputPath(path.join(storagePath, 'state', 'runtime-state'))
+  const localBinPath = normalizeInputPath(path.join(config.installPath, 'bin'))
+  const openClawWorkspacePath = normalizeInputPath(
+    envValues.OPENCLAW_WORKSPACE_PATH || path.join(storagePath, 'openclaw')
+  )
+  const ollamaModelsPath = normalizeInputPath(
+    envValues.OLLAMA_MODELS || path.join(storagePath, 'ollama')
+  )
+  const installProfile = config.installProfile?.trim() || 'setup-app'
+  const containerlessMode = config.useDockerContainerization ? '0' : '1'
+  const launchEnv = {
+    ...getShellEnv(),
+    NOMAD_STORAGE_PATH: storagePath,
+    OPENCLAW_WORKSPACE_PATH: openClawWorkspacePath,
+    OLLAMA_MODELS: ollamaModelsPath,
+    OLLAMA_BASE_URL: envValues.OLLAMA_BASE_URL || 'http://127.0.0.1:36434',
+    OPENCLAW_BASE_URL: envValues.OPENCLAW_BASE_URL || 'http://127.0.0.1:13001',
+    ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
+    ROACHNET_LOCAL_BIN_PATH: localBinPath,
+    ROACHNET_NODE_BINARY: nodeBinary,
+    ROACHNET_NPM_BINARY: getPreferredNpmBinary(nodeBinary),
+    ROACHNET_INSTALL_PROFILE: installProfile,
+    ROACHNET_BOOTSTRAP_PENDING: config.bootstrapPending ? '1' : '0',
+    ROACHNET_CONTAINERLESS_MODE: containerlessMode,
+    ROACHNET_DISABLE_QUEUE: containerlessMode === '1' ? '1' : '0',
+    ROACHNET_ROACHCLAW_DEFAULT_MODEL:
+      config.roachClawDefaultModel?.trim() || DEFAULT_ROACHCLAW_MODEL,
+    ROACHNET_INSTALLER_CONFIG_PATH: getInstallerConfigPath(),
+    ROACHNET_NO_BROWSER: '1',
+  }
 
   if (!existsSync(launcherPath)) {
     throw new Error(`Missing RoachNet launcher at ${launcherPath}.`)
@@ -2279,10 +2338,7 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
   try {
     launcherChild = spawn(nodeBinary, [launcherPath], {
       cwd: config.installPath,
-      env: {
-        ...getShellEnv(),
-        ROACHNET_NO_BROWSER: '1',
-      },
+      env: launchEnv,
     })
 
     launcherChild.stdout?.on('data', (chunk) => {
@@ -2313,10 +2369,7 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
   } finally {
     await runProcess(nodeBinary, [launcherPath, '--stop'], {
       cwd: config.installPath,
-      env: {
-        ...getShellEnv(),
-        ROACHNET_NO_BROWSER: '1',
-      },
+      env: launchEnv,
       timeoutMs: 30_000,
     }).catch(() => {})
 
@@ -2658,14 +2711,49 @@ function openBrowser(url) {
   spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
 }
 
-async function launchInstalledRoachNet(repoPath, openPath) {
-  const nodeBinary = getPreferredNodeBinary()
+async function launchInstalledRoachNet(repoPath, openPath, installedAppPath) {
+  const nodeBinary = resolveInstalledAppNodeBinary(repoPath, installedAppPath)
+  const persistedConfig = getDefaultConfig(loadPersistedInstallerConfig())
+  const envPath = path.join(repoPath, 'admin', '.env')
+  const envValues = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, 'utf8')) : {}
+  const storagePath = normalizeInputPath(
+    persistedConfig.storagePath || envValues.NOMAD_STORAGE_PATH || path.join(repoPath, 'storage')
+  )
+  const installProfile = persistedConfig.installProfile?.trim() || 'standard'
+  const localBinPath = normalizeInputPath(path.join(repoPath, 'bin'))
+  const runtimeStateRoot = normalizeInputPath(path.join(storagePath, 'state', 'runtime-state'))
+  const openClawWorkspacePath = normalizeInputPath(
+    envValues.OPENCLAW_WORKSPACE_PATH || path.join(storagePath, 'openclaw')
+  )
+  const ollamaModelsPath = normalizeInputPath(
+    envValues.OLLAMA_MODELS || path.join(storagePath, 'ollama')
+  )
+  const embeddedNpmBinaryPath = normalizeInputPath(
+    path.join(installedAppPath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'npm')
+  )
+  const containerlessMode = persistedConfig.useDockerContainerization === false ? '1' : '0'
   spawn(nodeBinary, [path.join(repoPath, 'scripts', 'run-roachnet.mjs')], {
     cwd: repoPath,
     detached: true,
     stdio: 'ignore',
     env: {
       ...getShellEnv(),
+      NOMAD_STORAGE_PATH: storagePath,
+      OPENCLAW_WORKSPACE_PATH: openClawWorkspacePath,
+      OLLAMA_MODELS: ollamaModelsPath,
+      OLLAMA_BASE_URL: envValues.OLLAMA_BASE_URL || 'http://127.0.0.1:36434',
+      OPENCLAW_BASE_URL: envValues.OPENCLAW_BASE_URL || 'http://127.0.0.1:13001',
+      ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
+      ROACHNET_LOCAL_BIN_PATH: localBinPath,
+      ROACHNET_NODE_BINARY: nodeBinary,
+      ROACHNET_NPM_BINARY: embeddedNpmBinaryPath,
+      ROACHNET_INSTALL_PROFILE: installProfile,
+      ROACHNET_BOOTSTRAP_PENDING: persistedConfig.bootstrapPending ? '1' : '0',
+      ROACHNET_CONTAINERLESS_MODE: containerlessMode,
+      ROACHNET_DISABLE_QUEUE: containerlessMode === '1' ? '1' : '0',
+      ROACHNET_ROACHCLAW_DEFAULT_MODEL:
+        persistedConfig.roachClawDefaultModel?.trim() || DEFAULT_ROACHCLAW_MODEL,
+      ROACHNET_INSTALLER_CONFIG_PATH: getInstallerConfigPath(),
       ROACHNET_OPEN_PATH: openPath,
       ROACHNET_NO_BROWSER: process.env.ROACHNET_NO_BROWSER || '0',
     },
@@ -3052,7 +3140,7 @@ async function handleLaunchRequest(request, response) {
       lastOpenedMode: 'app',
       preferredShell: 'native',
     })
-    await launchInstalledRoachNet(installPath, '/easy-setup')
+    await launchInstalledRoachNet(installPath, '/easy-setup', installedAppPath)
     sendJson(response, { ok: true })
   } catch (error) {
     sendJson(response, { error: error.message }, 400)

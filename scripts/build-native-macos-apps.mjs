@@ -116,6 +116,24 @@ function parseEnvFile(content) {
   return values
 }
 
+function readBundleInfoPlist(bundlePath) {
+  const infoPlistPath = path.join(bundlePath, 'Contents', 'Info.plist')
+  if (!existsSync(infoPlistPath)) {
+    throw new Error(`Missing Info.plist at ${infoPlistPath}`)
+  }
+
+  return readFileSync(infoPlistPath, 'utf8')
+}
+
+function readPlistStringValue(plistContent, key) {
+  const match = plistContent.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]+)</string>`))
+  return match?.[1]?.trim() || null
+}
+
+function readBundleVersion(bundlePath) {
+  return readPlistStringValue(readBundleInfoPlist(bundlePath), 'CFBundleShortVersionString')
+}
+
 function serializeEnvFile(values) {
   return (
     Object.entries(values)
@@ -204,27 +222,105 @@ async function verifyNodeRuntimeRoot(runtimeRoot, options = {}) {
     return false
   }
 
-  try {
-    const { stdout } = await run(binaryPath, ['--version'], {
-      stdio: 'pipe',
-      timeoutMs: 4_000,
-    })
-    const resolvedVersion = stdout.trim()
-    const expectedMajor = bundledNodeVersion.replace(/^v/, '').split('.')[0]
-    const actualMajor = resolvedVersion.replace(/^v/, '').split('.')[0]
-    if (actualMajor !== expectedMajor) {
-      return false
-    }
+  const attempts = options.attempts ?? 2
+  const timeoutMs = options.timeoutMs ?? 10_000
 
-    if (options.requirePortable !== true || process.platform !== 'darwin') {
-      return true
-    }
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const versionCheckDir = await mkdtemp(path.join(os.tmpdir(), 'roachnet-node-version-'))
+      const versionPath = path.join(versionCheckDir, 'version.txt')
+      try {
+        await run(
+          binaryPath,
+          [
+            '-e',
+            "require('node:fs').writeFileSync(process.argv[1], process.versions.node)",
+            versionPath,
+          ],
+          {
+            stdio: 'ignore',
+            timeoutMs,
+          }
+        )
+        const resolvedVersion = `v${readFileSync(versionPath, 'utf8').trim()}`
+        const expectedMajor = bundledNodeVersion.replace(/^v/, '').split('.')[0]
+        const actualMajor = resolvedVersion.replace(/^v/, '').split('.')[0]
+        if (actualMajor !== expectedMajor) {
+          return false
+        }
+      } finally {
+        rmSync(versionCheckDir, { recursive: true, force: true })
+      }
 
-    const libraries = await inspectDynamicLibraries(binaryPath)
-    return libraries.every((libraryPath) => isAllowedBundledLibraryPath(libraryPath, runtimeRoot))
-  } catch {
-    return false
+      if (options.requirePortable !== true || process.platform !== 'darwin') {
+        return true
+      }
+
+      const libraries = await inspectDynamicLibraries(binaryPath)
+      return libraries.every((libraryPath) => isAllowedBundledLibraryPath(libraryPath, runtimeRoot))
+    } catch {
+      if (attempt + 1 >= attempts) {
+        return false
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 750))
+    }
   }
+
+  return false
+}
+
+async function verifyBundleMetadata(bundlePath, expectedVersion, label) {
+  if (!existsSync(bundlePath)) {
+    throw new Error(`Missing ${label} bundle at ${bundlePath}`)
+  }
+
+  const actualVersion = readBundleVersion(bundlePath)
+  if (actualVersion !== expectedVersion) {
+    throw new Error(
+      `${label} bundle version mismatch. Expected ${expectedVersion}, found ${actualVersion || 'missing'} at ${bundlePath}`
+    )
+  }
+}
+
+async function verifyEmbeddedNodeBundle(bundlePath, label) {
+  const runtimeRoot = path.join(bundlePath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node')
+  const binaryPath = path.join(runtimeRoot, 'bin', 'node')
+
+  if (!existsSync(binaryPath)) {
+    throw new Error(`${label} is missing the embedded Node runtime binary at ${binaryPath}`)
+  }
+
+  const libraries = await inspectDynamicLibraries(binaryPath)
+  const invalidLibraries = libraries.filter(
+    (libraryPath) => !isAllowedBundledLibraryPath(libraryPath, runtimeRoot)
+  )
+
+  if (invalidLibraries.length > 0) {
+    throw new Error(
+      `${label} is carrying a non-portable embedded Node runtime at ${runtimeRoot}\n${invalidLibraries.join('\n')}`
+    )
+  }
+}
+
+async function verifyBuiltArtifacts() {
+  const desktopBundlePath = path.join(distPath, 'RoachNet.app')
+  const setupBundlePath = path.join(distPath, 'RoachNet Setup.app')
+  const installerAssetBundlePath = path.join(
+    setupBundlePath,
+    'Contents',
+    'Resources',
+    'InstallerAssets',
+    'RoachNet.app'
+  )
+
+  await verifyBundleMetadata(desktopBundlePath, appVersion, 'RoachNet')
+  await verifyBundleMetadata(setupBundlePath, appVersion, 'RoachNet Setup')
+  await verifyBundleMetadata(installerAssetBundlePath, appVersion, 'InstallerAssets RoachNet')
+
+  await verifyEmbeddedNodeBundle(desktopBundlePath, 'RoachNet')
+  await verifyEmbeddedNodeBundle(setupBundlePath, 'RoachNet Setup')
+  await verifyEmbeddedNodeBundle(installerAssetBundlePath, 'InstallerAssets RoachNet')
 }
 
 async function ensureBundledNodeRuntime() {
@@ -751,6 +847,8 @@ async function main() {
   for (const app of apps) {
     builtBundles.push(await bundleApp({ ...app, iconPath }))
   }
+
+  await verifyBuiltArtifacts()
 
   const setupAppBundlePath = builtBundles.find((bundlePath) => bundlePath.endsWith('RoachNet Setup.app'))
   if (setupAppBundlePath) {
