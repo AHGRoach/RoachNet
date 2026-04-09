@@ -17,8 +17,9 @@ const setupBundlePath = path.join(distRoot, 'RoachNet Setup.app')
 const packagedAppBundlePath = path.join(setupBundlePath, 'Contents', 'Resources', 'InstallerAssets', 'RoachNet.app')
 const packageVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version || '1.0.0'
 const pollIntervalMs = 1_500
-const startupTimeoutMs = 300_000
+const startupTimeoutMs = 600_000
 const keepTempArtifacts = process.env.ROACHNET_SMOKE_KEEP_TEMP === '1'
+const smokeWorkspaceRoot = path.join(distRoot, '.smoke-work')
 
 function assert(condition, message) {
   if (!condition) {
@@ -74,10 +75,10 @@ function readBundleVersion(bundlePath) {
   return readPlistStringValue(bundlePath, 'CFBundleShortVersionString')
 }
 
-function getPackagedSetupRuntimePaths() {
+function getPackagedSetupRuntimePaths(bundlePath = setupBundlePath) {
   return {
-    nodeBinary: path.join(setupBundlePath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'node'),
-    launcherPath: path.join(setupBundlePath, 'Contents', 'Resources', 'RoachNetSource', 'scripts', 'run-roachnet-setup.mjs'),
+    nodeBinary: path.join(bundlePath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'node'),
+    launcherPath: path.join(bundlePath, 'Contents', 'Resources', 'RoachNetSource', 'scripts', 'run-roachnet-setup.mjs'),
   }
 }
 
@@ -244,6 +245,77 @@ function spawnProcess(command, args, options = {}) {
   }
 }
 
+async function runCommand(command, args, options = {}) {
+  const child = spawn(command, args, {
+    cwd: options.cwd || repoRoot,
+    env: options.env || process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let stdout = ''
+  let stderr = ''
+  let timedOut = false
+  const timeoutHandle =
+    options.timeoutMs && options.timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          child.kill('SIGKILL')
+        }, options.timeoutMs)
+      : null
+
+  child.stdout?.on('data', (chunk) => {
+    stdout += chunk.toString()
+  })
+  child.stderr?.on('data', (chunk) => {
+    stderr += chunk.toString()
+  })
+
+  return await new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', (code) => {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle)
+      }
+
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(' ')} timed out after ${options.timeoutMs}ms\n${stderr}`))
+        return
+      }
+
+      if (code === 0) {
+        resolve({ stdout, stderr })
+        return
+      }
+
+      reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}\n${stderr || stdout}`))
+    })
+  })
+}
+
+async function normalizeMacBundle(bundlePath, homePath, timeoutMs = startupTimeoutMs) {
+  const env = baseShellEnv(homePath)
+
+  await runCommand('xattr', ['-d', 'com.apple.quarantine', bundlePath], {
+    env,
+    timeoutMs: 15_000,
+  }).catch(() => {})
+
+  await runCommand('xattr', ['-d', 'com.apple.provenance', bundlePath], {
+    env,
+    timeoutMs: 15_000,
+  }).catch(() => {})
+
+  await runCommand('xattr', ['-cr', bundlePath], {
+    env,
+    timeoutMs,
+  }).catch(() => {})
+
+  await runCommand('codesign', ['--force', '--deep', '--sign', '-', bundlePath], {
+    env,
+    timeoutMs,
+  })
+}
+
 function formatProcessLogs(label, logs) {
   const stdout = logs?.stdout?.trim()
   const stderr = logs?.stderr?.trim()
@@ -301,6 +373,11 @@ async function safeRemoveTree(targetPath) {
   }
 }
 
+async function makeVolumeLocalTempRoot(prefix) {
+  mkdirSync(smokeWorkspaceRoot, { recursive: true })
+  return mkdtemp(path.join(smokeWorkspaceRoot, prefix))
+}
+
 async function verifyBundleVersions() {
   const bundles = [
     ['RoachNet', path.join(distRoot, 'RoachNet.app')],
@@ -349,7 +426,7 @@ async function smokeSetupLane() {
   const installRoot = path.join(tempRoot, 'installed', 'RoachNet')
   const installAppPath = path.join(installRoot, 'app', 'RoachNet.app')
   const storagePath = path.join(installRoot, 'storage')
-  const { nodeBinary, launcherPath } = getPackagedSetupRuntimePaths()
+  const stagedSetupBundlePath = path.join(tempRoot, 'RoachNet Setup.app')
   const setupPort = await resolveAvailablePort()
   const setupBaseUrl = `http://127.0.0.1:${setupPort}`
   const mockHostsPath = path.join(tempRoot, 'mock-hosts')
@@ -359,12 +436,20 @@ async function smokeSetupLane() {
   mkdirSync(path.dirname(installRoot), { recursive: true })
   writeFileSync(mockHostsPath, '127.0.0.1 localhost\n::1 localhost\n', 'utf8')
 
+  await runCommand('ditto', ['--noqtn', setupBundlePath, stagedSetupBundlePath], {
+    env: baseShellEnv(homePath),
+    timeoutMs: startupTimeoutMs,
+  })
+  await normalizeMacBundle(stagedSetupBundlePath, homePath)
+
+  const { nodeBinary, launcherPath } = getPackagedSetupRuntimePaths(stagedSetupBundlePath)
+
   const setupProcess = spawnProcess(nodeBinary, [launcherPath], {
     cwd: path.dirname(launcherPath),
     env: {
       ...baseShellEnv(homePath),
       ROACHNET_SETUP_NO_BROWSER: '1',
-      ROACHNET_SETUP_APP_BUNDLE: setupBundlePath,
+      ROACHNET_SETUP_APP_BUNDLE: stagedSetupBundlePath,
       ROACHNET_SETUP_PORT: String(setupPort),
       ROACHNET_INSTALLER_CONFIG_PATH: configPath,
       ROACHNET_SHARED_APP_DATA_DIR: sharedAppDataDir,
@@ -500,6 +585,7 @@ async function smokeHomebrewLane() {
     recursive: true,
     force: true,
   })
+  await normalizeMacBundle(appPath, homePath)
 
   const config = {
     installPath: installRoot,

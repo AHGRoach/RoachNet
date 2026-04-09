@@ -421,9 +421,23 @@ async function installDirectoryArtifact(sourcePath, targetPath) {
   await rm(targetPath, { recursive: true, force: true }).catch(() => {})
   await ensureDirectory(path.dirname(targetPath))
   if (process.platform === 'darwin') {
-    await runProcess('ditto', ['--noqtn', sourcePath, targetPath], {
-      env: getShellEnv(),
-    })
+    try {
+      await runProcess('ditto', ['--clone', '--noqtn', sourcePath, targetPath], {
+        env: getShellEnv(),
+      })
+    } catch (cloneError) {
+      await runProcess('ditto', ['--noqtn', sourcePath, targetPath], {
+        env: getShellEnv(),
+      }).catch((fallbackError) => {
+        throw new Error(
+          [
+            `Failed to install directory artifact from ${sourcePath} to ${targetPath}.`,
+            `clone attempt: ${cloneError?.message || cloneError}`,
+            `fallback attempt: ${fallbackError?.message || fallbackError}`,
+          ].join('\n\n')
+        )
+      })
+    }
   } else {
     await cp(sourcePath, targetPath, {
       recursive: true,
@@ -452,8 +466,6 @@ async function clearMacQuarantine(targetPath) {
     return
   }
 
-  // Clearing the top-level bundle quarantine attribute is enough to keep the
-  // app launchable, and avoids walking the entire contained runtime tree.
   await runProcess('xattr', ['-d', 'com.apple.quarantine', targetPath], {
     env: getShellEnv(),
     timeoutMs: 15_000,
@@ -463,6 +475,31 @@ async function clearMacQuarantine(targetPath) {
     env: getShellEnv(),
     timeoutMs: 15_000,
   }).catch(() => {})
+
+  const embeddedRuntimePath = path.join(targetPath, 'Contents', 'Resources', 'EmbeddedRuntime')
+  const isAppBundle = targetPath.endsWith('.app')
+
+  if (isAppBundle) {
+    // Unsigned installs need the copied app bundle itself normalized as the
+    // actual launch boundary, not only the embedded Node subtree.
+    await runProcess('xattr', ['-cr', targetPath], {
+      env: getShellEnv(),
+      timeoutMs: 300_000,
+    }).catch(() => {})
+
+    await runProcess('codesign', ['--force', '--deep', '--sign', '-', targetPath], {
+      env: getShellEnv(),
+      timeoutMs: 300_000,
+    }).catch(() => {})
+    return
+  }
+
+  if (existsSync(embeddedRuntimePath)) {
+    await runProcess('xattr', ['-cr', embeddedRuntimePath], {
+      env: getShellEnv(),
+      timeoutMs: 20_000,
+    }).catch(() => {})
+  }
 }
 
 async function resolveLocalNativeAppSource(config, task) {

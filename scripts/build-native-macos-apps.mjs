@@ -370,6 +370,34 @@ async function signAppBundle(bundlePath) {
   await run('codesign', args, { stdio: 'pipe' })
 }
 
+async function clearLaunchMetadata(targetPath, options = {}) {
+  if (process.platform !== 'darwin' || !existsSync(targetPath)) {
+    return
+  }
+
+  if (options.recursive === true) {
+    await run('xattr', ['-cr', targetPath], {
+      stdio: 'pipe',
+    }).catch(() => {})
+    return
+  }
+
+  await run('xattr', ['-d', 'com.apple.provenance', targetPath], {
+    stdio: 'pipe',
+  }).catch(() => {})
+
+  await run('xattr', ['-d', 'com.apple.quarantine', targetPath], {
+    stdio: 'pipe',
+  }).catch(() => {})
+}
+
+async function clearEmbeddedRuntimeLaunchMetadata(bundlePath) {
+  await clearLaunchMetadata(bundlePath)
+  await clearLaunchMetadata(path.join(bundlePath, 'Contents', 'Resources', 'EmbeddedRuntime'), {
+    recursive: true,
+  })
+}
+
 async function ensureLaunchGuideVideo() {
   if (existsSync(launchGuideVideoPath) && process.env.ROACHNET_REBUILD_LAUNCH_GUIDE !== '1') {
     return
@@ -583,6 +611,7 @@ async function copyBundledNodeRuntime(sourcePath, resourcesPath) {
   const destinationPath = path.join(resourcesPath, 'EmbeddedRuntime', 'node')
   console.log(`Bundling self-contained Node runtime into ${destinationPath}...`)
   await copyTreeFast(sourcePath, destinationPath)
+  await clearLaunchMetadata(path.join(resourcesPath, 'EmbeddedRuntime'), { recursive: true })
 }
 
 async function detachMountedImage(imagePath) {
@@ -777,6 +806,7 @@ ${urlSchemes.map((scheme) => `        <string>${scheme}</string>`).join('\n')}
   console.log(`Signing ${name}...`)
 
   await signAppBundle(bundlePath)
+  await clearEmbeddedRuntimeLaunchMetadata(bundlePath)
 
   return bundlePath
 }

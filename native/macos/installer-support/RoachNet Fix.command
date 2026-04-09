@@ -30,8 +30,9 @@ echo "============"
 echo
 echo "This helper will:"
 echo "1. Copy $APP_NAME into /Applications"
-echo "2. Remove quarantine flags from the copied app"
-echo "3. Open the copied app"
+echo "2. Clear launch metadata from the copied app and its embedded runtime"
+echo "3. Refresh the copied app's local ad-hoc signature"
+echo "4. Open the copied app"
 echo
 echo "It does not disable Gatekeeper globally."
 echo
@@ -49,7 +50,16 @@ sudo ditto --noqtn "$SOURCE_APP" "$TARGET_APP"
 echo "Clearing quarantine metadata..."
 sudo /bin/sh <<EOF
 if [ -e "$TARGET_APP" ]; then
+  xattr -d com.apple.quarantine "$TARGET_APP" >/dev/null 2>&1 || true
+  xattr -d com.apple.provenance "$TARGET_APP" >/dev/null 2>&1 || true
   xattr -cr "$TARGET_APP" >/dev/null 2>&1 || true
+fi
+EOF
+
+echo "Refreshing the copied app signature..."
+sudo /bin/sh <<EOF
+if [ -e "$TARGET_APP" ]; then
+  codesign --force --deep --sign - "$TARGET_APP" >/dev/null 2>&1 || true
 fi
 EOF
 
