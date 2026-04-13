@@ -27,20 +27,20 @@ enum SetupStage: Int, CaseIterable, Identifiable {
     var headline: String {
         switch self {
         case .welcome: return "Start the install."
-        case .machine: return "Pick the machine lane."
-        case .runtime: return "Stage the local runtime."
-        case .roachClaw: return "Set the first AI lane."
-        case .finish: return "Launch the real shell."
+        case .machine: return "Choose where RoachNet lives."
+        case .runtime: return "Set the local stack."
+        case .roachClaw: return "Pick the first AI model."
+        case .finish: return "Open the real app."
         }
     }
 
     var detail: String {
         switch self {
-        case .welcome: return "RoachNet stages the install, runtime, and first content lanes before it hands you into the shell."
-        case .machine: return "Choose where the app and content live, then let setup work from that contained root."
-        case .runtime: return "The runtime stays grouped with RoachNet instead of leaving a trail across the machine."
-        case .roachClaw: return "Contained Ollama and OpenClaw start from a default tuned for this Mac."
-        case .finish: return "The machine is staged. Open Home and keep moving."
+        case .welcome: return "RoachNet stages the app, runtime, and first content before it opens Home."
+        case .machine: return "Keep the app, storage, and runtime under one root so backup and cleanup stay simple."
+        case .runtime: return "Keep the working stack inside RoachNet instead of spread around the Mac."
+        case .roachClaw: return "Start with one good local default now. You can swap it later."
+        case .finish: return "Everything is staged. Open RoachNet and get moving."
         }
     }
 }
@@ -56,6 +56,8 @@ final class SetupController: ObservableObject {
     @Published var isBusy = false
 
     private var allowAutomaticFinishAdvance = true
+    private var startedInstallInCurrentSession = false
+    private var scheduledAutomaticExit = false
     private var process: Process?
     private var readyFileURL: URL?
     private var serverURL: URL?
@@ -163,6 +165,37 @@ final class SetupController: ObservableObject {
         statusLine = "Content folder updated."
     }
 
+    func chooseInstallFolder() {
+        let currentPath = config.installPath.isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
+        let previousInstallPath = currentPath
+        let previousDefaultStoragePath = RoachNetRepositoryLocator.defaultStoragePath(installPath: previousInstallPath)
+
+        let panel = NSOpenPanel()
+        panel.title = "Choose RoachNet Install Root"
+        panel.message = "Pick the folder RoachNet should use as its contained root. The app, runtime, and default storage stay grouped there."
+        panel.prompt = "Use Folder"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: currentPath).deletingLastPathComponent()
+
+        guard panel.runModal() == .OK, let selectedPath = panel.url?.path else {
+            return
+        }
+
+        config.installPath = selectedPath
+        config.installedAppPath = RoachNetRepositoryLocator.defaultInstalledAppPath(installPath: selectedPath)
+
+        if config.storagePath.isEmpty || config.storagePath == previousDefaultStoragePath {
+            config.storagePath = RoachNetRepositoryLocator.defaultStoragePath(installPath: selectedPath)
+        }
+
+        statusLine = "Install root updated."
+    }
+
     func startRuntimeAction() async {
         guard config.useDockerContainerization else {
             statusLine = "Docker containerization is off for this install."
@@ -196,6 +229,7 @@ final class SetupController: ObservableObject {
         isBusy = true
         errorLine = nil
         statusLine = "Installing RoachNet."
+        startedInstallInCurrentSession = true
 
         do {
             try await persistConfig()
@@ -221,13 +255,28 @@ final class SetupController: ObservableObject {
 
         do {
             try await persistConfig()
-            let _: SimpleOKResponse = try await request(
-                path: "/api/launch",
-                method: "POST",
-                body: config,
-                as: SimpleOKResponse.self
-            )
+            let targetPath = config.installedAppPath.isEmpty
+                ? RoachNetRepositoryLocator.defaultInstalledAppPath(installPath: config.installPath)
+                : config.installedAppPath
+            if FileManager.default.fileExists(atPath: targetPath) {
+                NSWorkspace.shared.openApplication(
+                    at: URL(fileURLWithPath: targetPath),
+                    configuration: NSWorkspace.OpenConfiguration()
+                ) { _, _ in }
+            }
+            Task { [config] in
+                _ = try? await request(
+                    path: "/api/launch",
+                    method: "POST",
+                    body: config,
+                    as: SimpleOKResponse.self
+                )
+            }
             statusLine = "RoachNet launched."
+            for window in NSApp.windows {
+                window.close()
+            }
+            NSApp.terminate(nil)
         } catch {
             errorLine = describe(error)
         }
@@ -269,8 +318,15 @@ final class SetupController: ObservableObject {
         if state.activeTask?.status == "running" {
             statusLine = state.activeTask?.phase ?? "Setup running."
             isBusy = true
+            errorLine = nil
         } else {
             isBusy = false
+            if state.lastCompletedTask?.status == "failed" {
+                errorLine = state.lastCompletedTask?.error
+                statusLine = "Setup needs attention."
+            } else if state.lastCompletedTask?.status == "completed" {
+                errorLine = nil
+            }
         }
 
         let hasPreparedWorkspace = state.installLooksReady || state.config.setupCompletedAt != nil
@@ -286,8 +342,29 @@ final class SetupController: ObservableObject {
             } else if state.nativeApp.installed {
                 statusLine = "RoachNet is already installed."
             }
+
+            if startedInstallInCurrentSession,
+               state.lastCompletedTask?.status == "completed",
+               config.autoLaunch,
+               state.nativeApp.installed {
+                scheduleAutomaticExitIfNeeded()
+            }
         } else if stage == .finish && !installCompleted {
             stage = .roachClaw
+            scheduledAutomaticExit = false
+        }
+    }
+
+    private func scheduleAutomaticExitIfNeeded() {
+        guard !scheduledAutomaticExit else { return }
+        scheduledAutomaticExit = true
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.25))
+            for window in NSApp.windows {
+                window.close()
+            }
+            NSApp.terminate(nil)
         }
     }
 
@@ -300,6 +377,9 @@ final class SetupController: ObservableObject {
             serverURL = url
             return
         }
+
+        let setupWorkspaceRoot = preferredSetupWorkspaceRoot()
+        setenv("ROACHNET_SETUP_WORK_ROOT", setupWorkspaceRoot, 1)
 
         guard let repoRoot = RoachNetRepositoryLocator.repositoryRoot() else {
             throw NSError(domain: "RoachNetSetup", code: 1, userInfo: [
@@ -335,6 +415,7 @@ final class SetupController: ObservableObject {
         environment["ROACHNET_SETUP_READY_FILE"] = readyFileURL.path
         environment["ROACHNET_REPO_ROOT"] = repoRoot.path
         environment["ROACHNET_SCRIPT_PATH"] = scriptURL.path
+        environment["ROACHNET_SETUP_WORK_ROOT"] = setupWorkspaceRoot
         if let installerAssets = RoachNetRepositoryLocator.bundledInstallerAssetsDirectory() {
             environment["ROACHNET_SETUP_APP_BUNDLE"] = installerAssets
                 .appendingPathComponent("setup-assets.marker")
@@ -538,6 +619,30 @@ final class SetupController: ObservableObject {
             }
         }
 
+        if description.localizedCaseInsensitiveContains("needs about")
+            && description.localizedCaseInsensitiveContains("free on the selected install volume")
+        {
+            return description
+        }
+
+        if description.localizedCaseInsensitiveContains("no space left on device")
+            || description.localizedCaseInsensitiveContains("enospc")
+        {
+            return "RoachNet ran out of disk space while staging the contained install. Free up more space, choose a roomier install root, or turn off Install RoachClaw for the first pass."
+        }
+
+        if description.localizedCaseInsensitiveContains("reading 'includes'")
+            || description.localizedCaseInsensitiveContains("reading \\\"includes\\\"")
+        {
+            return "RoachNet Setup hit a bad package check while staging the contained tools. Retry the install with the rebuilt bundle."
+        }
+
+        if description.localizedCaseInsensitiveContains("npm error")
+            || description.localizedCaseInsensitiveContains("npm install")
+        {
+            return "RoachNet Setup couldn't finish staging one of the contained tool bundles. Retry the install. If you only need the shell first, turn off Install RoachClaw and finish setup in two passes."
+        }
+
         return description
     }
 
@@ -560,6 +665,54 @@ final class SetupController: ObservableObject {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         guard !data.isEmpty else { return "" }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private func preferredSetupWorkspaceRoot() -> String {
+        let candidateInstallPath = config.installPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
+
+        var candidates: [URL] = [
+            URL(fileURLWithPath: RoachNetRepositoryLocator.defaultSetupWorkspaceRoot(installPath: candidateInstallPath))
+        ]
+
+        if let mountedVolumes = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: [.volumeAvailableCapacityForImportantUsageKey, .isWritableKey, .volumeIsReadOnlyKey],
+            options: [.skipHiddenVolumes]
+        ) {
+            for volumeURL in mountedVolumes {
+                candidates.append(volumeURL.appendingPathComponent(".roachnet-setup", isDirectory: true))
+            }
+        }
+
+        let deduplicatedCandidates = Array(
+            Dictionary(grouping: candidates, by: { $0.standardizedFileURL.path }).values.compactMap(\.first)
+        )
+
+        let bestCandidate = deduplicatedCandidates.max { lhs, rhs in
+            availableCapacity(for: lhs) < availableCapacity(for: rhs)
+        }
+
+        return bestCandidate?.standardizedFileURL.path
+            ?? URL(fileURLWithPath: RoachNetRepositoryLocator.defaultSetupWorkspaceRoot(installPath: candidateInstallPath)).standardizedFileURL.path
+    }
+
+    private func availableCapacity(for workspaceURL: URL) -> Int64 {
+        let probeURL = workspaceURL.deletingLastPathComponent()
+        do {
+            let values = try probeURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .isWritableKey, .volumeIsReadOnlyKey])
+            if values.volumeIsReadOnly == true || values.isWritable == false {
+                return 0
+            }
+
+            if let capacity = values.volumeAvailableCapacityForImportantUsage {
+                return capacity
+            }
+        } catch {
+            return 0
+        }
+
+        return 0
     }
 }
 
@@ -598,7 +751,7 @@ struct RoachNetSetupApp: App {
     @StateObject private var controller = SetupController()
 
     var body: some Scene {
-        Window("RoachNet Setup", id: "main") {
+        WindowGroup("RoachNet Setup", id: "main") {
             SetupRootView(controller: controller)
                 .background(SetupWindowConfigurator())
                 .frame(minWidth: 760, idealWidth: 980, minHeight: 580, idealHeight: 740)
@@ -606,7 +759,10 @@ struct RoachNetSetupApp: App {
                     appDelegate.controller = controller
                 }
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+        }
     }
 }
 
@@ -632,7 +788,7 @@ final class RoachNetSetupAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
+        true
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -825,21 +981,21 @@ private struct SetupRootView: View {
                     RoachFeatureTile(
                         "Machine",
                         title: "Check this Mac",
-                        detail: "RoachNet checks what is present and only stages what this install still needs.",
+                        detail: "RoachNet reads the machine and only stages what this install still needs.",
                         systemName: "desktopcomputer",
                         accent: RoachPalette.green
                     )
                     RoachFeatureTile(
                         "Runtime",
-                        title: "Stage the local stack",
-                        detail: "The setup flow handles the runtime and contained services instead of assuming a prepped machine.",
+                        title: "Stage the stack",
+                        detail: "The runtime and contained services are staged here instead of assumed.",
                         systemName: "server.rack",
                         accent: RoachPalette.magenta
                     )
                     RoachFeatureTile(
                         "Launch",
                         title: "Open RoachNet",
-                        detail: "Move straight into the real shell once storage, runtime, and the first AI lane are aligned.",
+                        detail: "Move straight into the real shell once storage, runtime, and the first AI lane are in place.",
                         systemName: "sparkles",
                         accent: RoachPalette.cyan
                     )
@@ -849,22 +1005,28 @@ private struct SetupRootView: View {
         case .machine:
             VStack(alignment: .leading, spacing: 16) {
                 LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                    RoachInfoPill(title: "Install Root", value: controller.config.installPath)
-                    RoachInfoPill(title: "App Target", value: controller.config.installedAppPath)
+                    RoachInfoPill(title: "Install Root", value: installRootLabel(controller.config.installPath))
+                    RoachInfoPill(title: "App Target", value: appTargetLabel(controller.config.installedAppPath))
                     RoachInfoPill(
                         title: "Content Folder",
-                        value: controller.config.storagePath.isEmpty
-                            ? RoachNetRepositoryLocator.defaultStoragePath(installPath: controller.config.installPath)
-                            : controller.config.storagePath
+                        value: contentFolderLabel(
+                            controller.config.storagePath.isEmpty
+                                ? RoachNetRepositoryLocator.defaultStoragePath(installPath: controller.config.installPath)
+                                : controller.config.storagePath
+                        )
                     )
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
+                    SetupNativeButton(title: "Choose Install Root", role: .secondary) {
+                        controller.chooseInstallFolder()
+                    }
+
                     SetupNativeButton(title: "Choose Content Folder", role: .secondary) {
                         controller.chooseStorageFolder()
                     }
 
-                    Text("You can change this later from RoachNet Runtime too.")
+                    Text("You can change this later from Runtime.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -887,9 +1049,11 @@ private struct SetupRootView: View {
                     RoachInfoPill(title: "Services", value: servicesValue)
                     RoachInfoPill(
                         title: "Storage",
-                        value: controller.config.storagePath.isEmpty
-                            ? RoachNetRepositoryLocator.defaultStoragePath(installPath: controller.config.installPath)
-                            : controller.config.storagePath
+                        value: contentFolderLabel(
+                            controller.config.storagePath.isEmpty
+                                ? RoachNetRepositoryLocator.defaultStoragePath(installPath: controller.config.installPath)
+                                : controller.config.storagePath
+                        )
                     )
                 }
 
@@ -899,7 +1063,7 @@ private struct SetupRootView: View {
                             Text("Use Docker containerization")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(RoachPalette.text)
-                            Text("Leave this off for the fully-contained Apple Silicon lane. Turn it on only if you want Docker-backed support services.")
+                            Text("Leave this off for the contained Apple Silicon path. Turn it on only if you want Docker-backed support services.")
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(RoachPalette.muted)
                         }
@@ -913,7 +1077,7 @@ private struct SetupRootView: View {
                             Text("Enable RoachTail pairing")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(RoachPalette.text)
-                            Text("Keep the private device lane on so iPhone and iPad builds can pair over the companion bridge with a one-time join code.")
+                            Text("Leave the private device lane on if you want iPhone and iPad builds to pair with a one-time join code.")
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(RoachPalette.muted)
                         }
@@ -938,7 +1102,7 @@ private struct SetupRootView: View {
                             Text("Install RoachClaw")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(RoachPalette.text)
-                            Text("Keep Ollama and OpenClaw aligned from the first launch.")
+                            Text("Stage the first local AI lane now so chat is ready when the shell opens.")
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(RoachPalette.muted)
                         }
@@ -989,7 +1153,7 @@ private struct SetupRootView: View {
             if let logs = controller.setupState?.activeTask?.logs, !logs.isEmpty {
                 RoachInsetPanel {
                     VStack(alignment: .leading, spacing: 8) {
-                        RoachKicker("Recent")
+                        RoachKicker("Recent setup log")
                         ForEach(Array(logs.suffix(2).enumerated()), id: \.offset) { _, log in
                             Text(log)
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -1110,8 +1274,46 @@ private struct SetupRootView: View {
         return "Pending"
     }
 
+    private func installRootLabel(_ rawPath: String) -> String {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "RoachNet root"
+        }
+
+        let lastComponent = URL(fileURLWithPath: trimmed).lastPathComponent
+        if lastComponent.isEmpty || lastComponent.localizedCaseInsensitiveContains("roachnet") {
+            return "RoachNet root"
+        }
+
+        return "\(lastComponent) / RoachNet"
+    }
+
+    private func appTargetLabel(_ rawPath: String) -> String {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "RoachNet.app"
+        }
+
+        let lastComponent = URL(fileURLWithPath: trimmed).lastPathComponent
+        return lastComponent.isEmpty ? "RoachNet.app" : lastComponent
+    }
+
+    private func contentFolderLabel(_ rawPath: String) -> String {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "RoachNet storage"
+        }
+
+        let lastComponent = URL(fileURLWithPath: trimmed).lastPathComponent
+        if lastComponent.isEmpty || lastComponent.localizedCaseInsensitiveContains("storage") {
+            return "RoachNet storage"
+        }
+
+        return lastComponent
+    }
+
     private var summaryColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 176), spacing: 12, alignment: .top)]
+        [GridItem(.adaptive(minimum: 208), spacing: 12, alignment: .top)]
     }
 
     private var stageHeroCopy: some View {

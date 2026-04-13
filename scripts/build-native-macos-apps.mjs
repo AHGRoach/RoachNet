@@ -32,10 +32,12 @@ const installerHelperPath = path.join(
 )
 const appVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version || '1.0.0'
 const bundledNodeVersion = 'v22.22.2'
+const bundledOpenClawPackage = process.env.ROACHNET_BUNDLED_OPENCLAW_PACKAGE?.trim() || 'openclaw@2026.4.9'
 const codesignIdentity = process.env.ROACHNET_CODESIGN_IDENTITY?.trim() || ''
 const notaryProfile = process.env.ROACHNET_NOTARY_PROFILE?.trim() || ''
 const notaryKeychain = process.env.ROACHNET_NOTARY_KEYCHAIN?.trim() || ''
 const skipDmg = process.env.ROACHNET_SKIP_DMG === '1'
+const OLLAMA_RELEASE_API_URL = 'https://api.github.com/repos/ollama/ollama/releases/latest'
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -151,6 +153,167 @@ function getPreferredNodeBinary() {
 
   const macHomebrewNode22 = '/opt/homebrew/opt/node@22/bin/node'
   return existsSync(macHomebrewNode22) ? macHomebrewNode22 : process.execPath
+}
+
+function getPreferredNpmBinary() {
+  const nodeBinary = getPreferredNodeBinary()
+  const localNodeNpm = nodeBinary.includes(path.sep)
+    ? path.join(path.dirname(nodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm')
+    : null
+  const macHomebrewNode22 = '/opt/homebrew/opt/node@22/bin/npm'
+
+  return [localNodeNpm, macHomebrewNode22, 'npm']
+    .filter(Boolean)
+    .find((candidate) => candidate === 'npm' || existsSync(candidate)) || 'npm'
+}
+
+function sanitizeCacheKey(value) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '-')
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': 'RoachNet-Bundler',
+      accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(`Request failed for ${url}: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+async function downloadFile(url, destinationPath) {
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': 'RoachNet-Bundler',
+      accept: '*/*',
+    },
+  })
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Download failed for ${url}: ${response.status} ${response.statusText}`)
+  }
+
+  mkdirSync(path.dirname(destinationPath), { recursive: true })
+  const arrayBuffer = await response.arrayBuffer()
+  writeFileSync(destinationPath, Buffer.from(arrayBuffer))
+}
+
+async function getLatestOllamaRelease() {
+  const release = await fetchJson(OLLAMA_RELEASE_API_URL)
+  const asset = Array.isArray(release.assets)
+    ? release.assets.find((entry) => entry?.name === 'ollama-darwin.tgz')
+    : null
+
+  return {
+    version: release.tag_name?.replace(/^v/i, '') || 'latest',
+    assetName: asset?.name || 'ollama-darwin.tgz',
+    url: asset?.browser_download_url || 'https://ollama.com/download/ollama-darwin.tgz',
+  }
+}
+
+async function ensureBundledOpenClawCache() {
+  const cacheRoot = path.join(repoRoot, 'native', 'macos', '.cache', 'bundled-openclaw')
+  const cacheKey = sanitizeCacheKey(bundledOpenClawPackage)
+  const packageRoot = path.join(cacheRoot, cacheKey)
+  const packageJsonPath = path.join(packageRoot, 'package.json')
+  const installedBinaryPath = path.join(
+    packageRoot,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'
+  )
+
+  if (!existsSync(installedBinaryPath)) {
+    console.log(`Preparing bundled OpenClaw payload from ${bundledOpenClawPackage}...`)
+    rmSync(packageRoot, { recursive: true, force: true })
+    mkdirSync(packageRoot, { recursive: true })
+    writeFileSync(
+      packageJsonPath,
+      JSON.stringify(
+        {
+          name: 'roachnet-bundled-openclaw',
+          private: true,
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    )
+
+    await run(getPreferredNpmBinary(), ['install', '--prefix', packageRoot, '--no-audit', '--no-fund', '--omit=dev', bundledOpenClawPackage], {
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        npm_config_update_notifier: 'false',
+        npm_config_fund: 'false',
+        npm_config_audit: 'false',
+      },
+    })
+  } else {
+    console.log(`Using cached bundled OpenClaw payload from ${packageRoot}...`)
+  }
+
+  return packageRoot
+}
+
+async function prepareBundledOpenClawPackage(stagedSourceRoot) {
+  const packageRoot = await ensureBundledOpenClawCache()
+  const destinationRoot = path.join(stagedSourceRoot, 'runtime', 'vendor', 'openclaw')
+  await copyTreeFast(packageRoot, destinationRoot)
+}
+
+async function ensureBundledOllamaCache() {
+  if (!(process.platform === 'darwin' && process.arch === 'arm64')) {
+    return null
+  }
+
+  const release = await getLatestOllamaRelease()
+  const cacheRoot = path.join(repoRoot, 'native', 'macos', '.cache', 'bundled-ollama')
+  const archivePath = path.join(cacheRoot, release.assetName)
+  const extractedRoot = path.join(cacheRoot, sanitizeCacheKey(release.version))
+  const extractedBinaryPath = path.join(extractedRoot, 'ollama')
+
+  if (!existsSync(extractedBinaryPath)) {
+    console.log(`Preparing bundled Ollama payload ${release.version}...`)
+    rmSync(extractedRoot, { recursive: true, force: true })
+    mkdirSync(cacheRoot, { recursive: true })
+    await downloadFile(release.url, archivePath)
+    mkdirSync(extractedRoot, { recursive: true })
+    await run('tar', ['-xzf', archivePath, '-C', extractedRoot], {
+      stdio: 'pipe',
+    })
+  } else {
+    console.log(`Using cached bundled Ollama payload from ${extractedRoot}...`)
+  }
+
+  return extractedRoot
+}
+
+async function prepareBundledOllamaPayload(stagedSourceRoot) {
+  const extractedRoot = await ensureBundledOllamaCache()
+  if (!extractedRoot) {
+    return
+  }
+
+  const destinationRoot = path.join(stagedSourceRoot, 'runtime', 'vendor', 'ollama')
+  await copyTreeFast(extractedRoot, destinationRoot)
+}
+
+async function prepareInstallerContainedTooling(installerAssetsPath) {
+  const openClawDestination = path.join(installerAssetsPath, 'bundled-openclaw')
+  const ollamaDestination = path.join(installerAssetsPath, 'bundled-ollama')
+  const packageRoot = await ensureBundledOpenClawCache()
+  await copyTreeFast(packageRoot, openClawDestination)
+
+  const extractedRoot = await ensureBundledOllamaCache()
+  if (extractedRoot) {
+    await copyTreeFast(extractedRoot, ollamaDestination)
+  }
 }
 
 function getBundledNodePlatformTag() {
@@ -378,14 +541,86 @@ async function ensureBundledNodeRuntime() {
   return extractedPath
 }
 
-async function signAppBundle(bundlePath) {
-  const args = ['--force', '--deep', '--sign', codesignIdentity || '-', bundlePath]
+function getCodesignArgs(targetPath, options = {}) {
+  const args = ['--force', '--sign', codesignIdentity || '-']
 
   if (codesignIdentity) {
-    args.splice(2, 0, '--options', 'runtime', '--timestamp')
+    args.push('--options', 'runtime', '--timestamp')
   }
 
-  await run('codesign', args, { stdio: 'pipe' })
+  if (options.bundle === true) {
+    args.push('--preserve-metadata=identifier,entitlements,flags,runtime')
+  }
+
+  args.push(targetPath)
+  return args
+}
+
+async function signCodeObject(targetPath, options = {}) {
+  if (!codesignIdentity) {
+    return
+  }
+
+  await run('codesign', getCodesignArgs(targetPath, options), { stdio: 'pipe' })
+}
+
+async function collectCodeSignTargets(rootPath) {
+  if (!existsSync(rootPath)) {
+    return []
+  }
+
+  const targets = []
+  const queue = [rootPath]
+
+  while (queue.length > 0) {
+    const currentPath = queue.pop()
+    const entries = await readdir(currentPath, { withFileTypes: true })
+
+    for (const entry of entries) {
+      if (entry.name === 'InstallerAssets') {
+        continue
+      }
+
+      const entryPath = path.join(currentPath, entry.name)
+      if (entry.isDirectory()) {
+        queue.push(entryPath)
+        continue
+      }
+
+      if (!entry.isFile()) {
+        continue
+      }
+
+      const extension = path.extname(entry.name)
+      if (
+        extension === '.dylib' ||
+        extension === '.node' ||
+        entry.name === 'node' ||
+        entryPath.includes(`${path.sep}Contents${path.sep}MacOS${path.sep}`)
+      ) {
+        targets.push(entryPath)
+      }
+    }
+  }
+
+  return targets.sort((left, right) => right.length - left.length)
+}
+
+async function signAppBundle(bundlePath) {
+  const signTargetRoots = [
+    path.join(bundlePath, 'Contents', 'MacOS'),
+    path.join(bundlePath, 'Contents', 'Frameworks'),
+    path.join(bundlePath, 'Contents', 'Resources', 'EmbeddedRuntime'),
+  ]
+
+  for (const rootPath of signTargetRoots) {
+    const targets = await collectCodeSignTargets(rootPath)
+    for (const targetPath of targets) {
+      await signCodeObject(targetPath)
+    }
+  }
+
+  await signCodeObject(bundlePath, { bundle: true })
 }
 
 async function clearLaunchMetadata(targetPath, options = {}) {
@@ -802,8 +1037,6 @@ async function createSetupDmg(setupAppBundlePath) {
   const dmgPath = path.join(distPath, 'RoachNet-Setup-macOS.dmg')
   const stagingRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-dmg-staging-'))
   const stagingFolder = path.join(stagingRoot, 'RoachNet Setup')
-  const desktopAppBundlePath = path.join(distPath, 'RoachNet.app')
-  const stagedDesktopAppPath = path.join(stagingFolder, 'RoachNet.app')
   const stagedSetupAppPath = path.join(stagingFolder, path.basename(setupAppBundlePath))
   const stagedHelperPath = path.join(stagingFolder, 'RoachNet Fix.command')
 
@@ -811,9 +1044,6 @@ async function createSetupDmg(setupAppBundlePath) {
   rmSync(dmgPath, { force: true })
 
   mkdirSync(stagingFolder, { recursive: true })
-  if (existsSync(desktopAppBundlePath)) {
-    await cp(desktopAppBundlePath, stagedDesktopAppPath, { recursive: true, force: true })
-  }
   await cp(setupAppBundlePath, stagedSetupAppPath, { recursive: true, force: true })
 
   if (existsSync(installerHelperPath)) {
@@ -1009,6 +1239,7 @@ async function main() {
         await createBundledSourceArchive(bundledSourceArchivePath)
         mkdirSync(installerAssetsPath, { recursive: true })
         writeFileSync(path.join(installerAssetsPath, 'setup-assets.marker'), '', 'utf8')
+        await prepareInstallerContainedTooling(installerAssetsPath)
 
         if (existsSync(desktopAppBundlePath)) {
           await createMacAppArchive(

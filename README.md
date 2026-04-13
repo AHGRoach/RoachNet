@@ -9,6 +9,7 @@ RoachNet keeps maps, models, dev tools, and notes in one contained workspace ins
 [API Docs](https://roachnet.org/api/)  
 [GitHub Releases](https://github.com/AHGRoach/RoachNet/releases)  
 [RoachNet iOS](https://roachnet.org/iOS/)  
+[RoachNet SideStore Source](https://github.com/AHGRoach/RoachNet-SideStore)  
 [Public Website Source](https://github.com/AHGRoach/roachnet-org)
 
 ## What It Ships With
@@ -39,7 +40,7 @@ There is also a direct Homebrew lane for Apple Silicon Macs:
 ```bash
 brew update
 brew tap --force AHGRoach/roachnet
-brew install --cask --no-quarantine roachnet
+brew install --cask roachnet
 open ~/RoachNet/app/RoachNet.app
 ```
 

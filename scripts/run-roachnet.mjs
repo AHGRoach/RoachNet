@@ -45,7 +45,7 @@ const BUILD_RUNTIME_OPENCLAW_PORT = '13001'
 const DEFAULT_COMPANION_HOST = '0.0.0.0'
 const DEFAULT_COMPANION_PORT = '38111'
 const DEFAULT_ROACHNET_LOCAL_HOSTNAME = 'RoachNet'
-const MANAGED_PORT_FALLBACKS = ['8080', BUILD_RUNTIME_OPENCLAW_PORT]
+const MANAGED_PORT_FALLBACKS = ['8080', BUILD_RUNTIME_OLLAMA_PORT, BUILD_RUNTIME_OPENCLAW_PORT]
 const MANAGED_RUNTIME_DB_USER = 'nomad_user'
 const MANAGED_RUNTIME_SECRETS_FILENAME = 'roachnet-managed-runtime-secrets.json'
 const MANAGED_RUNTIME_DB_DATABASE = 'nomad'
@@ -2008,11 +2008,40 @@ async function maybeSpawnContainedOllama({ runtimeEnvValues, logFd }) {
   const parsedBaseUrl = new URL(baseUrl)
   const host = parsedBaseUrl.hostname || '127.0.0.1'
   const port = parsedBaseUrl.port || '11434'
+  const storageRoot = normalizeStorageRoot(runtimeEnvValues.NOMAD_STORAGE_PATH)
   const modelsPath =
     runtimeEnvValues.OLLAMA_MODELS?.trim() ||
-    path.join(runtimeEnvValues.NOMAD_STORAGE_PATH || getPersistentStorageRoot(), 'ollama')
+    path.join(storageRoot || getPersistentStorageRoot(), 'ollama')
+  const ollamaHomeRoot = path.join(storageRoot || getPersistentStorageRoot(), 'state', 'ollama-home')
+  const dotOllamaPath = path.join(ollamaHomeRoot, '.ollama')
+  const registryPrivateKeyPath = path.join(dotOllamaPath, 'id_ed25519')
+  const registryPublicKeyPath = `${registryPrivateKeyPath}.pub`
 
   mkdirSync(modelsPath, { recursive: true })
+  mkdirSync(ollamaHomeRoot, { recursive: true })
+
+  if (existsSync(dotOllamaPath)) {
+    const dotOllamaStats = lstatSync(dotOllamaPath)
+    if (!dotOllamaStats.isDirectory() || dotOllamaStats.isSymbolicLink()) {
+      rmSync(dotOllamaPath, { recursive: true, force: true })
+    }
+  }
+
+  mkdirSync(dotOllamaPath, { recursive: true })
+
+  if (!existsSync(registryPrivateKeyPath) || !existsSync(registryPublicKeyPath)) {
+    await runCommand(
+      'ssh-keygen',
+      ['-q', '-t', 'ed25519', '-N', '', '-f', registryPrivateKeyPath],
+      {
+        env: {
+          ...process.env,
+          HOME: ollamaHomeRoot,
+        },
+        timeoutMs: 20_000,
+      }
+    )
+  }
 
   if (await waitForHttpEndpoint(new URL('/api/version', parsedBaseUrl).toString(), 1_000)) {
     return null
@@ -2025,7 +2054,9 @@ async function maybeSpawnContainedOllama({ runtimeEnvValues, logFd }) {
     env: {
       ...process.env,
       ...runtimeEnvValues,
+      HOME: ollamaHomeRoot,
       OLLAMA_HOST: `${host}:${port}`,
+      OLLAMA_HOME: dotOllamaPath,
       OLLAMA_MODELS: modelsPath,
     },
     logFd,
@@ -2196,32 +2227,6 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     }
   }
 
-  if (wantsContainerlessRuntime(runtimeEnvValues)) {
-    ollamaHandle = await maybeSpawnContainedOllama({
-      runtimeEnvValues,
-      logFd: serverLogFd,
-    })
-
-    if (runtimeEnvValues.OLLAMA_BASE_URL?.trim()) {
-      const ollamaReady = await waitForHttpEndpoint(
-        new URL('/api/version', runtimeEnvValues.OLLAMA_BASE_URL).toString(),
-        Math.min(timeoutMs, 120_000)
-      )
-
-      if (!ollamaReady) {
-        console.warn(
-          `Contained Ollama did not answer on ${runtimeEnvValues.OLLAMA_BASE_URL} before the local timeout. ` +
-            'RoachClaw may stay unavailable until Ollama finishes warming up.'
-        )
-      }
-    }
-  }
-
-  openclawHandle = await maybeSpawnOpenClawGateway({
-    runtimeEnvValues,
-    logFd: serverLogFd,
-  })
-
   const healthyUrl = await waitForHealth(healthUrls, timeoutMs)
   debugBoot('launch-server:health-result', {
     resolvedKind: resolvedTarget.kind,
@@ -2230,6 +2235,30 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
     workerExited: workerHandle?.hasExited() ?? null,
   })
   if (healthyUrl) {
+    if (wantsContainerlessRuntime(runtimeEnvValues)) {
+      ollamaHandle = await maybeSpawnContainedOllama({
+        runtimeEnvValues,
+        logFd: serverLogFd,
+      })
+
+      if (runtimeEnvValues.OLLAMA_BASE_URL?.trim()) {
+        const ollamaHealthUrl = new URL('/api/version', runtimeEnvValues.OLLAMA_BASE_URL).toString()
+        void waitForHttpEndpoint(ollamaHealthUrl, Math.min(timeoutMs, 120_000)).then((ollamaReady) => {
+          if (!ollamaReady) {
+            console.warn(
+              `Contained Ollama did not answer on ${runtimeEnvValues.OLLAMA_BASE_URL} before the local timeout. ` +
+                'RoachClaw may stay unavailable until Ollama finishes warming up.'
+            )
+          }
+        })
+      }
+    }
+
+    openclawHandle = await maybeSpawnOpenClawGateway({
+      runtimeEnvValues,
+      logFd: serverLogFd,
+    })
+
     const companionTargetUrl = resolveCompanionTargetUrl({
       resolvedTarget,
       healthyUrl,

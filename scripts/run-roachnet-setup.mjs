@@ -4,7 +4,7 @@ import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { chmod, copyFile, cp, mkdtemp, readFile, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
+import { chmod, copyFile, cp, mkdtemp, readFile, readdir, rename, rm, stat, statfs, symlink } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -38,6 +38,9 @@ const INSTALLER_DIAGNOSTIC_COMMAND_TIMEOUT_MS = 1_500
 const GITHUB_API_ROOT = 'https://api.github.com'
 const DEFAULT_ROACHCLAW_MODEL = 'qwen2.5-coder:1.5b'
 const OLLAMA_RELEASE_API_URL = 'https://api.github.com/repos/ollama/ollama/releases/latest'
+const GIB = 1024 ** 3
+const MIN_FREE_BYTES_BASE_INSTALL = 2 * GIB
+const MIN_FREE_BYTES_WITH_ROACHCLAW = 5 * GIB
 
 const runtimeState = {
   task: null,
@@ -179,6 +182,74 @@ function stripUndefinedEntries(input) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined))
 }
 
+function shouldPreserveTransientInstallerPaths() {
+  const explicitConfigPath = process.env.ROACHNET_INSTALLER_CONFIG_PATH?.trim()
+  return explicitConfigPath?.length > 0 || process.env.ROACHNET_ALLOW_TRANSIENT_INSTALL_PATHS === '1'
+}
+
+function isTransientRoachNetPath(candidatePath) {
+  if (typeof candidatePath !== 'string' || !candidatePath.trim()) {
+    return false
+  }
+
+  const normalizedPath = normalizeInputPath(candidatePath).toLowerCase()
+  const tmpRoots = [
+    normalizeInputPath(os.tmpdir()),
+    '/tmp',
+    '/private/tmp',
+    '/var/folders',
+    '/private/var/folders',
+  ].map((value) => value.toLowerCase())
+
+  return tmpRoots.some((root) => normalizedPath.startsWith(root)) && normalizedPath.includes('roachnet')
+}
+
+function sanitizePersistedInstallerConfig(config) {
+  if (!config || typeof config !== 'object' || shouldPreserveTransientInstallerPaths()) {
+    return config || {}
+  }
+
+  const defaultInstallPath = normalizeInputPath(getDefaultInstallPath())
+  const installPath = normalizeInputPath(config.installPath || defaultInstallPath)
+  const installPathWasTransient = isTransientRoachNetPath(installPath)
+  const sanitizedInstallPath = installPathWasTransient ? defaultInstallPath : installPath
+  const sanitizedInstalledAppPath = installPathWasTransient
+    ? getCanonicalInstalledAppPath(sanitizedInstallPath)
+    : normalizeInputPath(config.installedAppPath || getCanonicalInstalledAppPath(sanitizedInstallPath))
+  const sanitizedStoragePath = installPathWasTransient
+    ? normalizeInputPath(path.join(sanitizedInstallPath, 'storage'))
+    : normalizeInputPath(config.storagePath || path.join(sanitizedInstallPath, 'storage'))
+
+  const normalizedAppPath =
+    isTransientRoachNetPath(sanitizedInstalledAppPath) ||
+    !sanitizedInstalledAppPath.startsWith(`${sanitizedInstallPath}${path.sep}`)
+      ? getCanonicalInstalledAppPath(sanitizedInstallPath)
+      : sanitizedInstalledAppPath
+  const normalizedStoragePath =
+    isTransientRoachNetPath(sanitizedStoragePath) ||
+    !sanitizedStoragePath.startsWith(`${sanitizedInstallPath}${path.sep}`)
+      ? normalizeInputPath(path.join(sanitizedInstallPath, 'storage'))
+      : sanitizedStoragePath
+
+  const nextConfig = {
+    ...config,
+    installPath: sanitizedInstallPath,
+    installedAppPath: normalizedAppPath,
+    storagePath: normalizedStoragePath,
+  }
+
+  if (installPathWasTransient) {
+    nextConfig.setupCompletedAt = null
+    nextConfig.pendingLaunchIntro = false
+    nextConfig.pendingRoachClawSetup = false
+    nextConfig.bootstrapPending = false
+    nextConfig.bootstrapFailureCount = 0
+    nextConfig.lastRuntimeHealthAt = null
+  }
+
+  return nextConfig
+}
+
 function loadPersistedInstallerConfig() {
   if (runtimeState.persistedConfig) {
     return runtimeState.persistedConfig
@@ -191,9 +262,18 @@ function loadPersistedInstallerConfig() {
   const legacyConfig =
     usingExplicitConfigPath || configPath === legacyConfigPath ? null : readJsonFile(legacyConfigPath)
 
-  runtimeState.persistedConfig = primaryConfig || legacyConfig || {}
+  const persistedConfig = primaryConfig || legacyConfig || {}
+  runtimeState.persistedConfig = sanitizePersistedInstallerConfig(persistedConfig)
 
   if (!usingExplicitConfigPath && !primaryConfig && legacyConfig) {
+    mkdirSync(path.dirname(configPath), { recursive: true })
+    writeFileSync(configPath, JSON.stringify(runtimeState.persistedConfig, null, 2) + '\n', 'utf8')
+  }
+
+  if (
+    !usingExplicitConfigPath &&
+    JSON.stringify(runtimeState.persistedConfig) !== JSON.stringify(persistedConfig)
+  ) {
     mkdirSync(path.dirname(configPath), { recursive: true })
     writeFileSync(configPath, JSON.stringify(runtimeState.persistedConfig, null, 2) + '\n', 'utf8')
   }
@@ -244,7 +324,25 @@ function parseGitHubRepo(sourceRepoUrl = DEFAULT_SOURCE_REPO_URL) {
 function resolvePackagedSetupBundlePath() {
   const explicitBundlePath = process.env.ROACHNET_SETUP_APP_BUNDLE?.trim()
   if (explicitBundlePath) {
-    return normalizeInputPath(explicitBundlePath)
+    const normalizedExplicitPath = normalizeInputPath(explicitBundlePath)
+    if (normalizedExplicitPath.endsWith('.app')) {
+      return normalizedExplicitPath
+    }
+
+    const markerBasename = path.basename(normalizedExplicitPath)
+    if (markerBasename === 'setup-assets.marker') {
+      return path.dirname(path.dirname(path.dirname(path.dirname(normalizedExplicitPath))))
+    }
+
+    if (path.basename(normalizedExplicitPath) === 'InstallerAssets') {
+      return path.dirname(path.dirname(path.dirname(normalizedExplicitPath)))
+    }
+
+    if (normalizedExplicitPath.includes(`${path.sep}Contents${path.sep}Resources${path.sep}`)) {
+      return path.dirname(path.dirname(path.dirname(normalizedExplicitPath)))
+    }
+
+    return normalizedExplicitPath
   }
 
   if (process.platform !== 'darwin') {
@@ -260,6 +358,44 @@ function resolvePackagedSetupBundlePath() {
   }
 
   return null
+}
+
+function resolvePackagedInstallerAssetsPath() {
+  const explicitBundlePath = process.env.ROACHNET_SETUP_APP_BUNDLE?.trim()
+  if (explicitBundlePath) {
+    const normalizedExplicitPath = normalizeInputPath(explicitBundlePath)
+    if (path.basename(normalizedExplicitPath) === 'setup-assets.marker') {
+      return path.dirname(normalizedExplicitPath)
+    }
+
+    if (path.basename(normalizedExplicitPath) === 'InstallerAssets') {
+      return normalizedExplicitPath
+    }
+
+    if (normalizedExplicitPath.endsWith('.app')) {
+      return path.join(normalizedExplicitPath, 'Contents', 'Resources', 'InstallerAssets')
+    }
+
+    if (normalizedExplicitPath.includes(`${path.sep}Contents${path.sep}Resources${path.sep}`)) {
+      return path.join(path.dirname(normalizedExplicitPath), 'InstallerAssets')
+    }
+  }
+
+  const setupBundlePath = resolvePackagedSetupBundlePath()
+  if (!setupBundlePath) {
+    return null
+  }
+
+  return path.join(setupBundlePath, 'Contents', 'Resources', 'InstallerAssets')
+}
+
+function getBundledInstallerAssetPath(...pathSegments) {
+  const installerAssetsPath = resolvePackagedInstallerAssetsPath()
+  if (!installerAssetsPath) {
+    return null
+  }
+
+  return path.join(installerAssetsPath, ...pathSegments)
 }
 
 function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
@@ -289,6 +425,9 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
         setupResourcesDir ? path.join(setupResourcesDir, 'InstallerAssets', `RoachNet-${version}-mac-${arch}.zip`) : null,
       ].filter(Boolean),
       assetMatcher(name) {
+        if (typeof name !== 'string') {
+          return false
+        }
         return (
           name === `RoachNet-${version}-mac-${arch}.zip` ||
           (name.includes(`mac-${arch}`) && name.endsWith('.zip'))
@@ -308,6 +447,9 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
         setupBundleDir ? path.join(setupBundleDir, `RoachNet-${version}-win-${arch}.exe`) : null,
       ].filter(Boolean),
       assetMatcher(name) {
+        if (typeof name !== 'string') {
+          return false
+        }
         return name.includes(`win-${arch}`) && name.endsWith('.exe')
       },
     }
@@ -323,6 +465,9 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
       setupBundleDir ? path.join(setupBundleDir, `RoachNet-${version}-linux-${arch}.AppImage`) : null,
     ].filter(Boolean),
     assetMatcher(name) {
+      if (typeof name !== 'string') {
+        return false
+      }
       return name.includes(`linux-${arch}`) && name.endsWith('.AppImage')
     },
   }
@@ -561,7 +706,7 @@ async function resolveReleaseNativeAppSource(config, task) {
   }
 
   appendTaskLog(task, `Downloading ${asset.name} from GitHub releases...`)
-  const downloadDirectory = await mkdtemp(path.join(os.tmpdir(), 'roachnet-app-download-'))
+  const downloadDirectory = await createSetupTempDirectory(config, 'roachnet-app-download')
   const downloadedPath = path.join(downloadDirectory, asset.name)
   await downloadFile(asset.browser_download_url, downloadedPath)
 
@@ -592,7 +737,7 @@ async function installNativeDesktopApp(config, task) {
   }
 
   if (descriptor.kind === 'bundle') {
-    const extractionRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-app-extract-'))
+    const extractionRoot = await createSetupTempDirectory(config, 'roachnet-app-extract')
     await extractArchive(source.path, extractionRoot)
     const extractedBundlePath = await findFirstPathNamed(extractionRoot, source.bundleName)
 
@@ -634,6 +779,23 @@ async function launchNativeDesktopApp(appPath) {
   spawn(appPath, [], { detached: true, stdio: 'ignore' }).unref()
 }
 
+async function requestSetupAppQuit() {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  const quitScript = `
+tell application "RoachNet Setup"
+  quit
+end tell
+`.trim()
+
+  await runProcess('osascript', ['-e', quitScript], {
+    env: getShellEnv(),
+    timeoutMs: 10_000,
+  }).catch(() => {})
+}
+
 function hasCurrentWorkspaceSource() {
   return (
     existsSync(path.join(repoRoot, 'package.json')) &&
@@ -652,6 +814,25 @@ function normalizeInputPath(inputPath) {
   }
 
   return path.resolve(inputPath)
+}
+
+function getSetupWorkspaceRoot(config = {}) {
+  const explicitRoot = process.env.ROACHNET_SETUP_WORK_ROOT?.trim()
+  if (explicitRoot) {
+    return normalizeInputPath(explicitRoot)
+  }
+
+  const installPath = normalizeInputPath(
+    config.installPath || loadPersistedInstallerConfig().installPath || getDefaultInstallPath()
+  )
+
+  return normalizeInputPath(path.join(installPath, '.roachnet-setup'))
+}
+
+async function createSetupTempDirectory(config, prefix) {
+  const tempRoot = path.join(getSetupWorkspaceRoot(config), 'tmp')
+  await ensureDirectory(tempRoot)
+  return mkdtemp(path.join(tempRoot, `${prefix}-`))
 }
 
 function getCanonicalInstalledAppPath(installPath) {
@@ -1354,12 +1535,16 @@ async function detectDependencies({ containerRuntime, includeUpdateChecks = fals
     ? await detectOutdatedPackages(packageManager.id)
     : new Set()
   const gitPath = await commandPath('git')
-  const bundledNodePath = getPreferredNodeBinary()
-  const bundledNpmPath = getPreferredNpmBinary(bundledNodePath)
+  const bundledNodePath = getPreferredNodeBinary() || 'node'
+  const bundledNpmPath =
+    getPreferredNpmBinary(bundledNodePath) || (process.platform === 'win32' ? 'npm.cmd' : 'npm')
   const nodePath = (await commandPath('node')) || (existsSync(bundledNodePath) ? bundledNodePath : null)
   const npmPath =
     (await commandPath(process.platform === 'win32' ? 'npm.cmd' : 'npm')) ||
-    ((!bundledNpmPath.includes(path.sep) || existsSync(bundledNpmPath)) ? bundledNpmPath : null)
+    ((typeof bundledNpmPath === 'string' &&
+      (!bundledNpmPath.includes(path.sep) || existsSync(bundledNpmPath)))
+      ? bundledNpmPath
+      : null)
   const openclawPath = await commandPath(process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw')
   const resolvedContainerRuntime =
     containerRuntime ||
@@ -1380,10 +1565,8 @@ async function detectDependencies({ containerRuntime, includeUpdateChecks = fals
     dockerComposeVersion,
   ] = await Promise.all([
     gitPath ? detectCommandVersion('git', ['--version']) : Promise.resolve(null),
-    nodePath ? detectCommandVersion('node', ['--version']) : Promise.resolve(null),
-    npmPath
-      ? detectCommandVersion(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'])
-      : Promise.resolve(null),
+    nodePath ? detectCommandVersion(nodePath, ['--version']) : Promise.resolve(null),
+    npmPath ? detectCommandVersion(npmPath, ['--version']) : Promise.resolve(null),
     ollamaAvailablePromise,
     openclawAvailablePromise,
     resolvedContainerRuntime.dockerCliPath
@@ -1396,7 +1579,10 @@ async function detectDependencies({ containerRuntime, includeUpdateChecks = fals
   const [ollamaVersion, openclawVersion, latestOpenclawVersion] = await Promise.all([
     ollamaAvailable ? detectCommandVersion('ollama', ['--version']) : Promise.resolve(null),
     openclawAvailable
-      ? detectCommandVersion(process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw', ['--version'])
+      ? detectCommandVersion(
+          openclawPath || (process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'),
+          ['--version']
+        )
       : Promise.resolve(null),
     includeUpdateChecks && openclawAvailable
       ? detectLatestNpmPackageVersion('openclaw', npmPath)
@@ -1406,9 +1592,14 @@ async function detectDependencies({ containerRuntime, includeUpdateChecks = fals
   const nodeNeedsUpdate =
     Boolean(nodeVersion) && compareVersions(nodeVersion, minimumNodeVersion) < 0
   const packageTargets = getDependencyPackageTargets(packageManager.id)
-  const bundledNodeResolvedPath = bundledNodePath.includes(path.sep) ? path.resolve(bundledNodePath) : null
+  const bundledNodeResolvedPath =
+    typeof bundledNodePath === 'string' && bundledNodePath.includes(path.sep)
+      ? path.resolve(bundledNodePath)
+      : null
   const bundledNpmResolvedPath =
-    bundledNpmPath.includes(path.sep) && existsSync(bundledNpmPath) ? path.resolve(bundledNpmPath) : null
+    typeof bundledNpmPath === 'string' && bundledNpmPath.includes(path.sep) && existsSync(bundledNpmPath)
+      ? path.resolve(bundledNpmPath)
+      : null
   const nodeResolvedPath = nodePath && nodePath.includes(path.sep) ? path.resolve(nodePath) : null
   const npmResolvedPath = npmPath && npmPath.includes(path.sep) ? path.resolve(npmPath) : null
   const usingBundledNode = Boolean(nodeResolvedPath && bundledNodeResolvedPath && nodeResolvedPath === bundledNodeResolvedPath)
@@ -1857,20 +2048,38 @@ function getPreferredNodeBinary() {
     'node',
   ]
 
-  return candidates.find((candidate) => candidate === 'node' || existsSync(candidate)) || 'node'
+  return (
+    candidates.find(
+      (candidate) =>
+        typeof candidate === 'string' &&
+        candidate.length > 0 &&
+        (candidate === 'node' || existsSync(candidate))
+    ) || 'node'
+  )
 }
 
-function getPreferredNpmBinary(nodeBinary) {
+function getPreferredNpmBinary(nodeBinary = getPreferredNodeBinary()) {
+  const normalizedNodeBinary = typeof nodeBinary === 'string' && nodeBinary.length > 0 ? nodeBinary : 'node'
+  const localNodeNpm =
+    normalizedNodeBinary.includes(path.sep)
+      ? path.join(path.dirname(normalizedNodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm')
+      : null
   const candidatePaths = [
-    path.join(path.dirname(nodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm'),
+    localNodeNpm,
     process.env.ROACHNET_NPM_BINARY,
     '/opt/homebrew/opt/node@22/bin/npm',
     '/usr/local/opt/node@22/bin/npm',
     process.platform === 'win32' ? 'npm.cmd' : 'npm',
   ]
 
-  return candidatePaths.find((candidate) => !candidate.includes(path.sep) || existsSync(candidate)) ||
-    (process.platform === 'win32' ? 'npm.cmd' : 'npm')
+  return (
+    candidatePaths.find(
+      (candidate) =>
+        typeof candidate === 'string' &&
+        candidate.length > 0 &&
+        (!candidate.includes(path.sep) || existsSync(candidate))
+    ) || (process.platform === 'win32' ? 'npm.cmd' : 'npm')
+  )
 }
 
 function resolveInstalledAppNodeBinary(configOrInstallPath, installedAppPath) {
@@ -1905,13 +2114,15 @@ function resolveInstalledAppNodeBinary(configOrInstallPath, installedAppPath) {
 
 function getShellEnv() {
   const preferredNodeBinary = getPreferredNodeBinary()
-  const preferredNodeBin = preferredNodeBinary.includes(path.sep)
+  const preferredNodeBin =
+    typeof preferredNodeBinary === 'string' && preferredNodeBinary.includes(path.sep)
     ? path.dirname(preferredNodeBinary)
     : null
   const localBinPath = process.env.ROACHNET_LOCAL_BIN_PATH || path.join(repoRoot, 'bin')
 
   return {
     ...process.env,
+    HOME: os.homedir(),
     PATH: [
       localBinPath,
       preferredNodeBin,
@@ -1936,12 +2147,103 @@ function getLocalToolBinaryPath(toolName, repoPath = repoRoot) {
   return path.join(base, fileName)
 }
 
+function formatByteCount(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B'
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
+function resolveExistingProbePath(targetPath) {
+  let probePath = normalizeInputPath(targetPath)
+
+  while (probePath && !existsSync(probePath)) {
+    const parentPath = path.dirname(probePath)
+    if (parentPath === probePath) {
+      break
+    }
+    probePath = parentPath
+  }
+
+  return existsSync(probePath) ? probePath : os.homedir()
+}
+
+async function getAvailableDiskBytes(targetPath) {
+  const probePath = resolveExistingProbePath(targetPath)
+  const filesystemStats = await statfs(probePath)
+  return Number(filesystemStats.bavail) * Number(filesystemStats.bsize)
+}
+
+function getRequiredInstallHeadroomBytes(config) {
+  return config.installRoachClaw === false
+    ? MIN_FREE_BYTES_BASE_INSTALL
+    : MIN_FREE_BYTES_WITH_ROACHCLAW
+}
+
+async function ensureInstallVolumeHeadroom(config, task) {
+  const availableBytes = await getAvailableDiskBytes(config.installPath)
+  const requiredBytes = getRequiredInstallHeadroomBytes(config)
+
+  appendTaskLog(
+    task,
+    `Install volume has ${formatByteCount(availableBytes)} free. This setup pass needs about ${formatByteCount(requiredBytes)}.`
+  )
+
+  if (availableBytes < requiredBytes) {
+    const aiHint =
+      config.installRoachClaw === false
+        ? 'for the base contained install'
+        : 'for the base install plus the first contained AI lane'
+    throw new Error(
+      `RoachNet needs about ${formatByteCount(requiredBytes)} free on the selected install volume ${aiHint}. Only ${formatByteCount(availableBytes)} is free right now. Choose a roomier install root or turn off Install RoachClaw for the first pass.`
+    )
+  }
+}
+
+function sanitizeInstallerErrorMessage(error, config) {
+  const rawMessage =
+    typeof error?.message === 'string' ? error.message : String(error || 'RoachNet Setup failed.')
+
+  if (/ENOSPC|no space left on device/i.test(rawMessage)) {
+    const requiredBytes = getRequiredInstallHeadroomBytes(config)
+    return `RoachNet ran out of disk space while staging the contained install. Free up more space, choose a roomier install root, or turn off Install RoachClaw for the first pass. This setup pass expects about ${formatByteCount(requiredBytes)} free on the selected volume.`
+  }
+
+  const replacements = [
+    config?.installPath,
+    config?.storagePath,
+    config?.installedAppPath,
+    repoRoot,
+    os.homedir(),
+  ]
+    .filter((value) => typeof value === 'string' && value.length > 0)
+    .map((value) => normalizeInputPath(value))
+    .sort((left, right) => right.length - left.length)
+
+  return replacements.reduce(
+    (message, candidatePath) => message.split(candidatePath).join('RoachNet root'),
+    rawMessage
+  )
+}
+
 async function symlinkOrCopyToolBinary(sourcePath, destinationPath) {
   await rm(destinationPath, { force: true }).catch(() => {})
   await ensureDirectory(path.dirname(destinationPath))
 
   try {
-    await symlink(sourcePath, destinationPath)
+    const relativeSourcePath = path.relative(path.dirname(destinationPath), sourcePath)
+    await symlink(relativeSourcePath || sourcePath, destinationPath)
   } catch {
     await copyFile(sourcePath, destinationPath)
     await chmod(destinationPath, 0o755).catch(() => {})
@@ -1955,12 +2257,48 @@ async function downloadToFile(url, destinationPath) {
 async function getLatestOllamaRelease() {
   const release = await fetchJson(OLLAMA_RELEASE_API_URL)
   const asset = Array.isArray(release.assets)
-    ? release.assets.find((entry) => entry?.name === 'Ollama-darwin.zip')
+    ? release.assets.find((entry) => entry?.name === 'ollama-darwin.tgz')
     : null
 
   return {
     version: parseVersionNumber(release.tag_name) || null,
-    url: asset?.browser_download_url || 'https://ollama.com/download/Ollama-darwin.zip',
+    url: asset?.browser_download_url || 'https://ollama.com/download/ollama-darwin.tgz',
+    assetName: asset?.name || 'ollama-darwin.tgz',
+  }
+}
+
+function readBundledPackageVersion(packageRoot, packageName) {
+  const packageJsonPath = path.join(packageRoot, 'node_modules', packageName, 'package.json')
+  if (!existsSync(packageJsonPath)) {
+    return null
+  }
+
+  try {
+    const contents = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+    return parseVersionNumber(contents?.version) || contents?.version || null
+  } catch {
+    return null
+  }
+}
+
+async function clearMacLaunchMetadata(targetPath) {
+  if (process.platform !== 'darwin' || !targetPath || !existsSync(targetPath)) {
+    return
+  }
+
+  for (const args of [
+    ['-dr', 'com.apple.provenance', targetPath],
+    ['-dr', 'com.apple.quarantine', targetPath],
+    ['-cr', targetPath],
+  ]) {
+    try {
+      await runProcess('xattr', args, {
+        env: getShellEnv(),
+        timeoutMs: 10_000,
+      })
+    } catch {
+      // Best-effort cleanup only.
+    }
   }
 }
 
@@ -1969,6 +2307,41 @@ async function ensureContainedOpenClaw(repoPath, task) {
   const currentVersion = existsSync(localBinaryPath)
     ? await detectCommandVersion(localBinaryPath, ['--version'])
     : null
+  const packageRoot = path.join(repoPath, 'runtime', 'vendor', 'openclaw')
+  const installedBinaryPath = path.join(
+    packageRoot,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'
+  )
+  const bundledVersion = readBundledPackageVersion(packageRoot, 'openclaw')
+
+  if (existsSync(installedBinaryPath)) {
+    await symlinkOrCopyToolBinary(installedBinaryPath, localBinaryPath)
+    appendTaskLog(
+      task,
+      `Contained OpenClaw is ready from the bundled payload${bundledVersion ? ` (${bundledVersion})` : ''}.`
+    )
+    return localBinaryPath
+  }
+
+  const bundledInstallerPayload = getBundledInstallerAssetPath('bundled-openclaw')
+  const bundledInstallerBinaryPath = bundledInstallerPayload
+    ? path.join(
+        bundledInstallerPayload,
+        'node_modules',
+        '.bin',
+        process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'
+      )
+    : null
+  if (bundledInstallerPayload && bundledInstallerBinaryPath && existsSync(bundledInstallerBinaryPath)) {
+    appendTaskLog(task, 'Hydrating contained OpenClaw from installer assets...')
+    await installDirectoryArtifact(bundledInstallerPayload, packageRoot)
+    await symlinkOrCopyToolBinary(installedBinaryPath, localBinaryPath)
+    appendTaskLog(task, 'Contained OpenClaw linked from bundled installer assets.')
+    return localBinaryPath
+  }
+
   const nodeBinary = getPreferredNodeBinary()
   const npmBinary = getPreferredNpmBinary(nodeBinary)
   const latestVersion = await detectLatestNpmPackageVersion('openclaw', npmBinary)
@@ -1985,12 +2358,16 @@ async function ensureContainedOpenClaw(repoPath, task) {
     return localBinaryPath
   }
 
-  const packageRoot = path.join(repoPath, 'runtime', 'vendor', 'openclaw')
   const packageJsonPath = path.join(packageRoot, 'package.json')
   const packageName = latestVersion ? `openclaw@${latestVersion}` : 'openclaw@latest'
+  const setupWorkspaceRoot = getSetupWorkspaceRoot({ installPath: repoPath })
+  const npmCacheRoot = path.join(setupWorkspaceRoot, 'npm-cache')
+  const tempRoot = path.join(setupWorkspaceRoot, 'tmp')
 
   appendTaskLog(task, `Installing contained OpenClaw into ${packageRoot}...`)
   await ensureDirectory(packageRoot)
+  await ensureDirectory(npmCacheRoot)
+  await ensureDirectory(tempRoot)
   if (!existsSync(packageJsonPath)) {
     writeFileSync(
       packageJsonPath,
@@ -2016,6 +2393,10 @@ async function ensureContainedOpenClaw(repoPath, task) {
         npm_config_update_notifier: 'false',
         npm_config_fund: 'false',
         npm_config_audit: 'false',
+        npm_config_cache: npmCacheRoot,
+        TMPDIR: tempRoot,
+        TMP: tempRoot,
+        TEMP: tempRoot,
       },
       timeoutMs: 300_000,
       onStdout(text) {
@@ -2029,13 +2410,6 @@ async function ensureContainedOpenClaw(repoPath, task) {
         }
       },
     }
-  )
-
-  const installedBinaryPath = path.join(
-    packageRoot,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'
   )
 
   if (!existsSync(installedBinaryPath)) {
@@ -2072,11 +2446,32 @@ async function ensureContainedOllama(repoPath, task) {
   }
 
   const vendorRoot = path.join(repoPath, 'runtime', 'vendor', 'ollama')
-  const finalAppPath = path.join(vendorRoot, 'Ollama.app')
-  const downloadRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-ollama-'))
-  const archivePath = path.join(downloadRoot, 'Ollama-darwin.zip')
+  const bundledBinaryPath = path.join(vendorRoot, process.platform === 'win32' ? 'ollama.exe' : 'ollama')
+  if (existsSync(bundledBinaryPath)) {
+    await symlinkOrCopyToolBinary(bundledBinaryPath, localBinaryPath)
+    appendTaskLog(
+      task,
+      `Contained Ollama is ready from the bundled payload${currentVersion ? ` (${currentVersion})` : ''}.`
+    )
+    return localBinaryPath
+  }
+
+  const bundledInstallerPayload = getBundledInstallerAssetPath('bundled-ollama')
+  const bundledInstallerBinaryPath = bundledInstallerPayload
+    ? path.join(bundledInstallerPayload, process.platform === 'win32' ? 'ollama.exe' : 'ollama')
+    : null
+  if (bundledInstallerPayload && bundledInstallerBinaryPath && existsSync(bundledInstallerBinaryPath)) {
+    appendTaskLog(task, 'Hydrating contained Ollama from installer assets...')
+    await installDirectoryArtifact(bundledInstallerPayload, vendorRoot)
+    await clearMacLaunchMetadata(vendorRoot)
+    await symlinkOrCopyToolBinary(bundledBinaryPath, localBinaryPath)
+    appendTaskLog(task, 'Contained Ollama linked from bundled installer assets.')
+    return localBinaryPath
+  }
+
+  const downloadRoot = await createSetupTempDirectory({ installPath: repoPath }, 'roachnet-ollama')
+  const archivePath = path.join(downloadRoot, latestRelease.assetName || 'ollama-darwin.tgz')
   const unpackRoot = path.join(downloadRoot, 'unpacked')
-  const extractedAppPath = path.join(unpackRoot, 'Ollama.app')
 
   appendTaskLog(
     task,
@@ -2086,25 +2481,25 @@ async function ensureContainedOllama(repoPath, task) {
   try {
     await downloadToFile(latestRelease.url, archivePath)
     await ensureDirectory(unpackRoot)
-    await runProcess('ditto', ['-x', '-k', archivePath, unpackRoot], {
+    await runProcess('tar', ['-xzf', archivePath, '-C', unpackRoot], {
       env: getShellEnv(),
       timeoutMs: 300_000,
     })
 
-    if (!existsSync(extractedAppPath)) {
-      throw new Error(`Contained Ollama archive did not unpack an app bundle at ${extractedAppPath}.`)
+    const extractedBinaryPath = path.join(unpackRoot, process.platform === 'win32' ? 'ollama.exe' : 'ollama')
+    if (!existsSync(extractedBinaryPath)) {
+      throw new Error(`Contained Ollama archive did not unpack a launchable binary at ${extractedBinaryPath}.`)
     }
 
-    await rm(finalAppPath, { recursive: true, force: true })
+    await rm(vendorRoot, { recursive: true, force: true })
     await ensureDirectory(vendorRoot)
-    await cp(extractedAppPath, finalAppPath, { recursive: true, force: true })
+    await runProcess('ditto', ['--clone', unpackRoot, vendorRoot], {
+      env: getShellEnv(),
+      timeoutMs: 300_000,
+    })
+    await clearMacLaunchMetadata(vendorRoot)
 
-    const appBinaryPath = path.join(finalAppPath, 'Contents', 'Resources', 'ollama')
-    if (!existsSync(appBinaryPath)) {
-      throw new Error(`Contained Ollama bundle is missing ${appBinaryPath}.`)
-    }
-
-    await symlinkOrCopyToolBinary(appBinaryPath, localBinaryPath)
+    await symlinkOrCopyToolBinary(bundledBinaryPath, localBinaryPath)
     appendTaskLog(task, `Contained Ollama linked at ${localBinaryPath}.`)
     return localBinaryPath
   } finally {
@@ -2120,8 +2515,29 @@ async function ensureContainedAITooling(config, repoPath, task) {
     return
   }
 
-  await ensureContainedOpenClaw(repoPath, task)
   await ensureContainedOllama(repoPath, task)
+
+  const localOpenClawBinaryPath = getLocalToolBinaryPath('openclaw', repoPath)
+  const stagedOpenClawBinaryPath = path.join(
+    repoPath,
+    'runtime',
+    'vendor',
+    'openclaw',
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw'
+  )
+
+  if (existsSync(stagedOpenClawBinaryPath)) {
+    await symlinkOrCopyToolBinary(stagedOpenClawBinaryPath, localOpenClawBinaryPath)
+    appendTaskLog(task, 'Contained OpenClaw linked from the staged RoachNet payload.')
+    return
+  }
+
+  appendTaskLog(
+    task,
+    'Deferring heavy OpenClaw hydration until after first launch so setup can finish fast on a clean machine.'
+  )
 }
 
 function createTask(config) {
@@ -2879,6 +3295,7 @@ async function runInstallWorkflow(config) {
 
     setPhase('Validating contained install lane')
     await ensureRequiredDependencies(normalizedConfig, task, packageManager, dependencies)
+    await ensureInstallVolumeHeadroom(normalizedConfig, task)
 
     setPhase('Staging RoachNet')
     await ensureRepository(stagedConfig, stagedConfig.installPath, task)
@@ -2906,6 +3323,7 @@ async function runInstallWorkflow(config) {
       setPhase('Launching RoachNet')
       await launchNativeDesktopApp(normalizedConfig.installedAppPath)
       appendTaskLog(task, `RoachNet desktop app launched from ${normalizedConfig.installedAppPath}`)
+      await requestSetupAppQuit()
     }
 
     task.status = 'completed'
@@ -2933,8 +3351,8 @@ async function runInstallWorkflow(config) {
   } catch (error) {
     task.status = 'failed'
     task.finishedAt = new Date().toISOString()
-    task.error = error.message
-    appendTaskLog(task, `Setup failed: ${error.message}`)
+    task.error = sanitizeInstallerErrorMessage(error, normalizedConfig)
+    appendTaskLog(task, `Setup failed: ${task.error}`)
     if (process.env.ROACHNET_SMOKE_KEEP_TEMP === '1' || process.env.ROACHNET_SETUP_KEEP_STAGED_FAILURE === '1') {
       appendTaskLog(task, `Preserving staged install at ${stagingInstallPath} for debugging.`)
     } else {

@@ -303,16 +303,50 @@ return "0|"
   }
 }
 
+function normalizeWindowLabel(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
 async function hasRoachWindow(ownerName, titleName = ownerName, processName = null) {
+  const normalizedOwner = normalizeWindowLabel(ownerName)
+  const normalizedTitle = normalizeWindowLabel(titleName)
+  const normalizedProcess = normalizeWindowLabel(processName)
+
   if (processName) {
     const automationWindowNames = await listAutomationWindowNames(processName)
-    if (automationWindowNames.some((name) => name === titleName)) {
+    if (
+      automationWindowNames.some((name) => {
+        const normalizedName = normalizeWindowLabel(name)
+        return (
+          normalizedName === normalizedTitle ||
+          normalizedName === normalizedOwner ||
+          (!normalizedTitle && normalizedName.length > 0)
+        )
+      })
+    ) {
       return true
     }
   }
 
   const windows = await listRoachWindows()
-  return windows.some((window) => window.owner === ownerName && window.name === titleName && window.layer === 0)
+  return windows.some((window) => {
+    const normalizedWindowOwner = normalizeWindowLabel(window.owner)
+    const normalizedWindowName = normalizeWindowLabel(window.name)
+
+    if (window.layer !== 0) {
+      return false
+    }
+
+    return (
+      (normalizedWindowOwner === normalizedOwner || normalizedWindowOwner === normalizedProcess) &&
+      (normalizedWindowName === normalizedTitle ||
+        normalizedWindowName === normalizedOwner ||
+        normalizedWindowName === normalizedProcess)
+    )
+  })
 }
 
 async function waitForRoachWindow(ownerName, timeoutMs, titleName = ownerName, processName = null) {

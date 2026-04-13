@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RoachNetInstallerConfig: Codable, Sendable {
+public struct RoachNetInstallerConfig: Codable, Sendable, Equatable {
     public var installPath: String
     public var installedAppPath: String
     public var storagePath: String
@@ -405,6 +405,84 @@ public enum RoachNetRepositoryLocator {
             .appendingPathComponent("roachnet-installer.json")
     }
 
+    private static func shouldPreserveTransientInstallPaths() -> Bool {
+        let environment = ProcessInfo.processInfo.environment
+        if let explicitConfigPath = environment["ROACHNET_INSTALLER_CONFIG_PATH"],
+           !explicitConfigPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return true
+        }
+
+        return environment["ROACHNET_ALLOW_TRANSIENT_INSTALL_PATHS"] == "1"
+    }
+
+    private static func isTransientRoachNetPath(_ candidatePath: String) -> Bool {
+        let normalizedPath = URL(fileURLWithPath: candidatePath).standardizedFileURL.path.lowercased()
+        let tmpRoots = [
+            FileManager.default.temporaryDirectory.path,
+            "/tmp",
+            "/private/tmp",
+            "/var/folders",
+            "/private/var/folders",
+        ].map { URL(fileURLWithPath: $0).standardizedFileURL.path.lowercased() }
+
+        return tmpRoots.contains(where: { normalizedPath.hasPrefix($0) }) && normalizedPath.contains("roachnet")
+    }
+
+    private static func sanitizedInstallPath(_ installPath: String) -> String {
+        let trimmedInstallPath = installPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedInstallPath = trimmedInstallPath.isEmpty ? defaultInstallPath() : trimmedInstallPath
+        guard !shouldPreserveTransientInstallPaths(), isTransientRoachNetPath(normalizedInstallPath) else {
+            return URL(fileURLWithPath: normalizedInstallPath).standardizedFileURL.path
+        }
+
+        return defaultInstallPath()
+    }
+
+    private static func sanitizedPersistedConfig(_ config: RoachNetInstallerConfig) -> RoachNetInstallerConfig {
+        guard !shouldPreserveTransientInstallPaths() else {
+            return config
+        }
+
+        let normalizedInstallPath = sanitizedInstallPath(config.installPath)
+        let defaultInstalledAppPath = defaultInstalledAppPath(installPath: normalizedInstallPath)
+        let defaultStoragePath = defaultStoragePath(installPath: normalizedInstallPath)
+        let installPathWasTransient =
+            URL(fileURLWithPath: config.installPath).standardizedFileURL.path != normalizedInstallPath
+
+        let normalizedInstalledAppPath = {
+            let candidate = URL(fileURLWithPath: config.installedAppPath).standardizedFileURL.path
+            guard !isTransientRoachNetPath(candidate), candidate.hasPrefix(normalizedInstallPath + "/") else {
+                return defaultInstalledAppPath
+            }
+            return candidate
+        }()
+
+        let normalizedStoragePath = {
+            let candidate = URL(fileURLWithPath: config.storagePath).standardizedFileURL.path
+            guard !isTransientRoachNetPath(candidate), candidate.hasPrefix(normalizedInstallPath + "/") else {
+                return defaultStoragePath
+            }
+            return candidate
+        }()
+
+        var refreshed = config
+        refreshed.installPath = normalizedInstallPath
+        refreshed.installedAppPath = normalizedInstalledAppPath
+        refreshed.storagePath = normalizedStoragePath
+
+        if installPathWasTransient {
+            refreshed.setupCompletedAt = nil
+            refreshed.bootstrapPending = false
+            refreshed.bootstrapFailureCount = 0
+            refreshed.lastRuntimeHealthAt = nil
+            refreshed.pendingLaunchIntro = false
+            refreshed.pendingRoachClawSetup = false
+        }
+
+        return refreshed
+    }
+
     public static func defaultInstallPath() -> String {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("RoachNet", isDirectory: true)
@@ -459,6 +537,20 @@ public enum RoachNetRepositoryLocator {
         return URL(fileURLWithPath: root)
             .appendingPathComponent("state", isDirectory: true)
             .appendingPathComponent("runtime-state", isDirectory: true)
+            .path
+    }
+
+    public static func defaultSetupWorkspaceRoot(installPath: String? = nil) -> String {
+        if let override = ProcessInfo.processInfo.environment["ROACHNET_SETUP_WORK_ROOT"],
+           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return URL(fileURLWithPath: override).standardizedFileURL.path
+        }
+
+        let configuredInstallPath = installPath ?? readConfig().installPath
+        let normalizedInstallPath = sanitizedInstallPath(configuredInstallPath)
+        return URL(fileURLWithPath: normalizedInstallPath)
+            .appendingPathComponent(".roachnet-setup", isDirectory: true)
             .path
     }
 
@@ -620,14 +712,23 @@ public enum RoachNetRepositoryLocator {
             )
         }
 
-        if decoded.companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            var refreshed = decoded
+        let sanitized = sanitizedPersistedConfig(decoded)
+
+        if sanitized.companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var refreshed = sanitized
             refreshed.companionToken = RoachNetInstallerConfig.generateCompanionToken()
             try? writeConfig(refreshed)
             return refreshed
         }
 
-        return decoded
+        if sanitized != decoded {
+            var refreshed = decoded
+            refreshed = sanitized
+            try? writeConfig(refreshed)
+            return refreshed
+        }
+
+        return sanitized
     }
 
     private static func bundledRepositoryArchiveURL(resourceURL: URL) -> URL? {
@@ -657,8 +758,9 @@ public enum RoachNetRepositoryLocator {
 
         let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.roachwares.roachnet"
         if bundleIdentifier.hasSuffix(".setup") {
-            return FileManager.default.temporaryDirectory
-                .appendingPathComponent("roachnet-setup-source-\(version)", isDirectory: true)
+            return URL(fileURLWithPath: defaultSetupWorkspaceRoot())
+                .appendingPathComponent("source", isDirectory: true)
+                .appendingPathComponent(version, isDirectory: true)
         }
 
         let installPath = readConfig().installPath

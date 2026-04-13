@@ -864,7 +864,7 @@ final class DevWorkspaceModel: ObservableObject {
         let startLine = "\n$ \(command)\n"
         appendTerminalOutput(startLine)
         terminalIsRunning = true
-        terminalStatus = "Running in \(currentWorkingDirectory())."
+        terminalStatus = "Running in \(displayWorkingDirectory())."
         lastError = nil
 
         let handleOutput: (FileHandle) -> Void = { [weak self] handle in
@@ -1187,6 +1187,26 @@ final class DevWorkspaceModel: ObservableObject {
 
     func currentWorkingDirectory() -> String {
         activeDocument?.url.deletingLastPathComponent().path ?? projectsRootPath
+    }
+
+    func displayWorkingDirectory() -> String {
+        let directoryURL = URL(fileURLWithPath: currentWorkingDirectory())
+        let projectsRootURL = URL(fileURLWithPath: projectsRootPath)
+
+        if directoryURL.path == projectsRootURL.path {
+            return currentProjectName == "Workspace" ? "workspace" : currentProjectName
+        }
+
+        if directoryURL.path.hasPrefix(projectsRootURL.path) {
+            let relative = directoryURL.path.replacingOccurrences(of: projectsRootURL.path, with: "")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !relative.isEmpty {
+                return relative
+            }
+        }
+
+        let fallback = directoryURL.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback.isEmpty ? "workspace" : fallback
     }
 
     private func filterNodes(_ nodes: [DeveloperFileNode], query: String) -> [DeveloperFileNode] {
@@ -1689,7 +1709,7 @@ struct DevWorkspaceView: View {
 
                                 RoachSectionHeader(
                                     "Dev Studio",
-                                    title: "Code without leaving the stack.",
+                                    title: "Build in one contained lane.",
                                     detail: "Projects, shell, secrets, and RoachClaw stay in one native dev surface."
                                 )
                             }
@@ -1727,7 +1747,7 @@ struct DevWorkspaceView: View {
 
                                 RoachSectionHeader(
                                     "Dev Studio",
-                                    title: "Code without leaving the stack.",
+                                    title: "Build in one contained lane.",
                                     detail: "Projects, shell, secrets, and RoachClaw stay in one native dev surface."
                                 )
                             }
@@ -1753,86 +1773,89 @@ struct DevWorkspaceView: View {
                         }
                     }
 
-                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                        RoachFeatureTile(
-                            "Project",
-                            title: devModel.currentProjectName,
-                            detail: devModel.activeDocumentLabel,
-                            systemName: "shippingbox.fill",
-                            accent: RoachPalette.green
-                        )
-                        RoachFeatureTile(
-                            "Assist",
-                            title: model.selectedChatModelLabel,
-                            detail: roachClawStatusText,
-                            systemName: "sparkles",
-                            accent: RoachPalette.magenta
-                        )
-                        RoachFeatureTile(
-                            "Secrets",
-                            title: "\(devModel.secretRecords.count) stored",
-                            detail: "Keychain-backed values stay outside the workspace files.",
-                            systemName: "key.fill",
-                            accent: RoachPalette.cyan
-                        )
-                        RoachFeatureTile(
-                            "RoachBrain",
-                            title: "\(devModel.roachBrainMemories.count) memories",
-                            detail: devModel.roachBrainPinnedCount > 0
-                                ? "\(devModel.roachBrainPinnedCount) pinned for quick retrieval."
-                                : "Recent coding context stays searchable locally.",
-                            systemName: "brain.head.profile",
-                            accent: RoachPalette.bronze
-                        )
-                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 14) {
+                            heroSignalTile(
+                                kicker: "Project",
+                                title: devModel.currentProjectName,
+                                detail: devModel.activeDocumentLabel,
+                                systemName: "shippingbox.fill",
+                                accent: RoachPalette.green
+                            )
+                            heroSignalTile(
+                                kicker: "Assist",
+                                title: model.selectedChatModelLabel,
+                                detail: roachClawStatusText,
+                                systemName: "sparkles",
+                                accent: RoachPalette.magenta
+                            )
+                            heroSignalTile(
+                                kicker: "Private Context",
+                                title: "\(devModel.secretRecords.count) secrets · \(devModel.roachBrainMemories.count) memories",
+                                detail: devModel.roachBrainPinnedCount > 0
+                                    ? "\(devModel.roachBrainPinnedCount) pinned recalls plus the local keychain lane."
+                                    : "Secrets stay off-file and recent coding context stays searchable locally.",
+                                systemName: "lock.shield.fill",
+                                accent: RoachPalette.bronze
+                            )
+                            heroSignalTile(
+                                kicker: "Shell",
+                                title: "Local terminal",
+                                detail: "Run contained commands and keep the project root, runtime, and AI assist in one view.",
+                                systemName: "terminal",
+                                accent: RoachPalette.cyan
+                            )
+                        }
 
-                    Text(model.recommendedLocalModelSummary)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 12),
+                                GridItem(.flexible(), spacing: 12),
+                            ],
+                            alignment: .leading,
+                            spacing: 12
+                        ) {
+                            heroSignalTile(
+                                kicker: "Project",
+                                title: devModel.currentProjectName,
+                                detail: devModel.activeDocumentLabel,
+                                systemName: "shippingbox.fill",
+                                accent: RoachPalette.green
+                            )
+                            heroSignalTile(
+                                kicker: "Assist",
+                                title: model.selectedChatModelLabel,
+                                detail: roachClawStatusText,
+                                systemName: "sparkles",
+                                accent: RoachPalette.magenta
+                            )
+                            heroSignalTile(
+                                kicker: "Private Context",
+                                title: "\(devModel.secretRecords.count) secrets · \(devModel.roachBrainMemories.count) memories",
+                                detail: devModel.roachBrainPinnedCount > 0
+                                    ? "\(devModel.roachBrainPinnedCount) pinned recalls plus the local keychain lane."
+                                    : "Secrets stay off-file and recent coding context stays searchable locally.",
+                                systemName: "lock.shield.fill",
+                                accent: RoachPalette.bronze
+                            )
+                            heroSignalTile(
+                                kicker: "Shell",
+                                title: "Local terminal",
+                                detail: "Run contained commands and keep the project root, runtime, and AI assist in one view.",
+                                systemName: "terminal",
+                                accent: RoachPalette.cyan
+                            )
+                        }
+                    }
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             RoachTag("Local-first", accent: RoachPalette.green)
-                            RoachTag("RoachBrain memory", accent: RoachPalette.magenta)
-                            RoachTag("Keychain-backed secrets", accent: RoachPalette.cyan)
-                            RoachTag("Contained runtime", accent: RoachPalette.bronze)
-                            RoachTag(cloudLaneText, accent: cloudLaneText == "No cloud lane" ? RoachPalette.muted : RoachPalette.cyan)
-                        }
-                    }
-
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 12) {
-                            Button("New File") {
-                                devModel.createFile()
+                            RoachTag("RoachBrain ready", accent: RoachPalette.magenta)
+                            RoachTag("Keychain-backed", accent: RoachPalette.cyan)
+                            if cloudLaneText != "No cloud lane" {
+                                RoachTag(cloudLaneText, accent: RoachPalette.cyan)
                             }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-
-                            Button("New Folder") {
-                                devModel.createFolder()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-
-                            Button("New Scratch") {
-                                devModel.createScratchFile()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-                        }
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            Button("New File") {
-                                devModel.createFile()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-
-                            Button("New Folder") {
-                                devModel.createFolder()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-
-                            Button("New Scratch") {
-                                devModel.createScratchFile()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
                         }
                     }
                 }
@@ -1846,13 +1869,13 @@ struct DevWorkspaceView: View {
 
             HStack(alignment: .top, spacing: 16) {
                 fileExplorerColumn
-                    .frame(width: 260)
+                    .frame(width: 240)
 
                 editorColumn
                     .frame(maxWidth: .infinity)
 
                 sideRail
-                    .frame(width: 340)
+                    .frame(width: 320)
             }
 
             terminalColumn
@@ -1877,6 +1900,32 @@ struct DevWorkspaceView: View {
                     Text("\(devModel.filteredFileTree.count)")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(RoachPalette.muted)
+                }
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Button("New File") {
+                            devModel.createFile()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button("New Folder") {
+                            devModel.createFolder()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button("New File") {
+                            devModel.createFile()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button("New Folder") {
+                            devModel.createFolder()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                    }
                 }
 
                 TextField("Filter files or folders", text: $devModel.fileSearchQuery)
@@ -1921,6 +1970,23 @@ struct DevWorkspaceView: View {
         }
     }
 
+    private func heroSignalTile(
+        kicker: String,
+        title: String,
+        detail: String,
+        systemName: String,
+        accent: Color
+    ) -> some View {
+        RoachFeatureTile(
+            kicker,
+            title: title,
+            detail: detail,
+            systemName: systemName,
+            accent: accent
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var editorColumn: some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
@@ -1943,8 +2009,6 @@ struct DevWorkspaceView: View {
                     }
 
                     RoachTag(devModel.activeDocumentLanguage, accent: RoachPalette.cyan)
-                    RoachTag("\(devModel.activeDocumentLineCount) lines", accent: RoachPalette.green)
-                    RoachTag("\(devModel.activeDocumentCharacterCount) chars", accent: RoachPalette.magenta)
 
                     Button("Save") {
                         devModel.saveActiveDocument()
@@ -1968,7 +2032,7 @@ struct DevWorkspaceView: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("Editing in \(devModel.currentWorkingDirectory())")
+                            Text("Editing in \(devModel.displayWorkingDirectory())")
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                                 .foregroundStyle(RoachPalette.muted)
                                 .lineLimit(1)
@@ -2066,8 +2130,12 @@ struct DevWorkspaceView: View {
 
                     HStack(spacing: 8) {
                         RoachTag(roachClawStatusText, accent: model.snapshot?.roachClaw.ready == true ? RoachPalette.green : RoachPalette.warning)
-                        RoachTag(cloudLaneText, accent: cloudLaneText == "No cloud lane" ? RoachPalette.muted : RoachPalette.cyan)
-                        RoachTag(exoStatusText, accent: model.config.distributedInferenceBackend == "exo" ? RoachPalette.magenta : RoachPalette.muted)
+                        if cloudLaneText != "No cloud lane" {
+                            RoachTag(cloudLaneText, accent: RoachPalette.cyan)
+                        }
+                        if model.config.distributedInferenceBackend == "exo" {
+                            RoachTag(exoStatusText, accent: RoachPalette.magenta)
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -2100,7 +2168,7 @@ struct DevWorkspaceView: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(devModel.assistantPromptPresets, id: \.self) { preset in
+                                ForEach(devModel.assistantPromptPresets.prefix(3), id: \.self) { preset in
                                 Button(preset) {
                                     devModel.aiPrompt = preset
                                 }
@@ -2154,7 +2222,7 @@ struct DevWorkspaceView: View {
                                 .foregroundStyle(RoachPalette.muted)
                         } else {
                             VStack(alignment: .leading, spacing: 8) {
-                                ForEach(devModel.roachBrainVisibleMatches.prefix(3)) { match in
+                                ForEach(devModel.roachBrainVisibleMatches.prefix(2)) { match in
                                     VStack(alignment: .leading, spacing: 6) {
                                         HStack {
                                             Text(match.memory.title)
@@ -2466,7 +2534,7 @@ struct DevWorkspaceView: View {
                         Text("Terminal")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(RoachPalette.text)
-                        Text(devModel.currentWorkingDirectory())
+                        Text(devModel.displayWorkingDirectory())
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(RoachPalette.muted)
                             .lineLimit(1)

@@ -35,9 +35,23 @@ const packagedNpmBinaryPath = path.join(
 const iosRepoRoot = process.env.ROACHNET_IOS_REPO
   ? path.resolve(process.env.ROACHNET_IOS_REPO)
   : path.resolve(repoRoot, '..', 'RoachNet-iOS')
+const siteRepoRoot = process.env.ROACHNET_SITE_REPO
+  ? path.resolve(process.env.ROACHNET_SITE_REPO)
+  : path.resolve(repoRoot, '..', 'roachnet-org')
+const siteCatalogPath = path.join(siteRepoRoot, 'app-store-catalog.json')
+const siteMapsPath = path.join(siteRepoRoot, 'collections', 'maps.json')
 const keepTempArtifacts = process.env.ROACHNET_SMOKE_KEEP_TEMP === '1'
 const pollIntervalMs = 1_500
 const startupTimeoutMs = 300_000
+const supportedInstallActions = new Set([
+  'base-map-assets',
+  'map-collection',
+  'education-tier',
+  'education-resource',
+  'wikipedia-option',
+  'roachclaw-model',
+  'direct-download',
+])
 
 function assert(condition, message) {
   if (!condition) {
@@ -391,6 +405,76 @@ struct CompanionFixtureCheck {
   )
 }
 
+function validateAppsCatalogContract() {
+  assert(existsSync(siteCatalogPath), `Missing Apps catalog at ${siteCatalogPath}`)
+  assert(existsSync(siteMapsPath), `Missing Maps manifest at ${siteMapsPath}`)
+
+  const catalog = JSON.parse(readFileSync(siteCatalogPath, 'utf8'))
+  const mapsManifest = JSON.parse(readFileSync(siteMapsPath, 'utf8'))
+  const mapSlugs = new Set((mapsManifest.collections || []).map((collection) => collection.slug))
+
+  assert(Array.isArray(catalog.items) && catalog.items.length > 0, 'Apps catalog is empty.')
+
+  let mapPackCount = 0
+  let modelPackCount = 0
+
+  for (const item of catalog.items) {
+    const intent = item?.installIntent
+    assert(intent && typeof intent === 'object', `Catalog item ${item?.id || 'unknown'} is missing installIntent.`)
+    assert(
+      supportedInstallActions.has(intent.action),
+      `Catalog item ${item.id} uses unsupported install action ${intent.action || 'missing'}.`
+    )
+
+    switch (intent.action) {
+      case 'base-map-assets':
+        mapPackCount += 1
+        break
+      case 'map-collection':
+        assert(typeof intent.slug === 'string' && intent.slug.length > 0, `Map collection ${item.id} is missing its slug.`)
+        assert(mapSlugs.has(intent.slug), `Map collection ${item.id} points at unknown slug ${intent.slug}.`)
+        mapPackCount += 1
+        break
+      case 'direct-download':
+        assert(typeof intent.url === 'string' && intent.url.startsWith('http'), `Direct download ${item.id} is missing a valid URL.`)
+        if (item.category === 'Maps' || item.section === 'Map Picks' || item.section === 'Map Regions') {
+          assert(
+            typeof intent.filetype === 'string' && ['map', 'pmtiles'].includes(intent.filetype.toLowerCase()),
+            `Map download ${item.id} must declare a map-compatible filetype.`
+          )
+          mapPackCount += 1
+        }
+        break
+      case 'education-tier':
+        assert(typeof intent.category === 'string' && intent.category.length > 0, `Education tier ${item.id} is missing category.`)
+        assert(typeof intent.tier === 'string' && intent.tier.length > 0, `Education tier ${item.id} is missing tier.`)
+        break
+      case 'education-resource':
+        assert(typeof intent.category === 'string' && intent.category.length > 0, `Education resource ${item.id} is missing category.`)
+        assert(typeof intent.resource === 'string' && intent.resource.length > 0, `Education resource ${item.id} is missing resource id.`)
+        break
+      case 'wikipedia-option':
+        assert(typeof intent.option === 'string' && intent.option.length > 0, `Wikipedia option ${item.id} is missing option id.`)
+        break
+      case 'roachclaw-model':
+        assert(typeof intent.model === 'string' && intent.model.length > 0, `Model pack ${item.id} is missing a model id.`)
+        modelPackCount += 1
+        break
+      default:
+        break
+    }
+  }
+
+  assert(mapPackCount > 0, 'Apps catalog does not expose any map packs.')
+  assert(modelPackCount > 0, 'Apps catalog does not expose any model packs.')
+
+  return {
+    itemCount: catalog.items.length,
+    mapPackCount,
+    modelPackCount,
+  }
+}
+
 async function main() {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-ios-companion-smoke-'))
   const homePath = path.join(tempRoot, 'home')
@@ -440,6 +524,7 @@ async function main() {
     const roachtail = await fetchJson(`${companionBaseUrl}/api/companion/roachtail`, companionToken)
     const roachsync = await fetchJson(`${companionBaseUrl}/api/companion/roachsync`, companionToken)
     const vault = await fetchJson(`${companionBaseUrl}/api/companion/vault`, companionToken)
+    const catalogContract = validateAppsCatalogContract()
 
     assert(typeof bootstrap.appName === 'string' && bootstrap.appName.length > 0, 'Companion bootstrap did not return an app name.')
     assert(typeof bootstrap.machineName === 'string' && bootstrap.machineName.length > 0, 'Companion bootstrap did not return a friendly machine name.')
@@ -462,6 +547,9 @@ async function main() {
     writeFixture(fixturesDir, 'roachsync.json', roachsync)
     writeFixture(fixturesDir, 'vault.json', vault)
 
+    console.log(
+      `Validated Apps catalog contract against desktop install actions (${catalogContract.itemCount} items, ${catalogContract.mapPackCount} map packs, ${catalogContract.modelPackCount} model packs).`
+    )
     console.log('Building and checking the iOS companion against the live desktop fixtures...')
     await verifyIOSFixtures(fixturesDir)
 

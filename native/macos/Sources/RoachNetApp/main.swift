@@ -2719,13 +2719,13 @@ private struct RootWorkspaceView: View {
         case .suite:
             return "Installed surfaces, staged modules, and the next thing to open."
         case .home:
-            return "Contained, portable, and still useful when the network is not."
+            return "Contained, portable, and still ready when the network is not."
         case .dev:
-            return "Projects, shell, suggestions, and secrets without leaving the app."
+            return "Projects, shell, suggestions, and secrets in one contained lane."
         case .roachClaw:
             return "Private AI first. Cloud only if you decide it earns the trip."
         case .maps:
-            return "Atlas packs and route references that stay useful when the network drops."
+            return "Atlas packs and route references that still work when the network drops."
         case .education:
             return "Course packs, docs, and reference shelves staged into the same root."
         case .archives:
@@ -2754,7 +2754,7 @@ private struct RootWorkspaceView: View {
             let effectiveSidebarCollapsed = sidebarCollapsed || autoCollapsed
             let shellPadding = isVeryTightShell ? 10.0 : (isTightShell ? 12.0 : surfacePadding)
             let verticalInset = proxy.size.height < 700 ? 16.0 : (isTightShell ? 22.0 : topTitlebarInset)
-            let sidebarWidth = effectiveSidebarCollapsed ? (isVeryTightShell ? 68.0 : 74.0) : (isTightShell ? 252.0 : 272.0)
+            let sidebarWidth = effectiveSidebarCollapsed ? (isVeryTightShell ? 68.0 : 74.0) : (isTightShell ? 276.0 : 304.0)
             let shellSpacing = effectiveSidebarCollapsed ? 8.0 : (isTightShell ? 14.0 : 18.0)
 
             ZStack {
@@ -2913,24 +2913,24 @@ private struct RootWorkspaceView: View {
                     )
                 } else {
                     VStack(alignment: .leading, spacing: isTight ? 14 : 18) {
-                        HStack(spacing: 14) {
+                        HStack(spacing: 10) {
                             RoachOrbitMark()
                                 .matchedGeometryEffect(id: "sidebar-mark", in: sidebarMotion)
-                                .frame(width: isTight ? 82 : 96, height: isTight ? 82 : 96)
+                                .frame(width: isTight ? 64 : 72, height: isTight ? 64 : 72)
 
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 6) {
                                 Text("RoachNet")
-                                    .font(.system(size: isTight ? 26 : 30, weight: .bold))
+                                    .font(.system(size: isTight ? 19 : 22, weight: .bold))
                                     .foregroundStyle(RoachPalette.text)
-                                Text("Self-contained stack")
-                                    .font(.system(size: isTight ? 11 : 12, weight: .regular))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.74)
+                                Text("Contained stack on your hardware")
+                                    .font(.system(size: isTight ? 11 : 12, weight: .medium))
                                     .foregroundStyle(RoachPalette.muted)
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.82)
                             }
-
-                            Spacer(minLength: 0)
-
-                            sidebarToggleButton(isCollapsed: false)
-                                .matchedGeometryEffect(id: "sidebar-toggle", in: sidebarMotion)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         VStack(spacing: isTight ? 8 : 10) {
@@ -2954,12 +2954,10 @@ private struct RootWorkspaceView: View {
 
                         RoachInsetPanel {
                             VStack(alignment: .leading, spacing: 10) {
-                                RoachKicker("Quick Status")
+                                RoachKicker("At A Glance")
                                 RoachStatusRow(title: "Install", value: model.setupCompleted ? "Ready" : "Locked", accent: model.setupCompleted ? RoachPalette.success : RoachPalette.warning)
                                 RoachStatusRow(title: "Runtime", value: model.snapshot == nil ? "Offline" : "Live", accent: model.snapshot == nil ? RoachPalette.warning : RoachPalette.green)
                                 RoachStatusRow(title: "Account", value: model.snapshot?.account.linked == true ? "Linked" : "Local", accent: model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.bronze)
-                                RoachStatusRow(title: "RoachTail", value: model.snapshot?.roachTail.enabled == true ? "Armed" : "Off", accent: model.snapshot?.roachTail.enabled == true ? RoachPalette.green : RoachPalette.warning)
-                                RoachStatusRow(title: "RoachSync", value: model.snapshot?.roachSync.enabled == true ? "Armed" : "Off", accent: model.snapshot?.roachSync.enabled == true ? RoachPalette.magenta : RoachPalette.bronze)
                             }
                         }
                     }
@@ -3001,9 +2999,6 @@ private struct RootWorkspaceView: View {
         let runtimeAccent = model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
         let accountTitle = model.snapshot?.account.linked == true ? "Account linked" : "Account local"
         let accountAccent = model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.bronze
-        let roachTailTitle = model.snapshot?.roachTail.enabled == true ? "RoachTail armed" : "RoachTail off"
-        let roachTailAccent = model.snapshot?.roachTail.enabled == true ? RoachPalette.green : RoachPalette.warning
-
         return RoachPanel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 16) {
@@ -3015,7 +3010,7 @@ private struct RootWorkspaceView: View {
                         Text("RoachNet")
                             .font(.system(size: isTight ? 26 : 30, weight: .bold))
                             .foregroundStyle(RoachPalette.text)
-                        Text("One root. The useful parts up front.")
+                        Text("One root. The stack up front.")
                             .font(.system(size: isTight ? 12 : 13, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
                         Text(shellDetail)
@@ -3059,8 +3054,6 @@ private struct RootWorkspaceView: View {
                     HStack(spacing: 8) {
                         RoachTag(runtimeTitle, accent: runtimeAccent)
                         RoachTag(accountTitle, accent: accountAccent)
-                        RoachTag(roachTailTitle, accent: roachTailAccent)
-                        RoachTag(model.displayedRoachClawDefaultModel, accent: RoachPalette.magenta)
                     }
                     .padding(.vertical, 1)
                 }
@@ -3162,8 +3155,9 @@ private struct RootWorkspaceView: View {
                         RoachNotice(title: "Runtime notice", detail: errorLine)
                     }
 
-                    commandTray(isTight: isTight)
-                    workspacePulse
+                    if model.setupCompleted && activePane == .home {
+                        commandTray(isTight: isTight)
+                    }
 
                     if model.setupCompleted {
                         Group {
@@ -3206,17 +3200,12 @@ private struct RootWorkspaceView: View {
     }
 
     private func headerBar(isTight: Bool) -> some View {
-        let commandLabel = isTight ? "Command" : "Command Bar"
-        let sidebarLabel = sidebarCollapsed ? (isTight ? "Nav" : "Show Nav") : (isTight ? "Nav" : "Hide Nav")
+        let commandLabel = isTight ? "Cmd-K" : "Command"
+        let sidebarLabel = "Nav"
         let runtimeTitle = model.isLoading ? "Runtime loading" : (model.snapshot == nil ? "Runtime waiting" : "Runtime live")
         let runtimeAccent = model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
         let accountTitle = model.snapshot?.account.linked == true ? "Account linked" : "Account local"
         let accountAccent = model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.bronze
-        let roachTailTitle = model.snapshot?.roachTail.enabled == true ? "RoachTail armed" : "RoachTail off"
-        let roachTailAccent = model.snapshot?.roachTail.enabled == true ? RoachPalette.green : RoachPalette.warning
-        let roachSyncTitle = model.snapshot?.roachSync.enabled == true ? "RoachSync armed" : "RoachSync off"
-        let roachSyncAccent = model.snapshot?.roachSync.enabled == true ? RoachPalette.magenta : RoachPalette.bronze
-
         return VStack(alignment: .leading, spacing: 12) {
             responsiveBar {
                 if activePane == .roachClaw {
@@ -3266,17 +3255,13 @@ private struct RootWorkspaceView: View {
                 }
                 .buttonStyle(RoachSecondaryButtonStyle())
 
-                RoachTag(model.setupCompleted ? "Local ready" : "Setup required", accent: model.setupCompleted ? RoachPalette.green : RoachPalette.warning)
+                RoachTag(model.setupCompleted ? "Ready" : "Setup", accent: model.setupCompleted ? RoachPalette.green : RoachPalette.warning)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     RoachTag(runtimeTitle, accent: runtimeAccent)
                     RoachTag(accountTitle, accent: accountAccent)
-                    RoachTag(roachTailTitle, accent: roachTailAccent)
-                    RoachTag(roachSyncTitle, accent: roachSyncAccent)
-                    RoachTag(model.displayedRoachClawDefaultModel, accent: RoachPalette.cyan)
-                    RoachTag("v\(bundleVersion)", accent: RoachPalette.magenta)
                 }
                 .padding(.vertical, 1)
             }
@@ -3299,124 +3284,6 @@ private struct RootWorkspaceView: View {
         .keyboardShortcut("k", modifiers: [.command])
     }
 
-    private var workspacePulse: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .center, spacing: 14) {
-                    pulseSummary
-                    Spacer(minLength: 16)
-                    pulseChips
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    pulseSummary
-                    pulseChips
-                }
-            }
-
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            RoachPalette.green.opacity(0.16),
-                            RoachPalette.magenta.opacity(0.10),
-                            Color.clear,
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 1)
-                .padding(.top, 2)
-        }
-    }
-
-    private var pulseSummary: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            RoachKicker("Status")
-            Text("Setup, runtime, AI, and account at a glance.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(RoachPalette.text)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var pulseChips: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                workspacePulseChip(
-                    title: "Setup",
-                    value: model.setupCompleted ? "Ready" : "Locked",
-                    accent: model.setupCompleted ? RoachPalette.green : RoachPalette.warning
-                )
-                workspacePulseChip(
-                    title: "Runtime",
-                    value: model.isLoading ? "Loading" : (model.snapshot == nil ? "Waiting" : "Live"),
-                    accent: model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
-                )
-                workspacePulseChip(
-                    title: "AI",
-                    value: model.displayedRoachClawDefaultModel,
-                    accent: RoachPalette.cyan
-                )
-                workspacePulseChip(
-                    title: "Account",
-                    value: model.snapshot?.account.linked == true ? "Linked" : "Local",
-                    accent: model.snapshot?.account.linked == true ? RoachPalette.magenta : RoachPalette.bronze
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                workspacePulseChip(
-                    title: "Setup",
-                    value: model.setupCompleted ? "Ready" : "Locked",
-                    accent: model.setupCompleted ? RoachPalette.green : RoachPalette.warning
-                )
-                workspacePulseChip(
-                    title: "Runtime",
-                    value: model.isLoading ? "Loading" : (model.snapshot == nil ? "Waiting" : "Live"),
-                    accent: model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
-                )
-                workspacePulseChip(
-                    title: "AI",
-                    value: model.displayedRoachClawDefaultModel,
-                    accent: RoachPalette.cyan
-                )
-                workspacePulseChip(
-                    title: "Account",
-                    value: model.snapshot?.account.linked == true ? "Linked" : "Local",
-                    accent: model.snapshot?.account.linked == true ? RoachPalette.magenta : RoachPalette.bronze
-                )
-            }
-        }
-    }
-
-    private func workspacePulseChip(title: String, value: String, accent: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .tracking(1.1)
-                .foregroundStyle(RoachPalette.muted)
-            Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(accent)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(RoachPalette.panelRaised.opacity(0.58))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(accent.opacity(0.18), lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var suite: some View {
         let installedServices = serviceCatalogServices.filter { $0.installed ?? false }
         let availableServices = serviceCatalogServices.filter { !($0.installed ?? false) }
@@ -3424,7 +3291,7 @@ private struct RootWorkspaceView: View {
         return VStack(alignment: .leading, spacing: 18) {
             RoachInsetPanel {
                 VStack(alignment: .leading, spacing: 16) {
-                    RoachSectionHeader("Suite", title: "Installed surfaces, not browser tabs.", detail: "Open what is already on this machine, then stage the next module without leaving the shell.")
+                    RoachSectionHeader("Suite", title: "Installed surfaces, not browser tabs.", detail: "Open what is already on this machine, then stage the next module in the same app.")
 
                     LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
                         suiteCard(title: "Dev", detail: "Native coding, shell, and secrets surfaces.", value: "Projects and AI assist", pane: .dev)
@@ -3525,8 +3392,8 @@ private struct RootWorkspaceView: View {
 
                             RoachSectionHeader(
                                 "Home",
-                                title: "Your stack. One root.",
-                                detail: "Dev, RoachClaw, maps, vault, sync, and the command bar stay contained, portable, and easier to back up."
+                                title: "Home Is Where The Roach Is!",
+                                detail: "Dev, RoachClaw, maps, vault, and sync stay in one place instead of smearing across the Mac."
                             )
                         }
                     } actions: {
@@ -3539,50 +3406,12 @@ private struct RootWorkspaceView: View {
                             model.selectedPane = .roachClaw
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
-
-                        Button("Maps") {
-                            model.selectedPane = .maps
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
                     }
 
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .top, spacing: 16) {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                                RoachFeatureTile(
-                                    "Runtime",
-                                    title: roachClaw?.preferredMode ?? hardware?.recommendedRuntime ?? "native_local",
-                                    detail: model.snapshot?.internetConnected == true
-                                        ? "The stack is live and still stays under one install root."
-                                        : "Offline is fine. The shell keeps moving on the box you are on.",
-                                    systemName: "server.rack",
-                                    accent: RoachPalette.green
-                                )
-                                RoachFeatureTile(
-                                    "AI Lane",
-                                    title: model.displayedRoachClawDefaultModel,
-                                    detail: roachClaw?.ollama.available == true
-                                        ? "Contained Ollama is live and ready for RoachClaw."
-                                        : "Finish the local model lane from AI Control or Easy Setup.",
-                                    systemName: "sparkles",
-                                    accent: RoachPalette.magenta
-                                )
-                                RoachFeatureTile(
-                                    "Vault",
-                                    title: "\(model.snapshot?.knowledgeFiles.count ?? 0) local files",
-                                    detail: "Maps, notes, docs, and captures stay grouped under one storage root.",
-                                    systemName: "books.vertical.fill",
-                                    accent: RoachPalette.cyan
-                                )
-                                RoachFeatureTile(
-                                    "Command Bar",
-                                    title: RoachNetGlobalHotKey.hint,
-                                    detail: "Pull the detached launcher over the desktop without dragging up the full shell.",
-                                    systemName: "command.circle",
-                                    accent: RoachPalette.bronze
-                                )
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            homeOverviewPanel(hardware: hardware, roachClaw: roachClaw)
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
                             homeSignalDeck(
                                 hardware: hardware,
@@ -3593,55 +3422,13 @@ private struct RootWorkspaceView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 14) {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                                RoachFeatureTile(
-                                    "Runtime",
-                                    title: roachClaw?.preferredMode ?? hardware?.recommendedRuntime ?? "native_local",
-                                    detail: model.snapshot?.internetConnected == true
-                                        ? "The stack is live and still stays under one install root."
-                                        : "Offline is fine. The shell keeps moving on the box you are on.",
-                                    systemName: "server.rack",
-                                    accent: RoachPalette.green
-                                )
-                                RoachFeatureTile(
-                                    "AI Lane",
-                                    title: model.displayedRoachClawDefaultModel,
-                                    detail: roachClaw?.ollama.available == true
-                                        ? "Contained Ollama is live and ready for RoachClaw."
-                                        : "Finish the local model lane from AI Control or Easy Setup.",
-                                    systemName: "sparkles",
-                                    accent: RoachPalette.magenta
-                                )
-                                RoachFeatureTile(
-                                    "Vault",
-                                    title: "\(model.snapshot?.knowledgeFiles.count ?? 0) local files",
-                                    detail: "Maps, notes, docs, and captures stay grouped under one storage root.",
-                                    systemName: "books.vertical.fill",
-                                    accent: RoachPalette.cyan
-                                )
-                                RoachFeatureTile(
-                                    "Command Bar",
-                                    title: RoachNetGlobalHotKey.hint,
-                                    detail: "Pull the detached launcher over the desktop without dragging up the full shell.",
-                                    systemName: "command.circle",
-                                    accent: RoachPalette.bronze
-                                )
-                            }
+                            homeOverviewPanel(hardware: hardware, roachClaw: roachClaw)
 
                             homeSignalDeck(
                                 hardware: hardware,
                                 installedServices: installedServices.count,
                                 availableServices: availableServices.count
                             )
-                        }
-                    }
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            RoachTag(model.snapshot?.internetConnected == true ? "Online now" : "Offline mode", accent: model.snapshot?.internetConnected == true ? RoachPalette.green : RoachPalette.warning)
-                            RoachTag("Local-first", accent: RoachPalette.green)
-                            RoachTag("Contained install", accent: RoachPalette.magenta)
-                            RoachTag(URL(fileURLWithPath: model.storagePath).lastPathComponent, accent: RoachPalette.cyan)
                         }
                     }
                 }
@@ -3651,8 +3438,8 @@ private struct RootWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     RoachSectionHeader(
                         "Command Grid",
-                        title: "Open the next thing.",
-                        detail: "Core surfaces, installed modules, and the next stageable pack stay in one native grid."
+                        title: "Open what matters next.",
+                        detail: "Core surfaces, installable modules, and the next good move stay in one grid."
                     )
 
                     homeMenuStrip(
@@ -3708,7 +3495,7 @@ private struct RootWorkspaceView: View {
                             RoachSectionHeader(
                                 "Next Up",
                                 title: "Finish the missing pieces without guessing.",
-                                detail: "RoachNet calls out the blockers instead of making you go hunting."
+                                detail: "RoachNet calls out the blockers instead of sending you digging."
                             )
                         } actions: {
                             Button("Easy Setup") {
@@ -3726,30 +3513,23 @@ private struct RootWorkspaceView: View {
                 }
             }
 
-            RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 12) {
-                    RoachKicker("System Meta")
-                    responsiveBar {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("RoachNet")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(RoachPalette.text)
-                            Text("Contained desktop build v\(bundleVersion)")
-                                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                .foregroundStyle(RoachPalette.muted)
-                        }
-
-                    } actions: {
-                        Button("Guide") {
-                            showLaunchGuide = true
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-
-                        footerAction(title: "Diagnostics", path: "/settings/system")
-                        footerAction(title: "Stealth", path: "/settings/legal")
-                        footerAction(title: "Debug Info", path: "/api/system/debug-info")
-                    }
+            responsiveBar {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Contained desktop build v\(bundleVersion)")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(RoachPalette.muted)
+                    Text("Home, Dev, RoachClaw, maps, vault, and the runtime all stay under one root.")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
                 }
+            } actions: {
+                Button("Guide") {
+                    showLaunchGuide = true
+                }
+                .buttonStyle(RoachSecondaryButtonStyle())
+
+                footerAction(title: "Diagnostics", path: "/settings/system")
+                footerAction(title: "Debug Info", path: "/api/system/debug-info")
             }
         }
     }
@@ -3760,13 +3540,7 @@ private struct RootWorkspaceView: View {
         availableServices: Int
     ) -> some View {
         RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 14) {
-                RoachSectionHeader(
-                    "Signal Board",
-                    title: "The stack, read fast.",
-                    detail: "The bits that matter first. No hunting through settings just to see if the machine is ready."
-                )
-
+            VStack(alignment: .leading, spacing: 12) {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                     RoachMetricCard(
                         label: "Runtime",
@@ -3785,8 +3559,54 @@ private struct RootWorkspaceView: View {
                     )
                     RoachMetricCard(
                         label: "Machine",
-                        value: hardware?.platformLabel ?? "RoachNet desktop",
-                        detail: hardware?.recommendedModelClass ?? "Model guidance is still loading."
+                        value: runtimeCPUValue(model.snapshot?.systemInfo),
+                        detail: hardware == nil
+                            ? "Apple Silicon optimized path"
+                            : "\(hardware?.memoryTier.capitalized ?? "Local") memory · \(hardware?.recommendedModelClass ?? "default")"
+                    )
+                }
+
+            }
+        }
+    }
+
+    private func homeOverviewPanel(
+        hardware: SystemInfoResponse.HardwareProfile?,
+        roachClaw: RoachClawStatusResponse?
+    ) -> some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                RoachSectionHeader(
+                    "At A Glance",
+                    title: "What matters, up front.",
+                    detail: "Read the machine, open the next move, keep going."
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    RoachDigestRow(
+                        "Runtime",
+                        value: roachClaw?.preferredMode ?? hardware?.recommendedRuntime ?? "native_local",
+                        detail: model.snapshot?.internetConnected == true
+                            ? "Live, contained, and still in one root."
+                            : "Offline is fine. The shell still moves.",
+                        systemName: "server.rack",
+                        accent: RoachPalette.green
+                    )
+                    RoachDigestRow(
+                        "AI lane",
+                        value: model.displayedRoachClawDefaultModel,
+                        detail: roachClaw?.ollama.available == true
+                            ? "Local RoachClaw is ready."
+                            : "Finish the first local model from AI Control or Easy Setup.",
+                        systemName: "sparkles",
+                        accent: RoachPalette.magenta
+                    )
+                    RoachDigestRow(
+                        "Vault",
+                        value: "\(model.snapshot?.knowledgeFiles.count ?? 0) local files",
+                        detail: "Maps, notes, docs, and captures stay grouped together.",
+                        systemName: "books.vertical.fill",
+                        accent: RoachPalette.cyan
                     )
                 }
             }
@@ -3802,149 +3622,20 @@ private struct RootWorkspaceView: View {
         let activeModelDownloads = model.snapshot?.downloads.filter { $0.filetype == "model" && $0.status != "failed" } ?? []
 
         return VStack(alignment: .leading, spacing: 18) {
-            RoachSpotlightPanel(accent: RoachPalette.magenta) {
+            RoachSpotlightPanel(accent: RoachPalette.green) {
                 VStack(alignment: .leading, spacing: 16) {
                     responsiveBar {
-                        HStack(alignment: .center, spacing: 16) {
-                            RoachModuleMark(
-                                systemName: WorkspacePane.roachClaw.icon,
-                                assetName: WorkspacePane.roachClaw.assetName,
-                                size: 56,
-                                isSelected: true,
-                                glow: true
-                            )
-
-                            RoachSectionHeader(
-                                "RoachClaw",
-                                title: "Private AI that stays in your root.",
-                                detail: "Keep the local lane first, treat cloud as backup, and let RoachBrain hold onto the useful context instead of making you start over."
-                            )
-                        }
+                        RoachSectionHeader(
+                            "Workbench",
+                            title: "Start with the local model.",
+                            detail: "Chat first, local by default, and pin the parts worth keeping into RoachBrain."
+                        )
                     } actions: {
                         Button("AI Control") {
                             Task { await model.openRoute("/settings/ai", title: "AI Control") }
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
 
-                        Button("Model Store") {
-                            Task { await model.openRoute("/settings/models", title: "Model Store") }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-
-                        Button(model.isApplyingDefaults ? "Saving..." : "Apply Defaults") {
-                            Task { await model.applyRoachClawDefaults() }
-                        }
-                        .buttonStyle(RoachPrimaryButtonStyle())
-                        .disabled(model.isApplyingDefaults || model.snapshot == nil)
-                    }
-
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 16) {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                                RoachFeatureTile(
-                                    "Ollama",
-                                    title: providerValue(providers["ollama"]),
-                                    detail: "Contained model lane inside this RoachNet install.",
-                                    systemName: "sparkles",
-                                    accent: RoachPalette.green
-                                )
-                                RoachFeatureTile(
-                                    "OpenClaw",
-                                    title: providerValue(providers["openclaw"]),
-                                    detail: "Agent runtime for the local workbench and tool lane.",
-                                    systemName: "bolt.horizontal.circle",
-                                    accent: RoachPalette.magenta
-                                )
-                                RoachFeatureTile(
-                                    "Workspace",
-                                    title: workspaceValue(roachClaw?.workspacePath),
-                                    detail: "RoachClaw stays contained unless you choose to import an external lane.",
-                                    systemName: "shippingbox.fill",
-                                    accent: RoachPalette.cyan
-                                )
-                                RoachFeatureTile(
-                                    "RoachBrain",
-                                    title: "\(model.roachBrainMemories.count) memories",
-                                    detail: model.roachBrainPinnedCount > 0
-                                        ? "\(model.roachBrainPinnedCount) pinned and ready for retrieval."
-                                        : "Recent prompts and replies stay searchable locally.",
-                                    systemName: "brain.head.profile",
-                                    accent: RoachPalette.bronze
-                                )
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                            roachClawSignalDeck(
-                                roachClaw: roachClaw,
-                                activeModelDownloads: activeModelDownloads.count,
-                                cloudModels: cloudModels.count
-                            )
-                            .frame(width: 320)
-                        }
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                                RoachFeatureTile(
-                                    "Ollama",
-                                    title: providerValue(providers["ollama"]),
-                                    detail: "Contained model lane inside this RoachNet install.",
-                                    systemName: "sparkles",
-                                    accent: RoachPalette.green
-                                )
-                                RoachFeatureTile(
-                                    "OpenClaw",
-                                    title: providerValue(providers["openclaw"]),
-                                    detail: "Agent runtime for the local workbench and tool lane.",
-                                    systemName: "bolt.horizontal.circle",
-                                    accent: RoachPalette.magenta
-                                )
-                                RoachFeatureTile(
-                                    "Workspace",
-                                    title: workspaceValue(roachClaw?.workspacePath),
-                                    detail: "RoachClaw stays contained unless you choose to import an external lane.",
-                                    systemName: "shippingbox.fill",
-                                    accent: RoachPalette.cyan
-                                )
-                                RoachFeatureTile(
-                                    "RoachBrain",
-                                    title: "\(model.roachBrainMemories.count) memories",
-                                    detail: model.roachBrainPinnedCount > 0
-                                        ? "\(model.roachBrainPinnedCount) pinned and ready for retrieval."
-                                        : "Recent prompts and replies stay searchable locally.",
-                                    systemName: "brain.head.profile",
-                                    accent: RoachPalette.bronze
-                                )
-                            }
-
-                            roachClawSignalDeck(
-                                roachClaw: roachClaw,
-                                activeModelDownloads: activeModelDownloads.count,
-                                cloudModels: cloudModels.count
-                            )
-                        }
-                    }
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            RoachTag(model.config.distributedInferenceBackend == "exo" ? "exo route" : "single-machine", accent: model.config.distributedInferenceBackend == "exo" ? RoachPalette.magenta : RoachPalette.green)
-                            RoachTag(model.displayedRoachClawDefaultModel, accent: RoachPalette.cyan)
-                            if model.hasCloudChatFallback {
-                                RoachTag("Cloud lane ready", accent: RoachPalette.cyan)
-                            }
-                        }
-                    }
-                }
-            }
-
-            RoachSpotlightPanel(accent: RoachPalette.green) {
-                VStack(alignment: .leading, spacing: 16) {
-                    responsiveBar {
-                        RoachSectionHeader(
-                            "Workbench",
-                            title: "Talk to the stack without leaving the shell.",
-                            detail: "Keep one model selected on purpose, pin what matters into RoachBrain, and stay in the same native surface while the runtime does the rest."
-                        )
-                    } actions: {
                         Menu {
                             ForEach(chatModels, id: \.self) { modelName in
                                 Button(model.chatModelLabel(for: modelName)) {
@@ -3971,21 +3662,6 @@ private struct RootWorkspaceView: View {
                         recommendedQuickstartModel: recommendedQuickstartModel,
                         cloudModels: cloudModels.count
                     )
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            RoachTag(model.selectedChatModelLabel, accent: RoachPalette.magenta)
-                            RoachTag("Quickstart · \(recommendedQuickstartModel)", accent: RoachPalette.green)
-                            if model.hasCloudChatFallback {
-                                RoachTag("Cloud backup ready", accent: RoachPalette.cyan)
-                            } else {
-                                RoachTag("Local-first only", accent: RoachPalette.green)
-                            }
-                            if model.roachBrainPinnedCount > 0 {
-                                RoachTag("\(model.roachBrainPinnedCount) pinned", accent: RoachPalette.bronze)
-                            }
-                        }
-                    }
 
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 12) {
@@ -4045,7 +3721,7 @@ private struct RootWorkspaceView: View {
                         )
                     }
 
-                    ForEach(Array(model.chatLines.suffix(6))) { line in
+                    ForEach(Array(model.chatLines.suffix(4))) { line in
                         ChatBubble(line: line)
                     }
 
@@ -4071,6 +3747,63 @@ private struct RootWorkspaceView: View {
                         }
                         .buttonStyle(RoachPrimaryButtonStyle())
                         .disabled(model.isSendingPrompt || chatModels.isEmpty)
+                    }
+                }
+            }
+
+            RoachSpotlightPanel(accent: RoachPalette.magenta) {
+                VStack(alignment: .leading, spacing: 16) {
+                    responsiveBar {
+                        HStack(alignment: .center, spacing: 16) {
+                            RoachModuleMark(
+                                systemName: WorkspacePane.roachClaw.icon,
+                                assetName: WorkspacePane.roachClaw.assetName,
+                                size: 56,
+                                isSelected: true,
+                                glow: true
+                            )
+
+                            RoachSectionHeader(
+                                "RoachClaw",
+                                title: "Private AI, kept close.",
+                                detail: "Model lane, local runtime, and RoachBrain stay readable without crowding the chat surface."
+                            )
+                        }
+                    } actions: {
+                        Button("Model Store") {
+                            Task { await model.openRoute("/settings/models", title: "Model Store") }
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button(model.isApplyingDefaults ? "Saving..." : "Apply Defaults") {
+                            Task { await model.applyRoachClawDefaults() }
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+                        .disabled(model.isApplyingDefaults || model.snapshot == nil)
+                    }
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 16) {
+                            roachClawOverviewPanel(roachClaw: roachClaw, providers: providers)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            roachClawSignalDeck(
+                                roachClaw: roachClaw,
+                                activeModelDownloads: activeModelDownloads.count,
+                                cloudModels: cloudModels.count
+                            )
+                            .frame(width: 320)
+                        }
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            roachClawOverviewPanel(roachClaw: roachClaw, providers: providers)
+
+                            roachClawSignalDeck(
+                                roachClaw: roachClaw,
+                                activeModelDownloads: activeModelDownloads.count,
+                                cloudModels: cloudModels.count
+                            )
+                        }
                     }
                 }
             }
@@ -4252,8 +3985,8 @@ private struct RootWorkspaceView: View {
             VStack(alignment: .leading, spacing: 14) {
                 RoachSectionHeader(
                     "Signal Board",
-                    title: "AI lane, read fast.",
-                    detail: "The model, memory, and fallback state that matter before you type."
+                    title: "Read the AI lane fast.",
+                    detail: "Default, memory, downloads, and fallback. Nothing else."
                 )
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -4276,6 +4009,54 @@ private struct RootWorkspaceView: View {
                         label: "Fallback",
                         value: cloudModels == 0 ? "Local only" : "\(cloudModels) cloud routes",
                         detail: roachClaw?.ready == true ? "Local route is ready first" : "Warmup still in progress"
+                    )
+                }
+            }
+        }
+    }
+
+    private func roachClawOverviewPanel(
+        roachClaw: RoachClawStatusResponse?,
+        providers: [String: AIRuntimeStatusResponse]
+    ) -> some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                RoachSectionHeader(
+                    "Model lane",
+                    title: "The AI stack, once.",
+                    detail: "What is live, where it lives, and what RoachBrain already knows."
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    RoachDigestRow(
+                        "Ollama",
+                        value: providerValue(providers["ollama"]),
+                        detail: "Contained model lane inside this RoachNet install.",
+                        systemName: "sparkles",
+                        accent: RoachPalette.green
+                    )
+                    RoachDigestRow(
+                        "OpenClaw",
+                        value: providerValue(providers["openclaw"]),
+                        detail: "Agent runtime for the local workbench and tool lane.",
+                        systemName: "bolt.horizontal.circle",
+                        accent: RoachPalette.magenta
+                    )
+                    RoachDigestRow(
+                        "Workspace",
+                        value: workspaceValue(roachClaw?.workspacePath),
+                        detail: "RoachClaw stays contained unless you deliberately import another lane.",
+                        systemName: "shippingbox.fill",
+                        accent: RoachPalette.cyan
+                    )
+                    RoachDigestRow(
+                        "RoachBrain",
+                        value: "\(model.roachBrainMemories.count) memories",
+                        detail: model.roachBrainPinnedCount > 0
+                            ? "\(model.roachBrainPinnedCount) pinned and ready for retrieval."
+                            : "Recent prompts and replies stay searchable locally.",
+                        systemName: "brain.head.profile",
+                        accent: RoachPalette.bronze
                     )
                 }
             }
@@ -4578,7 +4359,7 @@ private struct RootWorkspaceView: View {
                         RoachSectionHeader(
                             "Runtime",
                             title: "Contained, readable, recoverable.",
-                            detail: "One local gateway in front, RoachTail and RoachSync behind it, and the runtime state you actually care about surfaced without the scavenger hunt."
+                            detail: "One local gateway in front, RoachTail and RoachSync behind it, and the runtime state you actually care about surfaced without a scavenger hunt."
                         )
                     } actions: {
                         Button(model.isLoading ? "Refreshing..." : "Refresh Runtime") {
@@ -4594,37 +4375,8 @@ private struct RootWorkspaceView: View {
 
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .top, spacing: 16) {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                                RoachFeatureTile(
-                                    "Install Root",
-                                    title: shortRuntimePath(model.installPath),
-                                    detail: "The contained app root. No smear across the host when this lane is behaving.",
-                                    systemName: "shippingbox.fill",
-                                    accent: RoachPalette.green
-                                )
-                                RoachFeatureTile(
-                                    "Storage Root",
-                                    title: shortRuntimePath(model.storagePath),
-                                    detail: "Maps, vault content, archives, logs, and runtime cache stay grouped here.",
-                                    systemName: "externaldrive.fill",
-                                    accent: RoachPalette.cyan
-                                )
-                                RoachFeatureTile(
-                                    "Server Target",
-                                    title: runtimeTargetLabel(serverInfo?.target),
-                                    detail: "The active local route in front of the services.",
-                                    systemName: "network",
-                                    accent: RoachPalette.magenta
-                                )
-                                RoachFeatureTile(
-                                    "Host",
-                                    title: hostLabel(system?.os.hostname),
-                                    detail: "This hardware stays the source of truth unless you deliberately bridge it.",
-                                    systemName: "desktopcomputer",
-                                    accent: RoachPalette.bronze
-                                )
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            runtimeOverviewPanel(system: system, serverInfo: serverInfo, roachTail: roachTail, roachSync: roachSync)
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
                             runtimeSignalDeck(
                                 system: system,
@@ -4636,36 +4388,7 @@ private struct RootWorkspaceView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 14) {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 14) {
-                                RoachFeatureTile(
-                                    "Install Root",
-                                    title: shortRuntimePath(model.installPath),
-                                    detail: "The contained app root. No smear across the host when this lane is behaving.",
-                                    systemName: "shippingbox.fill",
-                                    accent: RoachPalette.green
-                                )
-                                RoachFeatureTile(
-                                    "Storage Root",
-                                    title: shortRuntimePath(model.storagePath),
-                                    detail: "Maps, vault content, archives, logs, and runtime cache stay grouped here.",
-                                    systemName: "externaldrive.fill",
-                                    accent: RoachPalette.cyan
-                                )
-                                RoachFeatureTile(
-                                    "Server Target",
-                                    title: runtimeTargetLabel(serverInfo?.target),
-                                    detail: "The active local route in front of the services.",
-                                    systemName: "network",
-                                    accent: RoachPalette.magenta
-                                )
-                                RoachFeatureTile(
-                                    "Host",
-                                    title: hostLabel(system?.os.hostname),
-                                    detail: "This hardware stays the source of truth unless you deliberately bridge it.",
-                                    systemName: "desktopcomputer",
-                                    accent: RoachPalette.bronze
-                                )
-                            }
+                            runtimeOverviewPanel(system: system, serverInfo: serverInfo, roachTail: roachTail, roachSync: roachSync)
 
                             runtimeSignalDeck(
                                 system: system,
@@ -4673,15 +4396,6 @@ private struct RootWorkspaceView: View {
                                 roachTail: roachTail,
                                 roachSync: roachSync
                             )
-                        }
-                    }
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            RoachTag(model.snapshot?.account.linked == true ? "Account linked" : "Account local", accent: model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.muted)
-                            RoachTag(roachTail?.enabled == true ? "RoachTail armed" : "RoachTail off", accent: roachTail?.enabled == true ? RoachPalette.green : RoachPalette.muted)
-                            RoachTag(roachSync?.enabled == true ? "RoachSync armed" : "RoachSync off", accent: roachSync?.enabled == true ? RoachPalette.green : RoachPalette.muted)
-                            RoachTag(model.snapshot?.internetConnected == true ? "Online now" : "Offline ready", accent: model.snapshot?.internetConnected == true ? RoachPalette.green : RoachPalette.warning)
                         }
                     }
 
@@ -5030,7 +4744,7 @@ private struct RootWorkspaceView: View {
     }
 
     private var summaryColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 176), spacing: 16, alignment: .top)]
+        [GridItem(.adaptive(minimum: 212), spacing: 16, alignment: .top)]
     }
 
     private var homeGridItems: [CommandGridItem] {
@@ -5038,7 +4752,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "maps",
                 title: "Maps",
-                detail: "View offline maps.",
+                detail: "Open the contained maps shelf and keep routes close.",
                 badge: "Core Capability",
                 systemImage: "map.fill",
                 routePath: "/maps",
@@ -5047,7 +4761,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "ai-control",
                 title: "AI Control",
-                detail: "Link Ollama and OpenClaw runtimes, verify endpoints, and tune local AI access.",
+                detail: "Check the model lane, the runtime, and what RoachClaw can actually see.",
                 badge: "Runtime",
                 systemImage: "cpu.fill",
                 routePath: "/settings/ai",
@@ -5056,7 +4770,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "easy-setup",
                 title: "Easy Setup",
-                detail: "Use the guided setup flow to connect runtimes, download content, and stage your offline toolkit.",
+                detail: "Fix the install, stage the runtime, and line up the first shelves.",
                 badge: setupBadge,
                 systemImage: "bolt.fill",
                 routePath: "/easy-setup",
@@ -5065,7 +4779,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "offline-web",
                 title: "Offline Web Apps",
-                detail: "Mirror standard websites into browseable offline local web apps.",
+                detail: "Keep mirrored sites readable in-app instead of buried in browser tabs.",
                 badge: "Archived",
                 systemImage: "globe.badge.chevron.backward",
                 routePath: "/site-archives",
@@ -5074,7 +4788,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "install-apps",
                 title: "Install Apps",
-                detail: "Browse RoachNet modules, stage upstream tools, and make them feel local.",
+                detail: "Pull packs from the store and land them in the right shelf.",
                 badge: "App Store",
                 systemImage: "square.grid.2x2.fill",
                 routePath: "/settings/apps",
@@ -5083,7 +4797,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "docs",
                 title: "Docs",
-                detail: "Read RoachNet manuals, deployment notes, and field references.",
+                detail: "Read the guides, runtime notes, and field references without leaving the shell.",
                 badge: "Local Reference",
                 systemImage: "doc.text.fill",
                 routePath: "/docs/home",
@@ -5092,7 +4806,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "settings",
                 title: "Settings",
-                detail: "Tune RoachNet, providers, storage paths, and local services.",
+                detail: "Tune RoachNet, storage, providers, and the parts that keep it running.",
                 badge: "System",
                 systemImage: "gearshape.fill",
                 routePath: "/settings/system",
@@ -5401,12 +5115,20 @@ private struct RootWorkspaceView: View {
 
     private func workspaceValue(_ path: String?) -> String {
         if let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return path
+            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = URL(fileURLWithPath: trimmed)
+            let lastComponent = url.lastPathComponent
+
+            if trimmed.localizedCaseInsensitiveContains("RoachNet") {
+                return "RoachNet workspace"
+            }
+
+            if !lastComponent.isEmpty {
+                return lastComponent
+            }
         }
 
-        return URL(fileURLWithPath: model.storagePath)
-            .appendingPathComponent("openclaw")
-            .path
+        return "RoachNet workspace"
     }
 
     private func runtimeTargetLabel(_ target: String?) -> String {
@@ -5419,10 +5141,14 @@ private struct RootWorkspaceView: View {
 
     private func hostLabel(_ hostname: String?) -> String {
         if let hostname, !hostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return hostname
+            if hostname.localizedCaseInsensitiveContains("roachnet") {
+                return "RoachNet"
+            }
+
+            return "RoachNet host"
         }
 
-        return model.snapshot == nil ? "Warming up" : "This Mac"
+        return model.snapshot == nil ? "Warming up" : "RoachNet host"
     }
 
     private func shortRuntimePath(_ path: String) -> String {
@@ -5464,6 +5190,54 @@ private struct RootWorkspaceView: View {
                         label: "RoachSync",
                         value: roachSync?.enabled == true ? "\(roachSync?.peers.count ?? 0) peers" : "Off",
                         detail: roachSync?.enabled == true ? "Sync lane is live." : "Contained sync is disabled."
+                    )
+                }
+            }
+        }
+    }
+
+    private func runtimeOverviewPanel(
+        system: SystemInfoResponse?,
+        serverInfo: ManagedAppServerInfo?,
+        roachTail: ManagedRoachTailStatusResponse?,
+        roachSync: ManagedRoachSyncStatusResponse?
+    ) -> some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                RoachSectionHeader(
+                    "Runtime map",
+                    title: "One contained path. No scavenger hunt.",
+                    detail: "The root, the route, and the private lanes that matter when something feels off."
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    RoachDigestRow(
+                        "Install root",
+                        value: shortRuntimePath(model.installPath),
+                        detail: "The contained app root. No smear across the host when this lane is behaving.",
+                        systemName: "shippingbox.fill",
+                        accent: RoachPalette.green
+                    )
+                    RoachDigestRow(
+                        "Storage root",
+                        value: shortRuntimePath(model.storagePath),
+                        detail: "Maps, vault content, archives, logs, and runtime cache stay grouped here.",
+                        systemName: "externaldrive.fill",
+                        accent: RoachPalette.cyan
+                    )
+                    RoachDigestRow(
+                        "Server target",
+                        value: runtimeTargetLabel(serverInfo?.target),
+                        detail: "The active local route in front of the services.",
+                        systemName: "network",
+                        accent: RoachPalette.magenta
+                    )
+                    RoachDigestRow(
+                        "Private lanes",
+                        value: "\(roachTail?.enabled == true ? "Tail" : "Tail off") · \(roachSync?.enabled == true ? "Sync" : "Sync off")",
+                        detail: "RoachTail handles the private bridge. RoachSync keeps the shelf aligned.",
+                        systemName: "point.3.connected.trianglepath.dotted",
+                        accent: RoachPalette.bronze
                     )
                 }
             }
