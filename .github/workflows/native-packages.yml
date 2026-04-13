@@ -94,6 +94,7 @@ jobs:
 
       - name: Build native macOS packages
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           ROACHNET_CODESIGN_IDENTITY: ${{ env.APPLE_DEVELOPER_ID_APP_IDENTITY }}
           ROACHNET_NOTARY_PROFILE: ${{ env.ROACHNET_NOTARY_PROFILE }}
           ROACHNET_NOTARY_KEYCHAIN: ${{ env.ROACHNET_NOTARY_KEYCHAIN }}

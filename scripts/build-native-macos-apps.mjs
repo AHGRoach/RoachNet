@@ -38,6 +38,10 @@ const notaryProfile = process.env.ROACHNET_NOTARY_PROFILE?.trim() || ''
 const notaryKeychain = process.env.ROACHNET_NOTARY_KEYCHAIN?.trim() || ''
 const skipDmg = process.env.ROACHNET_SKIP_DMG === '1'
 const OLLAMA_RELEASE_API_URL = 'https://api.github.com/repos/ollama/ollama/releases/latest'
+const OLLAMA_DIRECT_DOWNLOAD_URL =
+  process.env.ROACHNET_BUNDLED_OLLAMA_URL?.trim() || 'https://ollama.com/download/ollama-darwin.tgz'
+const OLLAMA_FALLBACK_VERSION =
+  process.env.ROACHNET_BUNDLED_OLLAMA_VERSION?.trim() || 'contained'
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -172,12 +176,16 @@ function sanitizeCacheKey(value) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, {
-    headers: {
-      'user-agent': 'RoachNet-Bundler',
-      accept: 'application/json',
-    },
-  })
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || ''
+  const headers = {
+    'user-agent': 'RoachNet-Bundler',
+    accept: 'application/json',
+  }
+  if (token && url.startsWith('https://api.github.com/')) {
+    headers.authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(url, { headers })
 
   if (!response.ok) {
     throw new Error(`Request failed for ${url}: ${response.status} ${response.statusText}`)
@@ -204,15 +212,27 @@ async function downloadFile(url, destinationPath) {
 }
 
 async function getLatestOllamaRelease() {
-  const release = await fetchJson(OLLAMA_RELEASE_API_URL)
-  const asset = Array.isArray(release.assets)
-    ? release.assets.find((entry) => entry?.name === 'ollama-darwin.tgz')
-    : null
+  try {
+    const release = await fetchJson(OLLAMA_RELEASE_API_URL)
+    const asset = Array.isArray(release.assets)
+      ? release.assets.find((entry) => entry?.name === 'ollama-darwin.tgz')
+      : null
 
-  return {
-    version: release.tag_name?.replace(/^v/i, '') || 'latest',
-    assetName: asset?.name || 'ollama-darwin.tgz',
-    url: asset?.browser_download_url || 'https://ollama.com/download/ollama-darwin.tgz',
+    return {
+      version: release.tag_name?.replace(/^v/i, '') || OLLAMA_FALLBACK_VERSION,
+      assetName: asset?.name || path.basename(new URL(OLLAMA_DIRECT_DOWNLOAD_URL).pathname) || 'ollama-darwin.tgz',
+      url: asset?.browser_download_url || OLLAMA_DIRECT_DOWNLOAD_URL,
+    }
+  } catch (error) {
+    console.warn(
+      `Falling back to the direct Ollama bundle because the release lookup failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+
+    return {
+      version: OLLAMA_FALLBACK_VERSION,
+      assetName: path.basename(new URL(OLLAMA_DIRECT_DOWNLOAD_URL).pathname) || 'ollama-darwin.tgz',
+      url: OLLAMA_DIRECT_DOWNLOAD_URL,
+    }
   }
 }
 

@@ -38,6 +38,10 @@ const INSTALLER_DIAGNOSTIC_COMMAND_TIMEOUT_MS = 1_500
 const GITHUB_API_ROOT = 'https://api.github.com'
 const DEFAULT_ROACHCLAW_MODEL = 'qwen2.5-coder:1.5b'
 const OLLAMA_RELEASE_API_URL = 'https://api.github.com/repos/ollama/ollama/releases/latest'
+const OLLAMA_DIRECT_DOWNLOAD_URL =
+  process.env.ROACHNET_BUNDLED_OLLAMA_URL?.trim() || 'https://ollama.com/download/ollama-darwin.tgz'
+const OLLAMA_FALLBACK_VERSION =
+  process.env.ROACHNET_BUNDLED_OLLAMA_VERSION?.trim() || 'contained'
 const GIB = 1024 ** 3
 const MIN_FREE_BYTES_BASE_INSTALL = 2 * GIB
 const MIN_FREE_BYTES_WITH_ROACHCLAW = 5 * GIB
@@ -474,10 +478,14 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
 }
 
 async function fetchJson(url, options = {}) {
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || ''
   const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github+json, application/json',
       'User-Agent': 'RoachNet-Setup',
+      ...(token && url.startsWith('https://api.github.com/')
+        ? { Authorization: `Bearer ${token}` }
+        : {}),
       ...(options.headers || {}),
     },
   })
@@ -2255,15 +2263,28 @@ async function downloadToFile(url, destinationPath) {
 }
 
 async function getLatestOllamaRelease() {
-  const release = await fetchJson(OLLAMA_RELEASE_API_URL)
-  const asset = Array.isArray(release.assets)
-    ? release.assets.find((entry) => entry?.name === 'ollama-darwin.tgz')
-    : null
+  try {
+    const release = await fetchJson(OLLAMA_RELEASE_API_URL)
+    const asset = Array.isArray(release.assets)
+      ? release.assets.find((entry) => entry?.name === 'ollama-darwin.tgz')
+      : null
 
-  return {
-    version: parseVersionNumber(release.tag_name) || null,
-    url: asset?.browser_download_url || 'https://ollama.com/download/ollama-darwin.tgz',
-    assetName: asset?.name || 'ollama-darwin.tgz',
+    return {
+      version: parseVersionNumber(release.tag_name) || OLLAMA_FALLBACK_VERSION,
+      url: asset?.browser_download_url || OLLAMA_DIRECT_DOWNLOAD_URL,
+      assetName: asset?.name || path.basename(new URL(OLLAMA_DIRECT_DOWNLOAD_URL).pathname) || 'ollama-darwin.tgz',
+    }
+  } catch (error) {
+    appendTrace(
+      'setup.install.ollama_release_fallback',
+      error instanceof Error ? error.message : String(error)
+    )
+
+    return {
+      version: OLLAMA_FALLBACK_VERSION,
+      url: OLLAMA_DIRECT_DOWNLOAD_URL,
+      assetName: path.basename(new URL(OLLAMA_DIRECT_DOWNLOAD_URL).pathname) || 'ollama-darwin.tgz',
+    }
   }
 }
 
