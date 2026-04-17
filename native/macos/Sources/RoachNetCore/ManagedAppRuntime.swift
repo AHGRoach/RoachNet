@@ -258,6 +258,7 @@ public struct EducationCategory: Decodable, Identifiable, Sendable {
     public let slug: String
     public let name: String
     public let description: String?
+    public let installedTierSlug: String?
     public let tiers: [Tier]
 
     public var id: String { slug }

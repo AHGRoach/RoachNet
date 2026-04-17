@@ -37,6 +37,100 @@ struct DeveloperInlineSuggestion: Identifiable, Hashable {
     let snippet: String
 }
 
+enum DeveloperAssistMode: String, CaseIterable, Identifiable {
+    case plan = "Plan"
+    case implement = "Implement"
+    case debug = "Debug"
+    case review = "Review"
+
+    var id: String { rawValue }
+
+    var detail: String {
+        switch self {
+        case .plan:
+            return "Shape the next safe sequence."
+        case .implement:
+            return "Write the change and prove it."
+        case .debug:
+            return "Find the break and cut the fix."
+        case .review:
+            return "Call out risk, regressions, and missing tests."
+        }
+    }
+
+    var systemName: String {
+        switch self {
+        case .plan:
+            return "point.topleft.down.curvedto.point.bottomright.up"
+        case .implement:
+            return "hammer.fill"
+        case .debug:
+            return "stethoscope"
+        case .review:
+            return "checklist.checked"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .plan:
+            return RoachPalette.cyan
+        case .implement:
+            return RoachPalette.green
+        case .debug:
+            return RoachPalette.warning
+        case .review:
+            return RoachPalette.magenta
+        }
+    }
+
+    var instruction: String {
+        switch self {
+        case .plan:
+            return "Break the request into the next concrete implementation steps. Keep it short, ordered, and biased toward what should happen first."
+        case .implement:
+            return "Prefer direct code changes, exact commands, and the smallest safe implementation path. Include verification commands when they matter."
+        case .debug:
+            return "Diagnose the most likely root cause, explain the signal that supports it, and propose the fastest fix plus the fastest proof."
+        case .review:
+            return "Use a code-review mindset. Prioritize bugs, regressions, weak assumptions, and missing tests before summarizing anything else."
+        }
+    }
+
+    var presets: [String] {
+        switch self {
+        case .plan:
+            return [
+                "Turn this request into the next safe implementation steps.",
+                "Map the smallest shippable path for this file.",
+                "List the commands I should run before changing anything.",
+                "What is the safest order to change and verify this surface?",
+            ]
+        case .implement:
+            return [
+                "Implement the next change in this file and include the verification commands.",
+                "Write the smallest safe patch for this issue.",
+                "Refactor this file without changing behavior and explain the exact edits.",
+                "Give me the exact code path to change and the shell commands to validate it.",
+            ]
+        case .debug:
+            return [
+                "Find the most likely root cause and the fastest proof.",
+                "What is most likely broken in this file and why?",
+                "Give me a targeted debug plan with expected signals.",
+                "Explain the failure path and the smallest safe fix.",
+            ]
+        case .review:
+            return [
+                "Review the open file and call out regressions or missing tests.",
+                "What is risky or weak in this code path?",
+                "Audit this file for edge cases and deployment assumptions.",
+                "Give me the findings first, then the cleanups worth making.",
+            ]
+        }
+    }
+}
+
 @MainActor
 final class DevWorkspaceModel: ObservableObject {
     @Published var storagePath = ""
@@ -53,7 +147,10 @@ final class DevWorkspaceModel: ObservableObject {
     @Published var terminalOutput = ""
     @Published var terminalIsRunning = false
     @Published var terminalStatus = "Shell idle."
+    @Published var terminalRecentCommands: [String] = []
+    @Published var lastTerminalExitCode: Int32?
     @Published var aiPrompt = "Review the open file and suggest the next code change."
+    @Published var assistantMode: DeveloperAssistMode = .implement
     @Published var aiResponse = ""
     @Published var aiIsRunning = false
     @Published var secretRecords: [RoachNetSecretRecord] = []
@@ -116,6 +213,15 @@ final class DevWorkspaceModel: ObservableObject {
 
     var activeDocumentCharacterCount: Int {
         activeDocument?.text.count ?? 0
+    }
+
+    var activeDocumentPathComponents: [String] {
+        guard let activeDocument else { return [] }
+        return activeDocument.relativePath.split(separator: "/").map(String.init)
+    }
+
+    var terminalOutputLineCount: Int {
+        max(terminalOutput.components(separatedBy: .newlines).count, terminalOutput.isEmpty ? 0 : 1)
     }
 
     var activeDocumentLanguage: String {
@@ -448,15 +554,9 @@ final class DevWorkspaceModel: ObservableObject {
         return filterNodes(fileTree, query: query.lowercased())
     }
 
-    let assistantPromptPresets: [String] = [
-        "Review the open file and suggest the safest next change.",
-        "Explain this code path in plain English and call out risk.",
-        "Write a focused test plan for the open file.",
-        "Propose a refactor that improves readability without changing behavior.",
-        "Suggest the next implementation step and include the shell commands to verify it.",
-        "Draft a clean commit message and release note summary from the current file changes.",
-        "Point out the missing secrets, env values, or deploy assumptions for this project.",
-    ]
+    var assistantPromptPresets: [String] {
+        assistantMode.presets
+    }
 
     let terminalPresets: [String] = [
         "pwd",
@@ -862,9 +962,11 @@ final class DevWorkspaceModel: ObservableObject {
         ]
 
         let startLine = "\n$ \(command)\n"
+        recordTerminalCommand(command)
         appendTerminalOutput(startLine)
         terminalIsRunning = true
         terminalStatus = "Running in \(displayWorkingDirectory())."
+        lastTerminalExitCode = nil
         lastError = nil
 
         let handleOutput: (FileHandle) -> Void = { [weak self] handle in
@@ -886,6 +988,7 @@ final class DevWorkspaceModel: ObservableObject {
             Task { @MainActor in
                 self?.terminalIsRunning = false
                 self?.terminalStatus = "Exited with code \(finishedProcess.terminationStatus)."
+                self?.lastTerminalExitCode = finishedProcess.terminationStatus
                 self?.appendTerminalOutput("\n[process exited with code \(finishedProcess.terminationStatus)]\n")
                 self?.commandProcess = nil
             }
@@ -897,6 +1000,7 @@ final class DevWorkspaceModel: ObservableObject {
         } catch {
             terminalIsRunning = false
             terminalStatus = "Launch failed."
+            lastTerminalExitCode = -1
             lastError = error.localizedDescription
         }
     }
@@ -917,6 +1021,14 @@ final class DevWorkspaceModel: ObservableObject {
     func copyTerminalOutput() {
         copyToPasteboard(terminalOutput)
         importStatus = "Copied terminal output."
+    }
+
+    private func recordTerminalCommand(_ command: String) {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        terminalRecentCommands.removeAll { $0 == trimmed }
+        terminalRecentCommands.insert(trimmed, at: 0)
+        terminalRecentCommands = Array(terminalRecentCommands.prefix(8))
     }
 
     func loadSecrets(storagePath: String) {
@@ -1052,6 +1164,7 @@ final class DevWorkspaceModel: ObservableObject {
 
         let memoryMatches = roachBrainSuggestedMatches
         let memoryContextBlock = RoachBrainStore.contextBlock(for: memoryMatches)
+        let appContextBlock = workspaceModel.permissionedRoachClawContextBlock()
 
         let fileContext = activeDocument.map { document in
             """
@@ -1066,10 +1179,20 @@ final class DevWorkspaceModel: ObservableObject {
         let composedPrompt = """
         You are assisting inside RoachNet Dev Studio.
 
+        Current assist mode: \(assistantMode.rawValue)
+        Mode contract:
+        \(assistantMode.instruction)
+
         \(memoryContextBlock.isEmpty ? "" : """
         \(memoryContextBlock)
 
         Use the RoachBrain notes only if they help this request stay concrete.
+        """)
+
+        \(appContextBlock.isEmpty ? "" : """
+        \(appContextBlock)
+
+        Use the explicit RoachNet context only when it materially improves the answer.
         """)
 
         \(fileContext)
@@ -1077,7 +1200,7 @@ final class DevWorkspaceModel: ObservableObject {
         Request:
         \(prompt)
 
-        Keep the answer concrete and implementation-ready.
+        Keep the answer concrete, implementation-ready, and shaped to the current assist mode.
         """
 
         aiIsRunning = true
@@ -1709,8 +1832,8 @@ struct DevWorkspaceView: View {
 
                                 RoachSectionHeader(
                                     "Dev Studio",
-                                    title: "Build in one contained lane.",
-                                    detail: "Projects, shell, secrets, and RoachClaw stay in one native dev surface."
+                                    title: "Build in one desk.",
+                                    detail: "Projects, code, shell, secrets, and RoachClaw stay in one native workspace."
                                 )
                             }
 
@@ -1747,8 +1870,8 @@ struct DevWorkspaceView: View {
 
                                 RoachSectionHeader(
                                     "Dev Studio",
-                                    title: "Build in one contained lane.",
-                                    detail: "Projects, shell, secrets, and RoachClaw stay in one native dev surface."
+                                    title: "Build in one desk.",
+                                    detail: "Projects, code, shell, secrets, and RoachClaw stay in one native workspace."
                                 )
                             }
 
@@ -1801,7 +1924,7 @@ struct DevWorkspaceView: View {
                             heroSignalTile(
                                 kicker: "Shell",
                                 title: "Local terminal",
-                                detail: "Run contained commands and keep the project root, runtime, and AI assist in one view.",
+                                detail: "Run the real shell and keep the project root, runtime, and assist in one view.",
                                 systemName: "terminal",
                                 accent: RoachPalette.cyan
                             )
@@ -1841,7 +1964,7 @@ struct DevWorkspaceView: View {
                             heroSignalTile(
                                 kicker: "Shell",
                                 title: "Local terminal",
-                                detail: "Run contained commands and keep the project root, runtime, and AI assist in one view.",
+                                detail: "Run the real shell and keep the project root, runtime, and assist in one view.",
                                 systemName: "terminal",
                                 accent: RoachPalette.cyan
                             )
@@ -1867,18 +1990,23 @@ struct DevWorkspaceView: View {
                 RoachNotice(title: "Dev Studio", detail: devModel.importStatus)
             }
 
-            HStack(alignment: .top, spacing: 16) {
+            HSplitView {
                 fileExplorerColumn
-                    .frame(width: 240)
+                    .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
 
-                editorColumn
-                    .frame(maxWidth: .infinity)
+                VSplitView {
+                    editorColumn
+                        .frame(minHeight: 420, idealHeight: 520)
+
+                    terminalColumn
+                        .frame(minHeight: 240, idealHeight: 280)
+                }
+                .frame(minWidth: 540, maxWidth: .infinity)
 
                 sideRail
-                    .frame(width: 320)
+                    .frame(minWidth: 300, idealWidth: 320, maxWidth: 360)
             }
-
-            terminalColumn
+            .frame(minHeight: 760)
         }
         .task(id: model.storagePath) {
             devModel.configure(storagePath: model.storagePath, installPath: model.installPath)
@@ -1892,9 +2020,14 @@ struct DevWorkspaceView: View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("Project Files")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(RoachPalette.text)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Explorer")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(RoachPalette.text)
+                        Text("Project shelf")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+                    }
                     Spacer()
                     RoachTag(devModel.currentProjectName, accent: RoachPalette.bronze)
                     Text("\(devModel.filteredFileTree.count)")
@@ -1992,7 +2125,7 @@ struct DevWorkspaceView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Code")
+                        Text("Editor")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(RoachPalette.text)
                         Text(devModel.activeDocumentLabel)
@@ -2017,7 +2150,7 @@ struct DevWorkspaceView: View {
                 }
 
                 if devModel.openDocuments.isEmpty {
-                    Text("Import a project or create a scratch file to open the first editor tab. The editor stays on the code instead of drowning you in chrome.")
+                    Text("Import a project or create a scratch file to open the first editor tab. The code stays in front instead of drowning under chrome.")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
                         .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
@@ -2031,16 +2164,44 @@ struct DevWorkspaceView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Editing in \(devModel.displayWorkingDirectory())")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(RoachPalette.muted)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Text("Monospaced editor")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(RoachPalette.green)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                if !devModel.activeDocumentPathComponents.isEmpty {
+                                    ForEach(Array(devModel.activeDocumentPathComponents.enumerated()), id: \.offset) { index, component in
+                                        HStack(spacing: 6) {
+                                            Text(component)
+                                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                                .foregroundStyle(index == devModel.activeDocumentPathComponents.count - 1 ? RoachPalette.text : RoachPalette.muted)
+                                                .lineLimit(1)
+                                            if index < devModel.activeDocumentPathComponents.count - 1 {
+                                                Image(systemName: "chevron.right")
+                                                    .font(.system(size: 8, weight: .bold))
+                                                    .foregroundStyle(RoachPalette.muted)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer()
+
+                                HStack(spacing: 8) {
+                                    RoachTag("\(devModel.activeDocumentLineCount) lines", accent: RoachPalette.cyan)
+                                    RoachTag("\(devModel.activeDocumentCharacterCount) chars", accent: RoachPalette.magenta)
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Editing in \(devModel.displayWorkingDirectory())")
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.muted)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+
+                                HStack(spacing: 8) {
+                                    RoachTag("\(devModel.activeDocumentLineCount) lines", accent: RoachPalette.cyan)
+                                    RoachTag("\(devModel.activeDocumentCharacterCount) chars", accent: RoachPalette.magenta)
+                                }
+                            }
                         }
 
                         if !devModel.inlineSuggestions.isEmpty {
@@ -2110,6 +2271,18 @@ struct DevWorkspaceView: View {
                                 .stroke(RoachPalette.borderStrong, lineWidth: 1)
                         )
                         .frame(minHeight: 420)
+
+                        HStack(spacing: 10) {
+                            RoachTag(devModel.currentProjectName, accent: RoachPalette.bronze)
+                            RoachTag(devModel.activeDocumentLanguage, accent: RoachPalette.cyan)
+                            if let active = devModel.activeDocument {
+                                RoachTag(active.isDirty ? "Unsaved buffer" : "Buffer clean", accent: active.isDirty ? RoachPalette.warning : RoachPalette.green)
+                            }
+                            Spacer()
+                            Text("Cursor-style desk, native file buffer")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(RoachPalette.muted)
+                        }
                     }
                 }
             }
@@ -2120,12 +2293,27 @@ struct DevWorkspaceView: View {
         VStack(alignment: .leading, spacing: 16) {
             RoachSpotlightPanel(accent: RoachPalette.magenta) {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text("RoachClaw Assist")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(RoachPalette.text)
-                        Spacer()
-                        RoachTag(model.selectedChatModelLabel, accent: RoachPalette.green)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 12) {
+                            RoachSectionHeader(
+                                "RoachClaw",
+                                title: "Keep the coding thread attached.",
+                                detail: "Ask for the next edit, keep the local context close, and leave the rest of the chrome out of the way."
+                            )
+
+                            Spacer(minLength: 12)
+                            RoachTag(model.selectedChatModelLabel, accent: RoachPalette.green)
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            RoachSectionHeader(
+                                "RoachClaw",
+                                title: "Keep the coding thread attached.",
+                                detail: "Stay in one surface for the next edit, the context, and the answer worth keeping."
+                            )
+
+                            RoachTag(model.selectedChatModelLabel, accent: RoachPalette.green)
+                        }
                     }
 
                     HStack(spacing: 8) {
@@ -2139,17 +2327,28 @@ struct DevWorkspaceView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Prompt")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .tracking(1.1)
-                            .foregroundStyle(RoachPalette.muted)
+                        RoachSectionHeader(
+                            "Assist",
+                            title: "Choose the answer shape.",
+                            detail: "Keep the project context where it is and change only the contract for the response you need."
+                        )
+
+                        assistModeButtons
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        RoachSectionHeader(
+                            "Prompt",
+                            title: "Ask for the next concrete edit.",
+                            detail: "Point at one real change, keep the ask narrow, and let the mode shape the reply."
+                        )
 
                         TextEditor(text: $devModel.aiPrompt)
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(RoachPalette.text)
                             .scrollContentBackground(.hidden)
                             .padding(12)
-                            .frame(minHeight: 120)
+                            .frame(minHeight: 132)
                             .background(
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                                     .fill(
@@ -2166,26 +2365,22 @@ struct DevWorkspaceView: View {
                             )
                     }
 
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                                ForEach(devModel.assistantPromptPresets.prefix(3), id: \.self) { preset in
-                                Button(preset) {
-                                    devModel.aiPrompt = preset
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(RoachPalette.panelRaised.opacity(0.52))
-                                )
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(RoachPalette.border, lineWidth: 1)
-                                )
-                                .foregroundStyle(RoachPalette.text)
-                                .font(.system(size: 11, weight: .semibold))
-                            }
+                    RoachNotice(
+                        title: "\(devModel.assistantMode.rawValue) contract",
+                        detail: devModel.assistantMode.detail,
+                        accent: devModel.assistantMode.accent
+                    )
+
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(minimum: 0), spacing: 8),
+                            GridItem(.flexible(minimum: 0), spacing: 8),
+                        ],
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+                        ForEach(devModel.assistantPromptPresets.prefix(4), id: \.self) { preset in
+                            presetCard(preset)
                         }
                     }
 
@@ -2264,28 +2459,6 @@ struct DevWorkspaceView: View {
                         }
                     }
 
-                    HStack(spacing: 10) {
-                        Button("Model Store") {
-                            Task {
-                                await model.openRoute("/settings/models", title: "Model Store")
-                            }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-
-                        Button("AI Settings") {
-                            Task {
-                                await model.openRoute("/settings/ai", title: "AI Settings")
-                            }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-
-                        Button("Save to RoachBrain") {
-                            devModel.saveAssistantResponseToRoachBrain()
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-                        .disabled(devModel.aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-
                     Button(devModel.aiIsRunning ? "Thinking…" : "Ask RoachClaw") {
                         Task {
                             await devModel.requestAssistant(using: model)
@@ -2295,13 +2468,50 @@ struct DevWorkspaceView: View {
                     .disabled(devModel.aiIsRunning)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Response")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .tracking(1.1)
-                            .foregroundStyle(RoachPalette.muted)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .top, spacing: 12) {
+                                RoachSectionHeader(
+                                    "Current Thread",
+                                    title: "Keep the useful part in view.",
+                                    detail: devModel.aiResponse.isEmpty
+                                        ? "Run the current pass and the answer lands here with the mode tag still attached."
+                                        : "Read it, copy it, insert it, or pin only the part that actually matters."
+                                )
+
+                                Spacer(minLength: 12)
+
+                                HStack(spacing: 8) {
+                                    RoachTag(devModel.assistantMode.rawValue, accent: devModel.assistantMode.accent)
+                                    if !devModel.aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        RoachTag("Response ready", accent: RoachPalette.green)
+                                    }
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                RoachSectionHeader(
+                                    "Current Thread",
+                                    title: "Keep the useful part in view.",
+                                    detail: devModel.aiResponse.isEmpty
+                                        ? "Run the current pass and the answer lands here with the mode tag still attached."
+                                        : "Read it, copy it, insert it, or pin only the part that actually matters."
+                                )
+
+                                HStack(spacing: 8) {
+                                    RoachTag(devModel.assistantMode.rawValue, accent: devModel.assistantMode.accent)
+                                    if !devModel.aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        RoachTag("Response ready", accent: RoachPalette.green)
+                                    }
+                                }
+                            }
+                        }
 
                         ScrollView(showsIndicators: false) {
-                            Text(devModel.aiResponse.isEmpty ? "Assistant output will appear here." : devModel.aiResponse)
+                            Text(
+                                devModel.aiResponse.isEmpty
+                                    ? "Assistant output lands here after the current pass. Keep the ask sharp, mode-specific, and pointed at the next concrete change."
+                                    : devModel.aiResponse
+                            )
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(devModel.aiResponse.isEmpty ? RoachPalette.muted : RoachPalette.text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2311,26 +2521,99 @@ struct DevWorkspaceView: View {
                         .padding(12)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color.black.opacity(0.18))
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.black.opacity(0.22),
+                                            RoachPalette.panelRaised.opacity(0.64),
+                                            Color.black.opacity(0.18),
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .stroke(RoachPalette.border, lineWidth: 1)
                         )
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                Button("Model Store") {
+                                    Task {
+                                        await model.openRoute("/settings/models", title: "Model Store")
+                                    }
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("AI Settings") {
+                                    Task {
+                                        await model.openRoute("/settings/ai", title: "AI Settings")
+                                    }
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Save to RoachBrain") {
+                                    devModel.saveAssistantResponseToRoachBrain()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                                .disabled(devModel.aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Button("Model Store") {
+                                    Task {
+                                        await model.openRoute("/settings/models", title: "Model Store")
+                                    }
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                HStack(spacing: 10) {
+                                    Button("AI Settings") {
+                                        Task {
+                                            await model.openRoute("/settings/ai", title: "AI Settings")
+                                        }
+                                    }
+                                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                                    Button("Save to RoachBrain") {
+                                        devModel.saveAssistantResponseToRoachBrain()
+                                    }
+                                    .buttonStyle(RoachSecondaryButtonStyle())
+                                    .disabled(devModel.aiResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                }
+                            }
+                        }
                     }
 
                     if !devModel.aiResponse.isEmpty {
-                        HStack(spacing: 10) {
-                            Button("Copy Response") {
-                                devModel.copyAssistantResponse()
-                            }
-                            .buttonStyle(RoachSecondaryButtonStyle())
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                Button("Copy Response") {
+                                    devModel.copyAssistantResponse()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
 
-                            Button("Insert in File") {
-                                devModel.insertAssistantResponseIntoActiveDocument()
+                                Button("Insert in File") {
+                                    devModel.insertAssistantResponseIntoActiveDocument()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                                .disabled(devModel.activeDocument == nil)
                             }
-                            .buttonStyle(RoachSecondaryButtonStyle())
-                            .disabled(devModel.activeDocument == nil)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Button("Copy Response") {
+                                    devModel.copyAssistantResponse()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Insert in File") {
+                                    devModel.insertAssistantResponseIntoActiveDocument()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                                .disabled(devModel.activeDocument == nil)
+                            }
                         }
                     }
                 }
@@ -2529,21 +2812,40 @@ struct DevWorkspaceView: View {
     private var terminalColumn: some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Terminal")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(RoachPalette.text)
-                        Text(devModel.displayWorkingDirectory())
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(RoachPalette.muted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 14) {
+                        RoachSectionHeader(
+                            "Terminal",
+                            title: "One shell. No fake terminal.",
+                            detail: "Prompt, output, working tree, and quick lanes stay in one live shell instead of dissolving into utility cards."
+                        )
+
+                        Spacer(minLength: 12)
+
+                        VStack(alignment: .trailing, spacing: 6) {
+                            Text(devModel.terminalStatus)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(devModel.terminalIsRunning ? RoachPalette.green : RoachPalette.muted)
+                            Text(devModel.displayWorkingDirectory())
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(RoachPalette.muted)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
-                    Spacer()
-                    Text(devModel.terminalStatus)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(devModel.terminalIsRunning ? RoachPalette.green : RoachPalette.muted)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        RoachSectionHeader(
+                            "Terminal",
+                            title: "One shell. No fake terminal.",
+                            detail: "Prompt, output, working tree, and quick lanes stay in one live shell instead of dissolving into utility cards."
+                        )
+
+                        HStack(spacing: 8) {
+                            RoachTag(devModel.terminalIsRunning ? "Process live" : "Shell idle", accent: devModel.terminalIsRunning ? RoachPalette.green : RoachPalette.cyan)
+                            RoachTag("zsh", accent: RoachPalette.magenta)
+                        }
+                    }
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -2569,119 +2871,387 @@ struct DevWorkspaceView: View {
                     }
                 }
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(devModel.contextualTerminalCommands, id: \.self) { command in
-                            Button(command) {
-                                devModel.terminalCommand = command
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(RoachPalette.panelSoft.opacity(0.56))
-                            )
-                            .overlay(
-                                Capsule(style: .continuous)
-                                    .stroke(RoachPalette.borderStrong, lineWidth: 1)
-                            )
-                            .foregroundStyle(RoachPalette.green)
+                if !devModel.terminalRecentCommands.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recent commands")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .tracking(1.1)
+                            .foregroundStyle(RoachPalette.muted)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(devModel.terminalRecentCommands, id: \.self) { command in
+                                    Button(command) {
+                                        devModel.terminalCommand = command
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(Color.black.opacity(0.24))
+                                    )
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(RoachPalette.border, lineWidth: 1)
+                                    )
+                                    .foregroundStyle(RoachPalette.text)
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                }
+                            }
                         }
                     }
                 }
 
-                HStack(spacing: 12) {
-                    TextField("npm test", text: $devModel.terminalCommand)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .foregroundStyle(RoachPalette.text)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(RoachPalette.panelRaised.opacity(0.64))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(RoachPalette.border, lineWidth: 1)
-                        )
+                VStack(spacing: 0) {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(RoachPalette.warning)
+                            .frame(width: 10, height: 10)
+                        Circle()
+                            .fill(RoachPalette.bronze)
+                            .frame(width: 10, height: 10)
+                        Circle()
+                            .fill(RoachPalette.green)
+                            .frame(width: 10, height: 10)
 
-                    Button(devModel.terminalIsRunning ? "Running…" : "Run") {
-                        devModel.runTerminalCommand()
-                    }
-                    .buttonStyle(RoachPrimaryButtonStyle())
-                    .disabled(devModel.terminalIsRunning)
-
-                    Button("Stop") {
-                        devModel.stopTerminalCommand()
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-                    .disabled(!devModel.terminalIsRunning)
-
-                    Button("Clear") {
-                        devModel.clearTerminalOutput()
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-
-                    Button("Copy") {
-                        devModel.copyTerminalOutput()
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-                    .disabled(devModel.terminalOutput.isEmpty)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Output")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .tracking(1.1)
-                        .foregroundStyle(RoachPalette.muted)
-
-                    VStack(spacing: 0) {
-                        HStack {
-                            Circle()
-                                .fill(RoachPalette.warning)
-                                .frame(width: 10, height: 10)
-                            Circle()
-                                .fill(RoachPalette.bronze)
-                                .frame(width: 10, height: 10)
-                            Circle()
-                                .fill(RoachPalette.green)
-                                .frame(width: 10, height: 10)
-                            Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
                             Text("RoachNet Shell")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(RoachPalette.text)
+                            Text(devModel.displayWorkingDirectory())
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundStyle(RoachPalette.muted)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(RoachPalette.panelRaised.opacity(0.72))
 
-                        ScrollView(showsIndicators: false) {
-                            Text(devModel.terminalOutput.isEmpty ? "Shell output will stream here." : devModel.terminalOutput)
-                                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                .foregroundStyle(devModel.terminalOutput.isEmpty ? RoachPalette.muted : RoachPalette.text)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14)
-                                .textSelection(.enabled)
+                        Spacer()
+
+                        HStack(spacing: 8) {
+                            RoachTag("Contained", accent: RoachPalette.cyan)
+                            RoachTag(devModel.terminalIsRunning ? "Live process" : "Idle", accent: devModel.terminalIsRunning ? RoachPalette.green : RoachPalette.magenta)
                         }
-                        .frame(minHeight: 220)
-                        .background(
-                            LinearGradient(
-                                colors: [Color.black.opacity(0.36), Color.black.opacity(0.28)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(RoachPalette.panelRaised.opacity(0.78))
+
+                    Rectangle()
+                        .fill(RoachPalette.borderStrong.opacity(0.9))
+                        .frame(height: 1)
+
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if devModel.terminalOutput.isEmpty {
+                                Text("Shell is idle. Drop a command in below and keep the whole build lane in one place.")
+                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.muted)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Text("$ " + (devModel.terminalCommand.isEmpty ? "npm test" : devModel.terminalCommand))
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.green)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Text("Build, test, git, setup, and local tooling stay in this contained lane.")
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.muted)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                Text(devModel.terminalOutput)
+                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.text)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(14)
+                        .textSelection(.enabled)
+                    }
+                    .frame(minHeight: 220)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.black.opacity(0.42), Color.black.opacity(0.30)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
+
+                    Rectangle()
+                        .fill(RoachPalette.borderStrong.opacity(0.9))
+                        .frame(height: 1)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(devModel.contextualTerminalCommands, id: \.self) { command in
+                                    Button(command) {
+                                        devModel.terminalCommand = command
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(RoachPalette.panelSoft.opacity(0.56))
+                                    )
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                                    )
+                                    .foregroundStyle(RoachPalette.green)
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                }
+                            }
+                        }
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                HStack(spacing: 10) {
+                                    Text("$")
+                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(RoachPalette.green)
+                                        .padding(.leading, 14)
+
+                                    TextField("npm test", text: $devModel.terminalCommand)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(RoachPalette.text)
+                                        .padding(.vertical, 12)
+                                        .padding(.trailing, 14)
+                                }
+                                .background(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .fill(Color.black.opacity(0.22))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(RoachPalette.border, lineWidth: 1)
+                                )
+
+                                Button(devModel.terminalIsRunning ? "Running…" : "Run") {
+                                    devModel.runTerminalCommand()
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+                                .disabled(devModel.terminalIsRunning)
+
+                                Button("Stop") {
+                                    devModel.stopTerminalCommand()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                                .disabled(!devModel.terminalIsRunning)
+
+                                Button("Clear") {
+                                    devModel.clearTerminalOutput()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+
+                                Button("Copy") {
+                                    devModel.copyTerminalOutput()
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                                .disabled(devModel.terminalOutput.isEmpty)
+                            }
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 10) {
+                                    Text("$")
+                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(RoachPalette.green)
+                                        .padding(.leading, 14)
+
+                                    TextField("npm test", text: $devModel.terminalCommand)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(RoachPalette.text)
+                                        .padding(.vertical, 12)
+                                        .padding(.trailing, 14)
+                                }
+                                .background(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .fill(Color.black.opacity(0.22))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(RoachPalette.border, lineWidth: 1)
+                                )
+
+                                HStack(spacing: 10) {
+                                    Button(devModel.terminalIsRunning ? "Running…" : "Run") {
+                                        devModel.runTerminalCommand()
+                                    }
+                                    .buttonStyle(RoachPrimaryButtonStyle())
+                                    .disabled(devModel.terminalIsRunning)
+
+                                    Button("Stop") {
+                                        devModel.stopTerminalCommand()
+                                    }
+                                    .buttonStyle(RoachSecondaryButtonStyle())
+                                    .disabled(!devModel.terminalIsRunning)
+
+                                    Button("Clear") {
+                                        devModel.clearTerminalOutput()
+                                    }
+                                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                                    Button("Copy") {
+                                        devModel.copyTerminalOutput()
+                                    }
+                                    .buttonStyle(RoachSecondaryButtonStyle())
+                                    .disabled(devModel.terminalOutput.isEmpty)
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        LinearGradient(
+                            colors: [RoachPalette.panelRaised.opacity(0.86), RoachPalette.panel.opacity(0.72)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                    HStack(spacing: 10) {
+                        RoachTag("zsh", accent: RoachPalette.cyan)
+                        RoachTag("TERM xterm-256color", accent: RoachPalette.magenta)
+                        if let exitCode = devModel.lastTerminalExitCode {
+                            RoachTag("exit \(exitCode)", accent: exitCode == 0 ? RoachPalette.green : RoachPalette.warning)
+                        }
+                        RoachTag("\(devModel.terminalOutputLineCount) lines", accent: RoachPalette.bronze)
+                        Spacer()
+                        Text("Ghostty-style transcript, native process runner")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.22))
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                )
             }
         }
+    }
+
+    @ViewBuilder
+    private var assistModeButtons: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(minimum: 0), spacing: 8),
+                GridItem(.flexible(minimum: 0), spacing: 8),
+            ],
+            alignment: .leading,
+            spacing: 8
+        ) {
+            ForEach(DeveloperAssistMode.allCases) { mode in
+                Button {
+                    selectAssistMode(mode)
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 10) {
+                            ZStack {
+                                Circle()
+                                    .fill(mode.accent.opacity(mode == devModel.assistantMode ? 0.22 : 0.12))
+                                    .frame(width: 32, height: 32)
+
+                                Image(systemName: mode.systemName)
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(mode.accent)
+                            }
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(mode.rawValue)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(RoachPalette.text)
+                                Text(mode.detail)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(RoachPalette.muted)
+                                    .multilineTextAlignment(.leading)
+                            }
+
+                            Spacer(minLength: 6)
+
+                            Image(systemName: mode == devModel.assistantMode ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(mode == devModel.assistantMode ? mode.accent : RoachPalette.muted)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        mode.accent.opacity(mode == devModel.assistantMode ? 0.16 : 0.08),
+                                        RoachPalette.panelRaised.opacity(0.78),
+                                        Color.black.opacity(0.12),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(
+                                mode == devModel.assistantMode ? mode.accent.opacity(0.52) : RoachPalette.border,
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(RoachCardButtonStyle())
+            }
+        }
+    }
+
+    private func selectAssistMode(_ mode: DeveloperAssistMode) {
+        devModel.assistantMode = mode
+        if devModel.aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || devModel.assistantPromptPresets.contains(devModel.aiPrompt)
+        {
+            devModel.aiPrompt = mode.presets.first ?? devModel.aiPrompt
+        }
+    }
+
+    private func presetCard(_ preset: String) -> some View {
+        Button {
+            devModel.aiPrompt = preset
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Starter".uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundStyle(RoachPalette.muted)
+                Text(preset)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(RoachPalette.text)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, minHeight: 64, alignment: .topLeading)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(RoachPalette.panelRaised.opacity(0.60))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(RoachPalette.border, lineWidth: 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(RoachPalette.magenta)
+                    .padding(.top, 8)
+                    .padding(.trailing, 8)
+            }
+        }
+        .buttonStyle(RoachCardButtonStyle())
     }
 }

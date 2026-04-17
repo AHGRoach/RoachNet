@@ -517,10 +517,37 @@ async function verifyBuiltArtifacts() {
     if (!existsSync(archivePath)) {
       throw new Error(`Missing bundled source archive for ${label} at ${archivePath}`)
     }
+
+    await verifyBundledSourceArchive(archivePath, label)
   }
 
   if (!existsSync(installerAssetArchivePath)) {
     throw new Error(`Missing installer asset archive at ${installerAssetArchivePath}`)
+  }
+}
+
+async function verifyBundledSourceArchive(archivePath, label) {
+  const { stdout } = await run('tar', ['-tzf', archivePath], {
+    stdio: 'pipe',
+  })
+
+  const entries = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const suspiciousEntries = entries.filter(
+    (entry) =>
+      bundledSourceForbiddenArchivePrefixes.some((prefix) => entry.startsWith(prefix)) ||
+      bundledSourceForbiddenArchivePatterns.some((pattern) => pattern.test(entry))
+  )
+
+  if (suspiciousEntries.length > 0) {
+    throw new Error(
+      `${label} bundled source archive is carrying local runtime or indexed-content artifacts:\n${suspiciousEntries
+        .slice(0, 20)
+        .join('\n')}`
+    )
   }
 }
 
@@ -787,6 +814,18 @@ const bundledSourceExcludes = [
   'native/windows/obj/',
   'admin/node_modules/',
   'admin/build/node_modules/',
+  'admin/build/storage/',
+  'admin/build/tmp/',
+  'admin/build/uploads/',
+  'admin/build/public/uploads/',
+  'admin/build/*.sqlite',
+  'admin/build/*.sqlite-*',
+  'admin/build/*.db',
+  'admin/build/*.db-*',
+  'admin/build/*.jsonl',
+  'admin/build/*.ndjson',
+  'admin/build/vaults.json',
+  'admin/build/roachnet-runtime-processes.json',
   'admin/.runtime-build-cache/',
   'admin/storage/',
   'installer/node_modules/',
@@ -799,6 +838,24 @@ const bundledSourceExcludes = [
   '*node_modules_node*',
   '*/storage/logs/',
   '*/storage/tmp/',
+]
+
+const bundledSourceForbiddenArchivePrefixes = [
+  'RoachNetSource/storage/',
+  'RoachNetSource/admin/storage/',
+  'RoachNetSource/admin/build/storage/',
+  'RoachNetSource/admin/build/tmp/',
+  'RoachNetSource/admin/build/uploads/',
+  'RoachNetSource/admin/build/public/uploads/',
+]
+
+const bundledSourceForbiddenArchivePatterns = [
+  /\/vaults\.json$/i,
+  /\.sqlite(?:$|[-.])/i,
+  /\.db(?:$|[-.])/i,
+  /\.jsonl$/i,
+  /\.ndjson$/i,
+  /\/roachnet-runtime-processes\.json$/i,
 ]
 
 const bundledSourceDirectories = [
@@ -980,7 +1037,21 @@ async function stageBundledSourcePayload(destinationPath) {
   const adminBuildSource = path.join(repoRoot, 'admin', 'build')
   const adminBuildDestination = path.join(adminRoot, 'build')
   if (existsSync(adminBuildSource)) {
-    await syncTree(adminBuildSource, adminBuildDestination, ['node_modules/'])
+    await syncTree(adminBuildSource, adminBuildDestination, [
+      'node_modules/',
+      'storage/',
+      'tmp/',
+      'uploads/',
+      'public/uploads/',
+      '*.sqlite',
+      '*.sqlite-*',
+      '*.db',
+      '*.db-*',
+      '*.jsonl',
+      '*.ndjson',
+      'vaults.json',
+      'roachnet-runtime-processes.json',
+    ])
   }
 }
 
@@ -1196,6 +1267,10 @@ ${urlSchemes.map((scheme) => `        <string>${scheme}</string>`).join('\n')}
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>RoachNet uses the microphone for local voice prompts inside RoachClaw.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>RoachNet turns speech into local prompts so RoachClaw and Dev Studio can stay hands-free when you want them to.</string>
   ${iconPath ? '<key>CFBundleIconFile</key>\n  <string>RoachNet</string>' : ''}
   ${urlSchemesPlist}
 </dict>

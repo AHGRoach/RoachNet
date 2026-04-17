@@ -1446,22 +1446,25 @@ async function ensureManagedSupportServices(envValues, timeoutMs) {
     )
   }
 
-  const ollamaReady = await waitForHttpEndpoint(
-    `http://127.0.0.1:${BUILD_RUNTIME_OLLAMA_PORT}/api/version`,
-    Math.min(timeoutMs, 120_000)
-  )
-
   debugBoot('managed-support:ready', {
     runtimeStateRoot: getManagedRuntimeStateRoot(envValues),
-    ollamaReady,
+    ollamaReady: null,
   })
 
-  if (!ollamaReady) {
-    console.warn(
-      `Contained Ollama did not answer on :${BUILD_RUNTIME_OLLAMA_PORT} before the support timeout. ` +
-        'RoachNet will continue booting, but local chat may remain unavailable until Ollama finishes warming up.'
-    )
-  }
+  const ollamaHealthUrl = `http://127.0.0.1:${BUILD_RUNTIME_OLLAMA_PORT}/api/version`
+  void waitForHttpEndpoint(ollamaHealthUrl, Math.min(timeoutMs, 120_000)).then((ollamaReady) => {
+    debugBoot('managed-support:ollama-ready', {
+      runtimeStateRoot: getManagedRuntimeStateRoot(envValues),
+      ollamaReady,
+    })
+
+    if (!ollamaReady) {
+      console.warn(
+        `Contained Ollama did not answer on :${BUILD_RUNTIME_OLLAMA_PORT} before the support timeout. ` +
+          'RoachNet will continue booting, but local chat may remain unavailable until Ollama finishes warming up.'
+      )
+    }
+  })
 }
 
 async function stopManagedRuntime(envValues) {
@@ -1704,6 +1707,17 @@ async function ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues) {
     return
   }
 
+  const preparationFingerprint = createDatabasePreparationFingerprint(runtimeEnvValues)
+  const existingPreparationStamp = readPreparedDatabaseStamp(runtimeEnvValues)
+
+  if (existingPreparationStamp?.fingerprint === preparationFingerprint) {
+    debugBoot('build-runtime:db-bootstrap:skip', {
+      runtimeRoot,
+      preparationFingerprint,
+    })
+    return
+  }
+
   if (runtimeEnvValues.DB_CONNECTION === 'sqlite' && runtimeEnvValues.SQLITE_DB_PATH) {
     mkdirSync(path.dirname(runtimeEnvValues.SQLITE_DB_PATH), { recursive: true })
   }
@@ -1725,6 +1739,7 @@ async function ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues) {
 
   debugBoot('build-runtime:db-bootstrap:start', {
     runtimeRoot,
+    preparationFingerprint,
   })
   console.log('Preparing the compiled RoachNet database...')
 
@@ -1759,9 +1774,57 @@ async function ensureBuildRuntimeDatabaseReady(runtimeRoot, runtimeEnvValues) {
     env: consoleEnv,
   })
 
+  writePreparedDatabaseStamp(runtimeEnvValues, preparationFingerprint)
   debugBoot('build-runtime:db-bootstrap:ready', {
     runtimeRoot,
+    preparationFingerprint,
   })
+}
+
+function createDatabasePreparationFingerprint(runtimeEnvValues) {
+  const runtimeFingerprint = getBuildRuntimeFingerprint()
+  return JSON.stringify({
+    runtimeSignature: runtimeFingerprint?.signature ?? 'unknown',
+    dbConnection: runtimeEnvValues.DB_CONNECTION ?? null,
+    dbHost: runtimeEnvValues.DB_HOST ?? null,
+    dbPort: runtimeEnvValues.DB_PORT ?? null,
+    dbDatabase: runtimeEnvValues.DB_DATABASE ?? null,
+    sqlitePath: runtimeEnvValues.SQLITE_DB_PATH ?? null,
+  })
+}
+
+function getPreparedDatabaseStampPath(runtimeEnvValues) {
+  return path.join(getManagedRuntimeStateRoot(runtimeEnvValues), '.roachnet-db-prepared.json')
+}
+
+function readPreparedDatabaseStamp(runtimeEnvValues) {
+  const stampPath = getPreparedDatabaseStampPath(runtimeEnvValues)
+  if (!existsSync(stampPath)) {
+    return null
+  }
+
+  try {
+    return JSON.parse(readFileSync(stampPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function writePreparedDatabaseStamp(runtimeEnvValues, fingerprint) {
+  const stampPath = getPreparedDatabaseStampPath(runtimeEnvValues)
+  mkdirSync(path.dirname(stampPath), { recursive: true })
+  writeFileSync(
+    stampPath,
+    JSON.stringify(
+      {
+        fingerprint,
+        preparedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  )
 }
 
 function terminateDetachedChild(child) {

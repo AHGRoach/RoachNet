@@ -201,6 +201,7 @@ type CompanionServiceActionInput = {
 type CompanionChatInputMessage = {
   role?: 'system' | 'user' | 'assistant' | string
   content?: string
+  images?: string[]
 }
 
 @inject()
@@ -480,11 +481,19 @@ export default class CompanionController {
         content?: string
         model?: string
         messages?: CompanionChatInputMessage[]
+        images?: string[]
+        visionSummary?: string
       }
       const content = payload.content?.trim()
       if (!content) {
         return response.status(400).json({ error: 'Message content is required' })
       }
+      const sanitizedImages = this.normalizeCompanionImages(payload.images)
+      const storedContent = this.composeCompanionContent(
+        content,
+        payload.visionSummary,
+        sanitizedImages.length
+      )
 
       let sessionId = Number(payload.sessionId)
       let session = Number.isFinite(sessionId) ? await this.chatService.getSession(sessionId) : null
@@ -508,19 +517,29 @@ export default class CompanionController {
         session.model ||
         process.env.ROACHNET_ROACHCLAW_DEFAULT_MODEL ||
         'qwen2.5-coder:1.5b'
+      const shouldAttachImages =
+        sanitizedImages.length > 0 && !selectedModel.trim().toLowerCase().endsWith(':cloud')
 
-      const userMessage = await this.chatService.addMessage(sessionId, 'user', content)
+      const userMessage = await this.chatService.addMessage(sessionId, 'user', storedContent)
       const refreshedSession = await this.chatService.getSession(sessionId)
       if (!refreshedSession) {
         throw new Error('Failed to reload the updated chat session')
       }
 
+      const ollamaMessages = refreshedSession.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      }))
+      if (shouldAttachImages && ollamaMessages.length > 0) {
+        ollamaMessages[ollamaMessages.length - 1] = {
+          ...ollamaMessages[ollamaMessages.length - 1],
+          images: sanitizedImages,
+        } as (typeof ollamaMessages)[number]
+      }
+
       const ollamaResponse = await this.ollamaService.chat({
         model: selectedModel,
-        messages: refreshedSession.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
+        messages: ollamaMessages as never,
         stream: false,
       })
 
@@ -575,11 +594,21 @@ export default class CompanionController {
       content?: string
       model?: string
       messages?: CompanionChatInputMessage[]
+      images?: string[]
+      visionSummary?: string
     },
     content: string
   ) {
     const selectedModel =
       payload.model?.trim() || process.env.ROACHNET_ROACHCLAW_DEFAULT_MODEL || 'qwen2.5-coder:1.5b'
+    const sanitizedImages = this.normalizeCompanionImages(payload.images)
+    const shouldAttachImages =
+      sanitizedImages.length > 0 && !selectedModel.trim().toLowerCase().endsWith(':cloud')
+    const enrichedContent = this.composeCompanionContent(
+      content,
+      payload.visionSummary,
+      sanitizedImages.length
+    )
 
     const history = Array.isArray(payload.messages)
       ? payload.messages
@@ -594,10 +623,18 @@ export default class CompanionController {
           .slice(-20)
       : []
 
-    const userMessage = this.syntheticMessage('user', content)
+    const userMessage = this.syntheticMessage('user', enrichedContent)
+    const outboundMessages = [...history, { role: 'user' as const, content: enrichedContent }]
+    if (shouldAttachImages) {
+      outboundMessages[outboundMessages.length - 1] = {
+        ...outboundMessages[outboundMessages.length - 1],
+        images: sanitizedImages,
+      } as (typeof outboundMessages)[number]
+    }
+
     const ollamaResponse = await this.ollamaService.chat({
       model: selectedModel,
-      messages: [...history, { role: 'user', content }],
+      messages: outboundMessages as never,
       stream: false,
     })
 
@@ -617,6 +654,26 @@ export default class CompanionController {
       userMessage,
       assistantMessage,
     }
+  }
+
+  private composeCompanionContent(content: string, visionSummary?: string, imageCount = 0) {
+    const trimmedSummary = visionSummary?.trim()
+    if (!trimmedSummary) {
+      return content
+    }
+
+    return `${content}\n\n[Vision attachment${imageCount > 1 ? 's' : ''}: ${imageCount}]\n${trimmedSummary}`
+  }
+
+  private normalizeCompanionImages(images: unknown): string[] {
+    if (!Array.isArray(images)) {
+      return []
+    }
+
+    return images
+      .map((image) => String(image || '').trim())
+      .filter((image) => image.length > 0)
+      .slice(0, 4)
   }
 
   async install({ request, response }: HttpContext) {

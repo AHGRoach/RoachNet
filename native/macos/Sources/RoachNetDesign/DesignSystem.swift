@@ -3,7 +3,7 @@ import SwiftUI
 
 public enum RoachPalette {
     public static let green = Color(red: 0.24, green: 0.98, blue: 0.54)
-    public static let magenta = Color(red: 0.82, green: 0.40, blue: 0.98)
+    public static let magenta = Color(red: 0.5686, green: 0.2196, blue: 0.8471)
     public static let bronze = Color(red: 0.98, green: 0.74, blue: 0.20)
     public static let cyan = Color(red: 0.40, green: 0.84, blue: 1.0)
     public static let background = Color(red: 0.035, green: 0.036, blue: 0.044)
@@ -213,6 +213,27 @@ private struct RoachAnimatedChrome: View {
                     .fill(
                         LinearGradient(
                             colors: [
+                                Color.clear,
+                                Color.white.opacity(0.18),
+                                accent.opacity(0.18),
+                                Color.clear,
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: min(proxy.size.width * 0.66, 320), height: 2)
+                    .rotationEffect(.degrees(-17))
+                    .offset(
+                        x: sweep ? proxy.size.width * 0.28 : -proxy.size.width * 0.24,
+                        y: sweep ? proxy.size.height * 0.80 : proxy.size.height * 0.62
+                    )
+                    .opacity(0.62)
+
+                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
                                 accent.opacity(0.44),
                                 RoachPalette.magenta.opacity(0.22),
                                 Color.clear,
@@ -225,6 +246,21 @@ private struct RoachAnimatedChrome: View {
                     .padding(.leading, 18)
                     .padding(.top, 14)
                     .blur(radius: 0.2)
+
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                accent.opacity(0.18),
+                                Color.clear,
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: min(proxy.size.width * 0.18, 92), height: min(proxy.size.width * 0.18, 92))
+                    .blur(radius: 18)
+                    .offset(x: proxy.size.width * 0.78, y: proxy.size.height * 0.72)
 
                 Circle()
                     .fill(accent.opacity(0.10))
@@ -329,9 +365,22 @@ public struct RoachSpotlightPanel<Content: View>: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    RoachPalette.panelRaised.opacity(0.94),
-                                    RoachPalette.panel.opacity(0.88),
-                                    Color.black.opacity(0.32),
+                                    RoachPalette.panelRaised.opacity(0.96),
+                                    RoachPalette.panel.opacity(0.90),
+                                    Color.black.opacity(0.34),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    accent.opacity(0.12),
+                                    RoachPalette.cyan.opacity(0.03),
+                                    Color.clear,
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -349,6 +398,42 @@ public struct RoachSpotlightPanel<Content: View>: View {
                         .frame(width: 180, height: 180)
                         .blur(radius: 66)
                         .offset(x: breathe ? 220 : 180, y: breathe ? -12 : 24)
+
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.clear,
+                                    Color.white.opacity(0.16),
+                                    accent.opacity(0.18),
+                                    Color.clear,
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 280, height: 2)
+                        .rotationEffect(.degrees(-15))
+                        .offset(x: breathe ? 168 : -92, y: breathe ? 188 : 136)
+                        .blur(radius: 0.2)
+
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.clear,
+                                    accent.opacity(0.22),
+                                    Color.white.opacity(0.10),
+                                    Color.clear,
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 220, height: 1.5)
+                        .rotationEffect(.degrees(14))
+                        .offset(x: breathe ? 32 : -124, y: breathe ? 42 : 18)
+                        .blur(radius: 0.15)
 
                     LinearGradient(
                         colors: [
@@ -484,7 +569,7 @@ private struct RoachPrimaryButtonBody: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(hovered ? 0.18 : 0.12),
+                                    Color.white.opacity(hovered ? 0.22 : 0.14),
                                     Color.clear,
                                 ],
                                 startPoint: .topLeading,
@@ -494,9 +579,9 @@ private struct RoachPrimaryButtonBody: View {
                         .blendMode(.screen)
                 }
             )
-            .shadow(color: RoachPalette.magenta.opacity(configuration.isPressed ? 0.14 : (hovered ? 0.30 : 0.20)), radius: hovered ? 28 : 20, x: 0, y: hovered ? 16 : 10)
-            .scaleEffect(configuration.isPressed ? 0.98 : (hovered ? 1.016 : 1.0))
-            .offset(y: configuration.isPressed ? 1 : (hovered ? -1 : 0))
+            .shadow(color: RoachPalette.magenta.opacity(configuration.isPressed ? 0.16 : (hovered ? 0.34 : 0.22)), radius: hovered ? 30 : 20, x: 0, y: hovered ? 18 : 10)
+            .scaleEffect(configuration.isPressed ? 0.975 : (hovered ? 1.02 : 1.0))
+            .offset(y: configuration.isPressed ? 1 : (hovered ? -2 : 0))
             .onHover { inside in
                 hovered = inside
             }
@@ -544,9 +629,9 @@ private struct RoachSecondaryButtonBody: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(hovered ? RoachPalette.green.opacity(0.20) : RoachPalette.border, lineWidth: 1)
             )
-            .shadow(color: hovered ? RoachPalette.green.opacity(0.07) : .clear, radius: hovered ? 16 : 0, x: 0, y: hovered ? 10 : 0)
-            .scaleEffect(configuration.isPressed ? 0.985 : (hovered ? 1.01 : 1.0))
-            .offset(y: configuration.isPressed ? 1 : (hovered ? -1 : 0))
+            .shadow(color: hovered ? RoachPalette.green.opacity(0.10) : .clear, radius: hovered ? 18 : 0, x: 0, y: hovered ? 12 : 0)
+            .scaleEffect(configuration.isPressed ? 0.98 : (hovered ? 1.02 : 1.0))
+            .offset(y: configuration.isPressed ? 1 : (hovered ? -2 : 0))
             .onHover { inside in
                 hovered = inside
             }
@@ -561,13 +646,13 @@ private struct RoachCardButtonBody: View {
 
     var body: some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : (hovered ? 1.01 : 1.0))
-            .offset(y: configuration.isPressed ? 1 : (hovered ? -1 : 0))
+            .scaleEffect(configuration.isPressed ? 0.98 : (hovered ? 1.02 : 1.0))
+            .offset(y: configuration.isPressed ? 1 : (hovered ? -2 : 0))
             .shadow(
-                color: RoachPalette.green.opacity(configuration.isPressed ? 0.04 : (hovered ? 0.10 : 0.05)),
-                radius: hovered ? 18 : 12,
+                color: RoachPalette.green.opacity(configuration.isPressed ? 0.05 : (hovered ? 0.12 : 0.05)),
+                radius: hovered ? 20 : 12,
                 x: 0,
-                y: hovered ? 12 : 8
+                y: hovered ? 14 : 8
             )
             .onHover { inside in
                 hovered = inside
@@ -1528,20 +1613,26 @@ public struct RoachMetricCard: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(
-                        LinearGradient(
+            .background(
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
                             colors: [
                                 RoachPalette.panelRaised.opacity(0.70),
                                 RoachPalette.panel.opacity(0.58),
                                 Color.black.opacity(0.12),
                             ],
                             startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
+
+                Circle()
+                    .fill(RoachPalette.magenta.opacity(0.14))
+                    .frame(width: 110, height: 110)
+                    .blur(radius: 34)
+                    .offset(x: 120, y: -20)
 
                 Capsule(style: .continuous)
                     .fill(
@@ -1576,19 +1667,34 @@ public struct RoachInsetPanel<Content: View>: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                RoachPalette.panelRaised.opacity(0.88),
-                                RoachPalette.panel.opacity(0.84),
-                                Color.black.opacity(0.12),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    RoachPalette.panelRaised.opacity(0.90),
+                                    RoachPalette.panel.opacity(0.84),
+                                    Color.black.opacity(0.12),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .allowsHitTesting(false)
+
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    RoachPalette.magenta.opacity(0.10),
+                                    Color.clear,
+                                    RoachPalette.cyan.opacity(0.03),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .allowsHitTesting(false)
+                }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)

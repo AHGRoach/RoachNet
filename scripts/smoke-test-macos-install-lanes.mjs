@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { cp, mkdtemp, rm } from 'node:fs/promises'
+import { cp, mkdtemp, readdir, rm } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -27,6 +27,22 @@ const pollIntervalMs = 1_500
 const startupTimeoutMs = 600_000
 const keepTempArtifacts = process.env.ROACHNET_SMOKE_KEEP_TEMP === '1'
 const smokeWorkspaceRoot = path.join(distRoot, '.smoke-work')
+const bundledSourceForbiddenPathPrefixes = [
+  'storage/',
+  'admin/storage/',
+  'admin/build/storage/',
+  'admin/build/tmp/',
+  'admin/build/uploads/',
+  'admin/build/public/uploads/',
+]
+const bundledSourceForbiddenPathPatterns = [
+  /\/vaults\.json$/i,
+  /\.sqlite(?:$|[-.])/i,
+  /\.db(?:$|[-.])/i,
+  /\.jsonl$/i,
+  /\.ndjson$/i,
+  /\/roachnet-runtime-processes\.json$/i,
+]
 
 function assert(condition, message) {
   if (!condition) {
@@ -251,7 +267,7 @@ for row in rows {
 
   const { stdout } = await runCommand('swift', ['-e', swiftScript], {
     stdio: 'pipe',
-    timeoutMs: 15_000,
+    timeoutMs: 60_000,
   })
 
   return stdout
@@ -269,7 +285,7 @@ for row in rows {
     })
 }
 
-async function listAutomationWindowNames(processName) {
+async function listAutomationWindowSnapshot(processName) {
   const safeProcessName = String(processName || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
   const appleScript = `
 tell application "System Events"
@@ -290,16 +306,19 @@ return "0|"
 
     const raw = stdout.trim()
     if (!raw) {
-      return []
+      return { count: 0, names: [] }
     }
 
-    const [, namesRaw = ''] = raw.split('|', 2)
-    return namesRaw
+    const [countRaw = '0', namesRaw = ''] = raw.split('|', 2)
+    return {
+      count: Number.parseInt(countRaw || '0', 10) || 0,
+      names: namesRaw
       .split(/\s*,\s*/)
       .map((name) => name.trim())
-      .filter(Boolean)
+      .filter(Boolean),
+    }
   } catch {
-    return []
+    return { count: 0, names: [] }
   }
 }
 
@@ -316,9 +335,13 @@ async function hasRoachWindow(ownerName, titleName = ownerName, processName = nu
   const normalizedProcess = normalizeWindowLabel(processName)
 
   if (processName) {
-    const automationWindowNames = await listAutomationWindowNames(processName)
+    const automationWindowSnapshot = await listAutomationWindowSnapshot(processName)
+    if (automationWindowSnapshot.count > 0) {
+      return true
+    }
+
     if (
-      automationWindowNames.some((name) => {
+      automationWindowSnapshot.names.some((name) => {
         const normalizedName = normalizeWindowLabel(name)
         return (
           normalizedName === normalizedTitle ||
@@ -623,6 +646,39 @@ async function extractTarArchive(archivePath, destinationPath) {
   })
 }
 
+async function collectRelativePaths(rootPath, currentPath = rootPath) {
+  const entries = await readdir(currentPath, { withFileTypes: true })
+  const results = []
+
+  for (const entry of entries) {
+    const entryPath = path.join(currentPath, entry.name)
+    const relativePath = path.relative(rootPath, entryPath).replaceAll(path.sep, '/')
+    results.push(relativePath)
+
+    if (entry.isDirectory()) {
+      results.push(...(await collectRelativePaths(rootPath, entryPath)))
+    }
+  }
+
+  return results
+}
+
+async function assertBundledSourceTreeIsReleaseSafe(rootPath) {
+  const relativePaths = await collectRelativePaths(rootPath)
+  const suspiciousPaths = relativePaths.filter(
+    (relativePath) =>
+      bundledSourceForbiddenPathPrefixes.some((prefix) => relativePath.startsWith(prefix)) ||
+      bundledSourceForbiddenPathPatterns.some((pattern) => pattern.test(relativePath))
+  )
+
+  assert(
+    suspiciousPaths.length === 0,
+    `Bundled source tree is carrying local runtime or indexed-content artifacts:\n${suspiciousPaths
+      .slice(0, 20)
+      .join('\n')}`
+  )
+}
+
 async function materializeBundledSourceTree(bundlePath, destinationRoot) {
   const archivePath = getBundledSourceArchivePath(bundlePath)
   assert(existsSync(archivePath), `Missing bundled source archive at ${archivePath}`)
@@ -633,6 +689,7 @@ async function materializeBundledSourceTree(bundlePath, destinationRoot) {
     await extractTarArchive(archivePath, extractionRoot)
     const extractedRoot = path.join(extractionRoot, 'RoachNetSource')
     assert(existsSync(extractedRoot), `Bundled source archive did not unpack a RoachNetSource root from ${archivePath}`)
+    await assertBundledSourceTreeIsReleaseSafe(extractedRoot)
     await cp(extractedRoot, destinationRoot, {
       recursive: true,
       force: true,

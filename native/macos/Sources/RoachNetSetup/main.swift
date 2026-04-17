@@ -36,11 +36,11 @@ enum SetupStage: Int, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
-        case .welcome: return "RoachNet stages the app, runtime, and first content before it opens Home."
-        case .machine: return "Keep the app, storage, and runtime under one root so backup and cleanup stay simple."
-        case .runtime: return "Keep the working stack inside RoachNet instead of spread around the Mac."
-        case .roachClaw: return "Start with one good local default now. You can swap it later."
-        case .finish: return "Everything is staged. Open RoachNet and get moving."
+        case .welcome: return "RoachNet stages the app, runtime, and first content before it hands the Mac back to you."
+        case .machine: return "Keep the app, storage, and runtime under one roof so backup, repair, and cleanup stay predictable."
+        case .runtime: return "Bring the working stack up inside RoachNet instead of scattering it across the Mac."
+        case .roachClaw: return "Start with one reliable local model now. You can widen the lane later."
+        case .finish: return "The stack is staged. Open RoachNet and get to work."
         }
     }
 }
@@ -87,24 +87,24 @@ final class SetupController: ObservableObject {
     func boot() async {
         isBooting = true
         errorLine = nil
-        statusLine = "Booting setup."
+        statusLine = "Bringing the setup lane online."
 
         do {
             try await ensureBackend()
             startPolling()
-            statusLine = "Setup service ready."
+            statusLine = "Setup lane ready."
             isBooting = false
 
             do {
                 try await refreshState()
-                statusLine = "Setup ready."
+                statusLine = "Setup is ready."
             } catch {
                 errorLine = describe(error)
-                statusLine = "Setup backend unavailable."
+                statusLine = "Setup service unavailable."
             }
         } catch {
             errorLine = describe(error)
-            statusLine = "Setup backend unavailable."
+            statusLine = "Setup service unavailable."
             isBooting = false
         }
     }
@@ -136,7 +136,7 @@ final class SetupController: ObservableObject {
         do {
             try await persistConfig()
             try await refreshState()
-            statusLine = "State refreshed."
+            statusLine = "Setup state refreshed."
         } catch {
             errorLine = describe(error)
         }
@@ -205,7 +205,7 @@ final class SetupController: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         errorLine = nil
-        statusLine = "Starting container runtime."
+        statusLine = "Starting the contained runtime."
 
         do {
             try await persistConfig()
@@ -216,7 +216,7 @@ final class SetupController: ObservableObject {
                 as: SimpleOKResponse.self
             )
             try await refreshState()
-            statusLine = "Runtime start requested."
+            statusLine = "Contained runtime start requested."
         } catch {
             errorLine = describe(error)
         }
@@ -228,7 +228,7 @@ final class SetupController: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         errorLine = nil
-        statusLine = "Installing RoachNet."
+        statusLine = "Staging RoachNet."
         startedInstallInCurrentSession = true
 
         do {
@@ -240,7 +240,7 @@ final class SetupController: ObservableObject {
                 as: SimpleOKResponse.self
             )
             startPolling()
-            statusLine = "Install running."
+            statusLine = "Staging the install."
         } catch {
             errorLine = describe(error)
             isBusy = false
@@ -251,7 +251,7 @@ final class SetupController: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         errorLine = nil
-        statusLine = "Opening RoachNet."
+        statusLine = "Opening the real shell."
 
         do {
             try await persistConfig()
@@ -272,7 +272,7 @@ final class SetupController: ObservableObject {
                     as: SimpleOKResponse.self
                 )
             }
-            statusLine = "RoachNet launched."
+            statusLine = "RoachNet is open."
             for window in NSApp.windows {
                 window.close()
             }
@@ -404,17 +404,16 @@ final class SetupController: ObservableObject {
         let process = Process()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "exec \"$ROACHNET_NODE_BINARY\" \"$ROACHNET_SCRIPT_PATH\""]
+        let resolvedNodeBinary = node == "/usr/bin/env" ? "/usr/bin/env" : node
+        process.executableURL = URL(fileURLWithPath: resolvedNodeBinary)
+        process.arguments = node == "/usr/bin/env" ? ["node", scriptURL.path] : [scriptURL.path]
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
         var environment = ProcessInfo.processInfo.environment
-        environment["ROACHNET_NODE_BINARY"] = node == "/usr/bin/env" ? "node" : node
         environment["ROACHNET_SETUP_NO_BROWSER"] = "1"
         environment["ROACHNET_SETUP_READY_FILE"] = readyFileURL.path
         environment["ROACHNET_REPO_ROOT"] = repoRoot.path
-        environment["ROACHNET_SCRIPT_PATH"] = scriptURL.path
         environment["ROACHNET_SETUP_WORK_ROOT"] = setupWorkspaceRoot
         if let installerAssets = RoachNetRepositoryLocator.bundledInstallerAssetsDirectory() {
             environment["ROACHNET_SETUP_APP_BUNDLE"] = installerAssets
@@ -428,7 +427,7 @@ final class SetupController: ObservableObject {
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
 
-        let deadline = Date().addingTimeInterval(45)
+        let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
             if
                 let data = try? Data(contentsOf: readyFileURL),
@@ -452,11 +451,11 @@ final class SetupController: ObservableObject {
         }
 
         throw NSError(domain: "RoachNetSetup", code: 3, userInfo: [
-            NSLocalizedDescriptionKey: makeBackendBootFailureMessage(
-                fallback: "The native installer could not boot the setup backend before the local timeout.",
-                includePipeOutput: false
-            )
-        ])
+                NSLocalizedDescriptionKey: makeBackendBootFailureMessage(
+                    fallback: "The native installer could not boot the setup service before the local timeout.",
+                    includePipeOutput: false
+                )
+            ])
     }
 
     private func terminateBackendProcess() {
@@ -547,7 +546,13 @@ final class SetupController: ObservableObject {
         method: String,
         as type: Response.Type = Response.self
     ) async throws -> Response {
-        try await performRequest(path: path, method: method, body: Optional<AnyEncodable>.none, as: type)
+        try await performRequest(
+            path: path,
+            method: method,
+            timeout: requestTimeout(for: path),
+            body: Optional<AnyEncodable>.none,
+            as: type
+        )
     }
 
     private func request<Response: Decodable>(
@@ -556,12 +561,19 @@ final class SetupController: ObservableObject {
         body: some Encodable,
         as type: Response.Type = Response.self
     ) async throws -> Response {
-        try await performRequest(path: path, method: method, body: AnyEncodable(body), as: type)
+        try await performRequest(
+            path: path,
+            method: method,
+            timeout: requestTimeout(for: path),
+            body: AnyEncodable(body),
+            as: type
+        )
     }
 
     private func performRequest<Response: Decodable>(
         path: String,
         method: String,
+        timeout: TimeInterval,
         body: AnyEncodable?,
         as type: Response.Type = Response.self
     ) async throws -> Response {
@@ -573,14 +585,24 @@ final class SetupController: ObservableObject {
 
         var request = URLRequest(url: base.appending(path: path))
         request.httpMethod = method
-        request.timeoutInterval = 120
+        request.timeoutInterval = timeout
 
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let urlError as URLError where urlError.code == .timedOut && path == "/api/container-runtime/start" {
+            throw NSError(domain: "RoachNetSetup", code: 408, userInfo: [
+                NSLocalizedDescriptionKey: "RoachNet Setup waited too long for the contained Docker lane to answer. Docker may still be warming up on this Mac. Try the runtime step again in a moment."
+            ])
+        }
+
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
 
         if (200..<300).contains(statusCode) {
@@ -596,6 +618,15 @@ final class SetupController: ObservableObject {
         throw NSError(domain: "RoachNetSetup", code: statusCode, userInfo: [
             NSLocalizedDescriptionKey: "Request failed with status \(statusCode)."
         ])
+    }
+
+    private func requestTimeout(for path: String) -> TimeInterval {
+        switch path {
+        case "/api/container-runtime/start":
+            return 240
+        default:
+            return 120
+        }
     }
 
     private func describe(_ error: Error) -> String {
@@ -634,13 +665,19 @@ final class SetupController: ObservableObject {
         if description.localizedCaseInsensitiveContains("reading 'includes'")
             || description.localizedCaseInsensitiveContains("reading \\\"includes\\\"")
         {
-            return "RoachNet Setup hit a bad package check while staging the contained tools. Retry the install with the rebuilt bundle."
+                return "RoachNet Setup hit a bad package check while staging the contained tools. Retry the install with the rebuilt bundle."
         }
 
         if description.localizedCaseInsensitiveContains("npm error")
             || description.localizedCaseInsensitiveContains("npm install")
         {
-            return "RoachNet Setup couldn't finish staging one of the contained tool bundles. Retry the install. If you only need the shell first, turn off Install RoachClaw and finish setup in two passes."
+            return "RoachNet Setup couldn't finish staging one of the contained tool bundles. Retry the install. If you only need the shell first, turn off Install RoachClaw and finish the AI lane after launch."
+        }
+
+        if description.localizedCaseInsensitiveContains("timed out")
+            && description.localizedCaseInsensitiveContains("runtime")
+        {
+            return "RoachNet Setup waited too long for the contained runtime to answer. Retry the install. The next build should keep this lane warmer on cold Macs."
         }
 
         return description

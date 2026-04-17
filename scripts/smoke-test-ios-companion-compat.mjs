@@ -246,6 +246,7 @@ function buildRuntimeEnv({ homePath, storagePath, runtimePort, companionPort, co
     TMPDIR: path.join(homePath, 'tmp'),
     HOST: '127.0.0.1',
     PORT: String(runtimePort),
+    URL: `http://127.0.0.1:${runtimePort}`,
     NOMAD_STORAGE_PATH: storagePath,
     OPENCLAW_WORKSPACE_PATH: path.join(storagePath, 'openclaw'),
     OLLAMA_MODELS: path.join(storagePath, 'ollama'),
@@ -288,8 +289,37 @@ function parseServerBaseUrl(adminLogPath, launcherLogs = '') {
 }
 
 function readCompanionBaseUrl(processInfoPath) {
-  const content = JSON.parse(readFileSync(processInfoPath, 'utf8'))
-  return content?.companionUrl || null
+  try {
+    const content = JSON.parse(readFileSync(processInfoPath, 'utf8'))
+    return content?.companionUrl || null
+  } catch {
+    return null
+  }
+}
+
+async function waitForRuntimeEndpoints({
+  adminLogPath,
+  processInfoPath,
+  launcherLogsProvider,
+  timeoutMs,
+}) {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const runtimeBaseUrl = parseServerBaseUrl(
+      adminLogPath,
+      typeof launcherLogsProvider === 'function' ? launcherLogsProvider() : ''
+    )
+    const companionBaseUrl = readCompanionBaseUrl(processInfoPath)
+
+    if (runtimeBaseUrl && companionBaseUrl) {
+      return { runtimeBaseUrl, companionBaseUrl }
+    }
+
+    await sleep(pollIntervalMs)
+  }
+
+  return { runtimeBaseUrl: null, companionBaseUrl: null }
 }
 
 async function runCommand(command, args, options = {}) {
@@ -509,8 +539,12 @@ async function main() {
     await waitForPath(adminLogPath, startupTimeoutMs, 'runtime admin log')
     await waitForPath(processInfoPath, startupTimeoutMs, 'runtime process info')
 
-    const runtimeBaseUrl = parseServerBaseUrl(adminLogPath, runtimeHandle.getLogs().stdout)
-    const companionBaseUrl = readCompanionBaseUrl(processInfoPath)
+    const { runtimeBaseUrl, companionBaseUrl } = await waitForRuntimeEndpoints({
+      adminLogPath,
+      processInfoPath,
+      launcherLogsProvider: () => runtimeHandle.getLogs().stdout,
+      timeoutMs: startupTimeoutMs,
+    })
     assert(runtimeBaseUrl, 'Unable to resolve the contained desktop runtime URL from admin.log.')
     assert(companionBaseUrl, 'Unable to resolve the contained companion URL from runtime process info.')
 

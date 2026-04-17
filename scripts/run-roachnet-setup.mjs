@@ -600,6 +600,48 @@ async function installDirectoryArtifact(sourcePath, targetPath) {
   await clearMacQuarantine(targetPath)
 }
 
+function installedAppCandidates(targetPath) {
+  const normalizedTargetPath = normalizeInputPath(targetPath)
+  const bundleName = path.basename(normalizedTargetPath)
+  return [...new Set([
+    normalizedTargetPath,
+    normalizeInputPath(path.join(os.homedir(), 'Applications', bundleName)),
+    normalizeInputPath(path.join('/Applications', bundleName)),
+  ])]
+}
+
+async function terminateRunningRoachNetApps(task) {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  try {
+    await runProcess('pkill', ['-f', '/RoachNet.app/Contents/MacOS/RoachNetApp'], {
+      env: getShellEnv(),
+      timeoutMs: 5_000,
+    })
+    appendTaskLog(task, 'Closed running RoachNet app instances before replacing the installed copy.')
+  } catch (error) {
+    const detail = String(error?.message || error)
+    if (!detail.includes('exit code 1')) {
+      appendTaskLog(task, `Could not close all running RoachNet instances cleanly: ${detail}`)
+    }
+  }
+}
+
+async function removeStaleInstalledAppCopies(targetPath, task) {
+  const normalizedTargetPath = normalizeInputPath(targetPath)
+
+  for (const candidatePath of installedAppCandidates(normalizedTargetPath)) {
+    if (candidatePath === normalizedTargetPath || !existsSync(candidatePath)) {
+      continue
+    }
+
+    await rm(candidatePath, { recursive: true, force: true }).catch(() => {})
+    appendTaskLog(task, `Removed stale RoachNet app copy at ${candidatePath}.`)
+  }
+}
+
 async function installFileArtifact(sourcePath, targetPath) {
   await ensureDirectory(path.dirname(targetPath))
   await rm(targetPath, { force: true }).catch(() => {})
@@ -733,6 +775,8 @@ async function installNativeDesktopApp(config, task) {
     (await resolveLocalNativeAppSource({ ...config, installedAppPath: targetPath }, task)) ||
     (await resolveReleaseNativeAppSource({ ...config, installedAppPath: targetPath }, task))
 
+  await terminateRunningRoachNetApps(task)
+  await removeStaleInstalledAppCopies(targetPath, task)
   appendTaskLog(task, `Installing the native RoachNet desktop app at ${targetPath}...`)
 
   if (source.type === 'bundle') {
