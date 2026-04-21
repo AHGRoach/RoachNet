@@ -255,6 +255,29 @@ function isTransientRoachNetPath(candidatePath) {
   return tmpRoots.some((root) => normalizedPath.startsWith(root)) && normalizedPath.includes('roachnet')
 }
 
+function isInstallerScratchPath(candidatePath) {
+  if (typeof candidatePath !== 'string' || !candidatePath.trim()) {
+    return false
+  }
+
+  const normalizedPath = normalizeInputPath(candidatePath)
+  const segments = normalizedPath
+    .split(path.sep)
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase())
+  const lastSegment = segments.at(-1) || ''
+
+  if (isTransientRoachNetPath(normalizedPath)) {
+    return true
+  }
+
+  if (segments.includes('.roachnet-setup') || segments.includes('.smoke-work')) {
+    return true
+  }
+
+  return /(^|[-_.])(staging|regression|regressioncheck)([-_.]|$)/.test(lastSegment)
+}
+
 function sanitizePersistedInstallerConfig(config) {
   if (!config || typeof config !== 'object' || shouldPreserveTransientInstallerPaths()) {
     return config || {}
@@ -262,7 +285,7 @@ function sanitizePersistedInstallerConfig(config) {
 
   const defaultInstallPath = normalizeInputPath(getDefaultInstallPath())
   const installPath = normalizeInputPath(config.installPath || defaultInstallPath)
-  const installPathWasTransient = isTransientRoachNetPath(installPath)
+  const installPathWasTransient = isInstallerScratchPath(installPath)
   const sanitizedInstallPath = installPathWasTransient ? defaultInstallPath : installPath
   const sanitizedInstalledAppPath = installPathWasTransient
     ? getCanonicalInstalledAppPath(sanitizedInstallPath)
@@ -272,12 +295,12 @@ function sanitizePersistedInstallerConfig(config) {
     : normalizeInputPath(config.storagePath || path.join(sanitizedInstallPath, 'storage'))
 
   const normalizedAppPath =
-    isTransientRoachNetPath(sanitizedInstalledAppPath) ||
+    isInstallerScratchPath(sanitizedInstalledAppPath) ||
     !sanitizedInstalledAppPath.startsWith(`${sanitizedInstallPath}${path.sep}`)
       ? getCanonicalInstalledAppPath(sanitizedInstallPath)
       : sanitizedInstalledAppPath
   const normalizedStoragePath =
-    isTransientRoachNetPath(sanitizedStoragePath) ||
+    isInstallerScratchPath(sanitizedStoragePath) ||
     !sanitizedStoragePath.startsWith(`${sanitizedInstallPath}${path.sep}`)
       ? normalizeInputPath(path.join(sanitizedInstallPath, 'storage'))
       : sanitizedStoragePath
@@ -1972,42 +1995,80 @@ function getDefaultConfig(overrides = {}) {
     installPath,
     installedAppPath,
     appInstallPath: installedAppPath,
+    installProfile: overrides.installProfile || persistedConfig.installProfile || 'standard',
     sourceMode: overrides.sourceMode || persistedConfig.sourceMode || defaultSourceMode,
     sourceRepoUrl: overrides.sourceRepoUrl || persistedConfig.sourceRepoUrl || DEFAULT_SOURCE_REPO_URL,
     sourceRef: overrides.sourceRef || persistedConfig.sourceRef || DEFAULT_SOURCE_REF,
     autoInstallDependencies:
-      persistedConfig.autoInstallDependencies === undefined
-        ? false
-        : Boolean(persistedConfig.autoInstallDependencies),
+      overrides.autoInstallDependencies === undefined
+        ? persistedConfig.autoInstallDependencies === undefined
+          ? false
+          : Boolean(persistedConfig.autoInstallDependencies)
+        : Boolean(overrides.autoInstallDependencies),
     useDockerContainerization:
       overrides.useDockerContainerization === undefined
         ? Boolean(persistedConfig.useDockerContainerization)
         : Boolean(overrides.useDockerContainerization),
     installRoachClaw,
     roachClawDefaultModel:
-      typeof persistedConfig.roachClawDefaultModel === 'string' &&
-      persistedConfig.roachClawDefaultModel.trim()
-        ? persistedConfig.roachClawDefaultModel.trim()
+      typeof overrides.roachClawDefaultModel === 'string' && overrides.roachClawDefaultModel.trim()
+        ? overrides.roachClawDefaultModel.trim()
+        : typeof persistedConfig.roachClawDefaultModel === 'string' &&
+            persistedConfig.roachClawDefaultModel.trim()
+          ? persistedConfig.roachClawDefaultModel.trim()
         : DEFAULT_ROACHCLAW_MODEL,
+    companionEnabled:
+      overrides.companionEnabled === undefined
+        ? persistedConfig.companionEnabled !== false
+        : Boolean(overrides.companionEnabled),
+    companionHost:
+      overrides.companionHost || persistedConfig.companionHost || '0.0.0.0',
+    companionPort:
+      overrides.companionPort === undefined
+        ? Number(persistedConfig.companionPort || 38111)
+        : Number(overrides.companionPort || 38111),
+    companionToken:
+      overrides.companionToken || persistedConfig.companionToken || randomSecret(32),
+    companionAdvertisedURL:
+      overrides.companionAdvertisedURL || persistedConfig.companionAdvertisedURL || '',
     installOptionalOllama: installRoachClaw,
     installOptionalOpenClaw: installRoachClaw,
-    autoLaunch: persistedConfig.autoLaunch === undefined ? true : Boolean(persistedConfig.autoLaunch),
-    releaseChannel: persistedConfig.releaseChannel || 'stable',
-    updateBaseUrl: persistedConfig.updateBaseUrl || '',
+    autoLaunch:
+      overrides.autoLaunch === undefined
+        ? persistedConfig.autoLaunch === undefined
+          ? true
+          : Boolean(persistedConfig.autoLaunch)
+        : Boolean(overrides.autoLaunch),
+    releaseChannel: overrides.releaseChannel || persistedConfig.releaseChannel || 'stable',
+    updateBaseUrl: overrides.updateBaseUrl || persistedConfig.updateBaseUrl || '',
     autoCheckUpdates:
-      persistedConfig.autoCheckUpdates === undefined ? true : Boolean(persistedConfig.autoCheckUpdates),
+      overrides.autoCheckUpdates === undefined
+        ? persistedConfig.autoCheckUpdates === undefined
+          ? true
+          : Boolean(persistedConfig.autoCheckUpdates)
+        : Boolean(overrides.autoCheckUpdates),
     autoDownloadUpdates: Boolean(persistedConfig.autoDownloadUpdates),
-    launchAtLogin: Boolean(persistedConfig.launchAtLogin),
-    dryRun: Boolean(persistedConfig.dryRun),
+    launchAtLogin:
+      overrides.launchAtLogin === undefined
+        ? Boolean(persistedConfig.launchAtLogin)
+        : Boolean(overrides.launchAtLogin),
+    dryRun:
+      overrides.dryRun === undefined ? Boolean(persistedConfig.dryRun) : Boolean(overrides.dryRun),
     installOptionalMlx: Boolean(persistedConfig.installOptionalMlx),
     appleAccelerationBackend: persistedConfig.appleAccelerationBackend || 'auto',
     mlxBaseUrl: persistedConfig.mlxBaseUrl || 'http://127.0.0.1:8080',
     mlxModelId: persistedConfig.mlxModelId || '',
-    distributedInferenceBackend: persistedConfig.distributedInferenceBackend || 'disabled',
-    exoBaseUrl: persistedConfig.exoBaseUrl || 'http://127.0.0.1:52415',
-    exoModelId: persistedConfig.exoModelId || '',
+    distributedInferenceBackend:
+      overrides.distributedInferenceBackend ||
+      persistedConfig.distributedInferenceBackend ||
+      'disabled',
+    exoBaseUrl: overrides.exoBaseUrl || persistedConfig.exoBaseUrl || 'http://127.0.0.1:52415',
+    exoModelId: overrides.exoModelId || persistedConfig.exoModelId || '',
     exoNodeRole: persistedConfig.exoNodeRole || 'auto',
     exoAutoStart: Boolean(persistedConfig.exoAutoStart),
+    bootstrapPending: Boolean(persistedConfig.bootstrapPending),
+    bootstrapFailureCount: Number(persistedConfig.bootstrapFailureCount || 0),
+    lastRuntimeHealthAt: persistedConfig.lastRuntimeHealthAt || null,
     setupCompletedAt: installLooksPresent ? persistedConfig.setupCompletedAt || null : null,
     pendingLaunchIntro: installLooksPresent ? Boolean(persistedConfig.pendingLaunchIntro) : false,
     pendingRoachClawSetup: installLooksPresent ? Boolean(persistedConfig.pendingRoachClawSetup) : false,
@@ -3495,6 +3556,8 @@ async function getInstallerState(searchParams = new URLSearchParams()) {
   const mergedConfig = getDefaultConfig({
     installPath: searchParams.get('installPath') || undefined,
     installedAppPath: searchParams.get('installedAppPath') || undefined,
+    storagePath: searchParams.get('storagePath') || undefined,
+    installProfile: searchParams.get('installProfile') || undefined,
     sourceMode: searchParams.get('sourceMode') || undefined,
     sourceRepoUrl: searchParams.get('sourceRepoUrl') || undefined,
     sourceRef: searchParams.get('sourceRef') || undefined,
@@ -3511,6 +3574,17 @@ async function getInstallerState(searchParams = new URLSearchParams()) {
         ? undefined
         : searchParams.get('installRoachClaw') === 'true',
     roachClawDefaultModel: searchParams.get('roachClawDefaultModel') || undefined,
+    companionEnabled:
+      searchParams.get('companionEnabled') === null
+        ? undefined
+        : searchParams.get('companionEnabled') === 'true',
+    companionHost: searchParams.get('companionHost') || undefined,
+    companionPort:
+      searchParams.get('companionPort') === null
+        ? undefined
+        : Number(searchParams.get('companionPort')),
+    companionToken: searchParams.get('companionToken') || undefined,
+    companionAdvertisedURL: searchParams.get('companionAdvertisedURL') || undefined,
     autoLaunch:
       searchParams.get('autoLaunch') === null
         ? undefined

@@ -34,7 +34,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RoachNetAppTests",
-            dependencies: ["RoachNetApp"],
+            dependencies: ["RoachNetApp", "RoachNetCore", "RoachNetSetup"],
             path: "Tests/RoachNetAppTests"
         ),
     ]

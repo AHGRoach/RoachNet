@@ -54,6 +54,7 @@ final class SetupController: ObservableObject {
     @Published var errorLine: String?
     @Published var isBooting = true
     @Published var isBusy = false
+    @Published var primaryActionCoolingDown = false
 
     private var allowAutomaticFinishAdvance = true
     private var startedInstallInCurrentSession = false
@@ -65,6 +66,8 @@ final class SetupController: ObservableObject {
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var backendScriptURL: URL?
+    private var primaryActionCooldownTask: Task<Void, Never>?
+    private var installRequestSentAt: Date?
 
     var stageTitles: [String] { SetupStage.allCases.map(\.title) }
     var canGoBack: Bool { stage != .welcome && !isBusy }
@@ -77,6 +80,7 @@ final class SetupController: ObservableObject {
 
     func shutdown() {
         pollTask?.cancel()
+        primaryActionCooldownTask?.cancel()
         terminateBackendProcess()
 
         if let readyFileURL {
@@ -111,34 +115,54 @@ final class SetupController: ObservableObject {
 
     func back() {
         guard let previous = SetupStage(rawValue: stage.rawValue - 1) else { return }
+        primaryActionCooldownTask?.cancel()
+        primaryActionCoolingDown = false
         allowAutomaticFinishAdvance = false
         stage = previous
+    }
+
+    func beginPrimaryAction() -> Bool {
+        guard !(primaryActionCoolingDown || isBooting || isBusy) else {
+            return false
+        }
+
+        primaryActionCoolingDown = true
+        return true
     }
 
     func primaryAction() async {
         allowAutomaticFinishAdvance = true
         switch stage {
         case .welcome:
-            stage = .machine
+            scheduleStageTransition(to: .machine)
         case .machine:
-            await refreshAction()
-            stage = .runtime
+            if await refreshAction() {
+                scheduleStageTransition(to: .runtime)
+            } else {
+                primaryActionCoolingDown = false
+            }
         case .runtime:
-            stage = .roachClaw
+            allowAutomaticFinishAdvance = false
+            scheduleStageTransition(to: .roachClaw)
         case .roachClaw:
             await installAction()
+            primaryActionCoolingDown = false
         case .finish:
             await launchAction()
+            primaryActionCoolingDown = false
         }
     }
 
-    func refreshAction() async {
+    @discardableResult
+    func refreshAction() async -> Bool {
         do {
             try await persistConfig()
             try await refreshState()
             statusLine = "Setup state refreshed."
+            return true
         } catch {
             errorLine = describe(error)
+            return false
         }
     }
 
@@ -239,9 +263,12 @@ final class SetupController: ObservableObject {
                 body: config,
                 as: SimpleOKResponse.self
             )
+            installRequestSentAt = Date()
             startPolling()
             statusLine = "Staging the install."
         } catch {
+            installRequestSentAt = nil
+            startedInstallInCurrentSession = false
             errorLine = describe(error)
             isBusy = false
         }
@@ -311,7 +338,12 @@ final class SetupController: ObservableObject {
     }
 
     private func refreshState() async throws {
-        let state = try await request(path: "/api/state", method: "GET", as: RoachNetSetupState.self)
+        let state = try await request(
+            path: "/api/state",
+            method: "GET",
+            queryItems: stateQueryItems(),
+            as: RoachNetSetupState.self
+        )
         setupState = state
         config = state.config
 
@@ -322,6 +354,8 @@ final class SetupController: ObservableObject {
         } else {
             isBusy = false
             if state.lastCompletedTask?.status == "failed" {
+                startedInstallInCurrentSession = false
+                installRequestSentAt = nil
                 errorLine = state.lastCompletedTask?.error
                 statusLine = "Setup needs attention."
             } else if state.lastCompletedTask?.status == "completed" {
@@ -330,22 +364,17 @@ final class SetupController: ObservableObject {
         }
 
         let hasPreparedWorkspace = state.installLooksReady || state.config.setupCompletedAt != nil
+        let completedInstallInCurrentSession = didCompleteCurrentInstall(using: state.lastCompletedTask)
         let installCompleted =
             state.lastCompletedTask?.status == "completed"
             || (state.nativeApp.installed && hasPreparedWorkspace)
         let canAdvanceToFinishFromCurrentStage = stage.rawValue >= SetupStage.roachClaw.rawValue
 
-        if installCompleted, allowAutomaticFinishAdvance, canAdvanceToFinishFromCurrentStage {
+        if completedInstallInCurrentSession, allowAutomaticFinishAdvance, canAdvanceToFinishFromCurrentStage {
             stage = .finish
-            if state.lastCompletedTask?.status == "completed" {
-                statusLine = "Install complete."
-            } else if state.nativeApp.installed {
-                statusLine = "RoachNet is already installed."
-            }
+            statusLine = "Install complete."
 
-            if startedInstallInCurrentSession,
-               state.lastCompletedTask?.status == "completed",
-               config.autoLaunch,
+            if config.autoLaunch,
                state.nativeApp.installed {
                 scheduleAutomaticExitIfNeeded()
             }
@@ -353,6 +382,88 @@ final class SetupController: ObservableObject {
             stage = .roachClaw
             scheduledAutomaticExit = false
         }
+    }
+
+    private func stateQueryItems() -> [URLQueryItem] {
+        guard Self.shouldApplyDraftStateOverrides(
+            startedInstallInCurrentSession: startedInstallInCurrentSession,
+            activeTaskStatus: setupState?.activeTask?.status
+        ) else {
+            return []
+        }
+
+        let installPath = config.installPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? RoachNetRepositoryLocator.defaultInstallPath()
+            : config.installPath
+        let installedAppPath = config.installedAppPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? RoachNetRepositoryLocator.defaultInstalledAppPath(installPath: installPath)
+            : config.installedAppPath
+        let storagePath = config.storagePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? RoachNetRepositoryLocator.defaultStoragePath(installPath: installPath)
+            : config.storagePath
+
+        return [
+            URLQueryItem(name: "installPath", value: installPath),
+            URLQueryItem(name: "installedAppPath", value: installedAppPath),
+            URLQueryItem(name: "storagePath", value: storagePath),
+            URLQueryItem(name: "installProfile", value: config.installProfile),
+            URLQueryItem(name: "useDockerContainerization", value: config.useDockerContainerization ? "true" : "false"),
+            URLQueryItem(name: "installRoachClaw", value: config.installRoachClaw ? "true" : "false"),
+            URLQueryItem(name: "roachClawDefaultModel", value: config.roachClawDefaultModel),
+            URLQueryItem(name: "companionEnabled", value: config.companionEnabled ? "true" : "false"),
+            URLQueryItem(name: "companionHost", value: config.companionHost),
+            URLQueryItem(name: "companionPort", value: String(config.companionPort)),
+            URLQueryItem(name: "companionToken", value: config.companionToken),
+            URLQueryItem(name: "companionAdvertisedURL", value: config.companionAdvertisedURL),
+            URLQueryItem(name: "autoLaunch", value: config.autoLaunch ? "true" : "false"),
+            URLQueryItem(name: "releaseChannel", value: config.releaseChannel),
+            URLQueryItem(name: "distributedInferenceBackend", value: config.distributedInferenceBackend),
+            URLQueryItem(name: "exoBaseUrl", value: config.exoBaseUrl),
+            URLQueryItem(name: "exoModelId", value: config.exoModelId),
+        ]
+    }
+
+    nonisolated static func shouldApplyDraftStateOverrides(
+        startedInstallInCurrentSession: Bool,
+        activeTaskStatus: String?
+    ) -> Bool {
+        guard !startedInstallInCurrentSession else {
+            return false
+        }
+
+        return activeTaskStatus != "running"
+    }
+
+    private func scheduleStageTransition(to nextStage: SetupStage) {
+        primaryActionCooldownTask?.cancel()
+
+        primaryActionCooldownTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(10))
+            self?.stage = nextStage
+            try? await Task.sleep(for: .milliseconds(350))
+            self?.primaryActionCoolingDown = false
+        }
+    }
+
+    private func didCompleteCurrentInstall(using lastCompletedTask: RoachNetSetupState.TaskState?) -> Bool {
+        guard
+            startedInstallInCurrentSession,
+            let installRequestSentAt,
+            lastCompletedTask?.status == "completed"
+        else {
+            return false
+        }
+
+        let formatter = ISO8601DateFormatter()
+        let recordedDates = [lastCompletedTask?.startedAt, lastCompletedTask?.finishedAt]
+            .compactMap { $0 }
+            .compactMap(formatter.date(from:))
+
+        guard let newestRecordedDate = recordedDates.max() else {
+            return false
+        }
+
+        return newestRecordedDate >= installRequestSentAt.addingTimeInterval(-1)
     }
 
     private func scheduleAutomaticExitIfNeeded() {
@@ -544,12 +655,14 @@ final class SetupController: ObservableObject {
     private func request<Response: Decodable>(
         path: String,
         method: String,
+        queryItems: [URLQueryItem] = [],
         as type: Response.Type = Response.self
     ) async throws -> Response {
         try await performRequest(
             path: path,
             method: method,
             timeout: requestTimeout(for: path),
+            queryItems: queryItems,
             body: Optional<AnyEncodable>.none,
             as: type
         )
@@ -574,6 +687,7 @@ final class SetupController: ObservableObject {
         path: String,
         method: String,
         timeout: TimeInterval,
+        queryItems: [URLQueryItem] = [],
         body: AnyEncodable?,
         as type: Response.Type = Response.self
     ) async throws -> Response {
@@ -583,7 +697,17 @@ final class SetupController: ObservableObject {
             ])
         }
 
-        var request = URLRequest(url: base.appending(path: path))
+        var requestURL = base.appending(path: path)
+        if !queryItems.isEmpty,
+           var components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)
+        {
+            components.queryItems = queryItems
+            if let resolvedURL = components.url {
+                requestURL = resolvedURL
+            }
+        }
+
+        var request = URLRequest(url: requestURL)
         request.httpMethod = method
         request.timeoutInterval = timeout
 
@@ -1214,12 +1338,14 @@ private struct SetupRootView: View {
             SetupNativeButton(
                 title: primaryTitle,
                 role: .primary,
-                isEnabled: !(controller.isBooting || controller.isBusy),
+                isEnabled: !(controller.isBooting || controller.isBusy || controller.primaryActionCoolingDown),
                 isDefaultAction: true,
                 minWidth: 138
             ) {
+                guard controller.beginPrimaryAction() else { return }
                 Task { await controller.primaryAction() }
             }
+            .id("primary-\(controller.stage.rawValue)")
         }
     }
 

@@ -4392,7 +4392,7 @@ private struct RootWorkspaceView: View {
 
                             RoachSectionHeader(
                                 "Home",
-                                title: "Bring the important stuff home.",
+                                title: "Home is where the Roach is!",
                                 detail: "RoachClaw, the vault, the dev desk, and the runtime stay under one root instead of dissolving into tabs, dashboards, and drift."
                             )
                         }

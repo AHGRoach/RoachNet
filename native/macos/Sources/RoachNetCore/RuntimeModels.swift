@@ -405,7 +405,7 @@ public enum RoachNetRepositoryLocator {
             .appendingPathComponent("roachnet-installer.json")
     }
 
-    private static func shouldPreserveTransientInstallPaths() -> Bool {
+    static func shouldPreserveTransientInstallPaths() -> Bool {
         let environment = ProcessInfo.processInfo.environment
         if let explicitConfigPath = environment["ROACHNET_INSTALLER_CONFIG_PATH"],
            !explicitConfigPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -416,7 +416,7 @@ public enum RoachNetRepositoryLocator {
         return environment["ROACHNET_ALLOW_TRANSIENT_INSTALL_PATHS"] == "1"
     }
 
-    private static func isTransientRoachNetPath(_ candidatePath: String) -> Bool {
+    static func isTransientRoachNetPath(_ candidatePath: String) -> Bool {
         let normalizedPath = URL(fileURLWithPath: candidatePath).standardizedFileURL.path.lowercased()
         let tmpRoots = [
             FileManager.default.temporaryDirectory.path,
@@ -429,17 +429,37 @@ public enum RoachNetRepositoryLocator {
         return tmpRoots.contains(where: { normalizedPath.hasPrefix($0) }) && normalizedPath.contains("roachnet")
     }
 
-    private static func sanitizedInstallPath(_ installPath: String) -> String {
+    static func isInstallerScratchPath(_ candidatePath: String) -> Bool {
+        let normalizedPath = URL(fileURLWithPath: candidatePath).standardizedFileURL.path
+        let lowercasedSegments = normalizedPath
+            .split(separator: "/")
+            .map { $0.lowercased() }
+        let lastSegment = lowercasedSegments.last ?? ""
+
+        if isTransientRoachNetPath(normalizedPath) {
+            return true
+        }
+
+        if lowercasedSegments.contains(".roachnet-setup") || lowercasedSegments.contains(".smoke-work") {
+            return true
+        }
+
+        return ["staging", "regression", "regressioncheck"].contains {
+            lastSegment.range(of: #"(^|[-_.])\#($0)([-_.]|$)"#, options: .regularExpression) != nil
+        }
+    }
+
+    static func sanitizedInstallPath(_ installPath: String) -> String {
         let trimmedInstallPath = installPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedInstallPath = trimmedInstallPath.isEmpty ? defaultInstallPath() : trimmedInstallPath
-        guard !shouldPreserveTransientInstallPaths(), isTransientRoachNetPath(normalizedInstallPath) else {
+        guard !shouldPreserveTransientInstallPaths(), isInstallerScratchPath(normalizedInstallPath) else {
             return URL(fileURLWithPath: normalizedInstallPath).standardizedFileURL.path
         }
 
         return defaultInstallPath()
     }
 
-    private static func sanitizedPersistedConfig(_ config: RoachNetInstallerConfig) -> RoachNetInstallerConfig {
+    static func sanitizedPersistedConfig(_ config: RoachNetInstallerConfig) -> RoachNetInstallerConfig {
         guard !shouldPreserveTransientInstallPaths() else {
             return config
         }
@@ -452,7 +472,7 @@ public enum RoachNetRepositoryLocator {
 
         let normalizedInstalledAppPath = {
             let candidate = URL(fileURLWithPath: config.installedAppPath).standardizedFileURL.path
-            guard !isTransientRoachNetPath(candidate), candidate.hasPrefix(normalizedInstallPath + "/") else {
+            guard !isInstallerScratchPath(candidate), candidate.hasPrefix(normalizedInstallPath + "/") else {
                 return defaultInstalledAppPath
             }
             return candidate
@@ -460,7 +480,7 @@ public enum RoachNetRepositoryLocator {
 
         let normalizedStoragePath = {
             let candidate = URL(fileURLWithPath: config.storagePath).standardizedFileURL.path
-            guard !isTransientRoachNetPath(candidate), candidate.hasPrefix(normalizedInstallPath + "/") else {
+            guard !isInstallerScratchPath(candidate), candidate.hasPrefix(normalizedInstallPath + "/") else {
                 return defaultStoragePath
             }
             return candidate
