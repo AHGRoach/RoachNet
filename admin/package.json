@@ -52,7 +52,7 @@
     "@japa/plugin-adonisjs": "^5.2.0",
     "@japa/runner": "^4.2.0",
     "@swc/core": "1.11.24",
-    "@tanstack/eslint-plugin-query": "^5.81.2",
+    "@tanstack/eslint-plugin-query": "^5.100.10",
     "@types/dockerode": "^3.3.41",
     "@types/luxon": "^3.6.2",
     "@types/node": "^22.15.18",
