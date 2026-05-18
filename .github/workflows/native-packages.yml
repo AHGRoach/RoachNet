@@ -49,6 +49,9 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
+      - name: Hydrate RoachSpeech release packs
+        run: node scripts/prepare-roachspeech-release-packs.mjs
+
       - name: Audit dependency and native release scope
         run: |
           npm test
@@ -115,6 +118,8 @@ jobs:
             native/macos/dist/RoachNet Setup.app
             native/macos/dist/RoachNet-Setup-macOS.dmg
             native/macos/dist/RoachNet-Setup-macOS.dmg.sha256
+            native/macos/dist/RoachSpeechPacks/*.zip
+            native/macos/dist/RoachSpeechPacks/*.sha256
           if-no-files-found: error
 
       - name: Upload release assets
@@ -126,5 +131,7 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             native/macos/dist/RoachNet-Setup-macOS.dmg \
             native/macos/dist/RoachNet-Setup-macOS.dmg.sha256 \
+            native/macos/dist/RoachSpeechPacks/*.zip \
+            native/macos/dist/RoachSpeechPacks/*.sha256 \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
