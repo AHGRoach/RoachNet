@@ -9,7 +9,10 @@ import process from 'node:process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { requestHttp } from './lib/roachnet_http.mjs'
-import { redactSensitiveText } from './lib/roachnet_process_security.mjs'
+import {
+  redactSensitiveObject,
+  redactSensitiveText,
+} from './lib/roachnet_process_security.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -297,7 +300,7 @@ function resolveRuntimeLauncherPath() {
 
 function writeFixture(directory, filename, payload) {
   const targetPath = path.join(directory, filename)
-  writeFileSync(targetPath, `${JSON.stringify(payload, null, 2)}\n`)
+  writeFileSync(targetPath, `${JSON.stringify(redactSensitiveObject(payload, process.env), null, 2)}\n`)
   return targetPath
 }
 

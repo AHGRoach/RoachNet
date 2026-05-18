@@ -13,12 +13,15 @@ on:
         type: boolean
         default: false
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   check_authorization:
     name: Check authorization to publish new Docker image
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
     outputs:
       isAuthorized: ${{ steps.check-auth.outputs.is_authorized }}
     steps:

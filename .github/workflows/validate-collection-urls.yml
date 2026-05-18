@@ -16,6 +16,8 @@ permissions:
 jobs:
   validate-urls:
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
 

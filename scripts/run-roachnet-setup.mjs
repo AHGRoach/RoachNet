@@ -23,6 +23,7 @@ import {
   commandForLog,
   normalizeProcessLaunch,
   normalizeRelativePathForCopyFilter,
+  redactSensitiveLogLine,
   redactSensitiveText,
 } from './lib/roachnet_process_security.mjs'
 import { getRoachNetLocalHostname } from './lib/roachtail_hostname.mjs'
@@ -3055,7 +3056,7 @@ function createTask(config) {
 
 function appendTaskLog(task, message) {
   task.updatedAt = new Date().toISOString()
-  task.logs.push(`[${new Date().toISOString()}] ${redactSensitiveText(message, process.env)}`)
+  task.logs.push(`[${new Date().toISOString()}] ${redactSensitiveLogLine(message, process.env)}`)
 
   if (task.logs.length > TASK_LOG_LIMIT) {
     task.logs.splice(0, task.logs.length - TASK_LOG_LIMIT)
@@ -3398,11 +3399,11 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
       const diagnostics = [launcherStderr.trim(), launcherStdout.trim()]
 
       if (existsSync(launcherLogPath)) {
-        diagnostics.push(`launcher debug log:\n${readFileSync(launcherLogPath, 'utf8').trim()}`)
+        diagnostics.push(`launcher debug log:\n${redactSensitiveLogLine(readFileSync(launcherLogPath, 'utf8').trim(), launchEnv)}`)
       }
 
       if (existsSync(serverLogPath)) {
-        diagnostics.push(`server log:\n${readFileSync(serverLogPath, 'utf8').trim()}`)
+        diagnostics.push(`server log:\n${redactSensitiveLogLine(readFileSync(serverLogPath, 'utf8').trim(), launchEnv)}`)
       }
 
       throw new Error(

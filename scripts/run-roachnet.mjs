@@ -17,7 +17,11 @@ import {
 } from './lib/roachnet_container_runtime.mjs'
 import { requestHttp } from './lib/roachnet_http.mjs'
 import { applyAppleSiliconLocalAIDefaults } from './lib/roachnet_local_ai_runtime.mjs'
-import { redactSensitiveObject, redactSensitiveText } from './lib/roachnet_process_security.mjs'
+import {
+  redactSensitiveLogLine,
+  redactSensitiveObject,
+  redactSensitiveText,
+} from './lib/roachnet_process_security.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -419,7 +423,20 @@ function debugBoot(stage, details = {}) {
 }
 
 function runtimeLogPathForDisplay(filePath) {
-  return redactSensitiveText(path.basename(String(filePath || 'roachnet-server.log')), process.env)
+  return redactSensitiveLogLine(path.basename(String(filePath || 'roachnet-server.log')), process.env)
+}
+
+function runtimeTargetForDisplay(target) {
+  return redactSensitiveLogLine(path.basename(String(target?.entrypoint || target?.kind || 'runtime')), process.env)
+}
+
+function urlOriginForDisplay(value) {
+  try {
+    const parsed = new URL(String(value))
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return 'local runtime'
+  }
 }
 
 function getPersistentStorageRoot() {
@@ -2613,10 +2630,10 @@ async function main() {
 
   openBrowser(homeUrl.toString())
 
-  console.log(`RoachNet server started.`)
-  console.log(`Server runtime: ${launchResult.target.kind}`)
-  console.log(`Server entrypoint: ${launchResult.target.entrypoint}`)
-  console.log(`Web UI: ${homeUrl.toString()}`)
+  console.log('RoachNet server started.')
+  console.log(`Server runtime: ${redactSensitiveLogLine(launchResult.target.kind, process.env)}`)
+  console.log(`Server entrypoint: ${runtimeTargetForDisplay(launchResult.target)}`)
+  console.log(`Web UI origin: ${urlOriginForDisplay(homeUrl)}`)
   console.log(`Server logs: ${runtimeLogPathForDisplay(serverLogPath)}`)
 }
 

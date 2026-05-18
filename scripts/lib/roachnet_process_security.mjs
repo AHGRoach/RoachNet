@@ -36,6 +36,14 @@ export function redactSensitiveText(value, env = process.env) {
   return output
 }
 
+export function redactSensitiveLogLine(value, env = process.env) {
+  return redactSensitiveText(value, env)
+    .replace(/\\/g, '\\\\')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t')
+}
+
 export function redactSensitiveObject(value, env = process.env, seen = new WeakSet()) {
   if (value === null || value === undefined) {
     return value

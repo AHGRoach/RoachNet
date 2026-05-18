@@ -6,6 +6,7 @@ import {
   commandForLog,
   normalizeProcessLaunch,
   normalizeRelativePathForCopyFilter,
+  redactSensitiveLogLine,
   redactSensitiveObject,
   redactSensitiveText,
 } from '../lib/roachnet_process_security.mjs'
@@ -46,6 +47,11 @@ test('redactSensitiveObject redacts sensitive keys recursively', () => {
       },
     }
   )
+})
+
+test('redactSensitiveLogLine strips secrets and escapes log-control characters', () => {
+  const output = redactSensitiveLogLine('TOKEN=abc123\\tail\nnext\tline', { TOKEN: 'abc123' })
+  assert.equal(output, 'TOKEN=[redacted]\\nnext\\tline')
 })
 
 test('normalizeProcessLaunch refuses shell launches and unsafe executable names', () => {
