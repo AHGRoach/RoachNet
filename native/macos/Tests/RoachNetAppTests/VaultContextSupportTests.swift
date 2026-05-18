@@ -11,6 +11,10 @@ final class VaultContextSupportTests: XCTestCase {
         XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/movie.mp4")), .video)
         XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/book.pdf")), .pdf)
         XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/book.epub")), .book)
+        XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/book.azw3")), .book)
+        XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/comic.cbz")), .book)
+        XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/source.zip")), .archive)
+        XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/bundle.7z")), .archive)
         XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/folder", isDirectory: true)), .folder)
         XCTAssertEqual(VaultPreviewKind.resolve(for: URL(fileURLWithPath: "/tmp/archive.bin")), .generic)
     }
@@ -39,6 +43,26 @@ final class VaultContextSupportTests: XCTestCase {
         XCTAssertNotNil(excerpt)
         XCTAssertTrue(excerpt?.count == 65)
         XCTAssertTrue(excerpt?.hasSuffix("…") == true)
+    }
+
+    func testVaultDropImportDestinationSanitizesAndAvoidsCollisions() throws {
+        let directory = try makeTemporaryDirectory()
+        let source = URL(fileURLWithPath: "/tmp/Bad:Name.pdf")
+        let firstDestination = VaultDropImportSupport.destinationURL(for: source, in: directory)
+        try Data("existing".utf8).write(to: firstDestination)
+        let secondDestination = VaultDropImportSupport.destinationURL(for: source, in: directory)
+
+        XCTAssertEqual(firstDestination.lastPathComponent, "Bad-Name.pdf")
+        XCTAssertEqual(secondDestination.lastPathComponent, "Bad-Name 2.pdf")
+    }
+
+    func testVaultDropImportDetectsAlreadyVaultedFiles() throws {
+        let directory = try makeTemporaryDirectory()
+        let vaultRoot = directory.appendingPathComponent("Vault", isDirectory: true)
+        let source = vaultRoot.appendingPathComponent("note.md")
+
+        XCTAssertTrue(VaultDropImportSupport.isInsideVault(source, vaultRootURL: vaultRoot))
+        XCTAssertFalse(VaultDropImportSupport.isInsideVault(URL(fileURLWithPath: "/tmp/note.md"), vaultRootURL: vaultRoot))
     }
 
     @MainActor

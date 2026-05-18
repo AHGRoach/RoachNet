@@ -75,4 +75,88 @@ final class InstallerConfigSupportTests: XCTestCase {
         XCTAssertEqual(sanitized.storagePath, config.storagePath)
         XCTAssertFalse(sanitized.installRoachClaw)
     }
+
+    func testRuntimeRouteURLResolvesOnlyLocalRuntimePaths() throws {
+        let url = try ManagedAppRuntimeBridge.localRuntimeRouteURL(
+            baseURLString: "http://roachnet:8080/home",
+            path: "maps/atlas?pack=base#viewer"
+        )
+
+        XCTAssertEqual(url.absoluteString, "http://roachnet:8080/maps/atlas?pack=base#viewer")
+
+        let apiURL = try ManagedAppRuntimeBridge.localRuntimeRouteURL(
+            baseURLString: "http://127.0.0.1:8080/api/health",
+            path: "/settings/system"
+        )
+        XCTAssertEqual(apiURL.absoluteString, "http://127.0.0.1:8080/settings/system")
+    }
+
+    func testRuntimeRouteURLRejectsExternalRouteForms() {
+        XCTAssertThrowsError(
+            try ManagedAppRuntimeBridge.localRuntimeRouteURL(
+                baseURLString: "http://roachnet:8080/home",
+                path: "//example.invalid/phish"
+            )
+        )
+        XCTAssertThrowsError(
+            try ManagedAppRuntimeBridge.localRuntimeRouteURL(
+                baseURLString: "http://roachnet:8080/home",
+                path: "https://example.invalid/phish"
+            )
+        )
+        XCTAssertThrowsError(
+            try ManagedAppRuntimeBridge.localRuntimeRouteURL(
+                baseURLString: "file:///tmp/roachnet",
+                path: "/home"
+            )
+        )
+    }
+
+    func testAppleSiliconLocalAIEnvironmentDefaultsRespectExplicitOverrides() {
+        var environment = [
+            "OLLAMA_NUM_PARALLEL": "2",
+            "OLLAMA_KEEP_ALIVE": "30m"
+        ]
+
+        ManagedAppRuntimeBridge.applyAppleSiliconLocalAIEnvironmentDefaults(
+            to: &environment,
+            isAppleSiliconNative: true
+        )
+
+        XCTAssertEqual(environment["OLLAMA_NUM_PARALLEL"], "2")
+        XCTAssertEqual(environment["OLLAMA_KEEP_ALIVE"], "30m")
+        XCTAssertEqual(environment["OLLAMA_FLASH_ATTENTION"], "1")
+        XCTAssertEqual(environment["OLLAMA_MAX_LOADED_MODELS"], "1")
+        XCTAssertEqual(environment["OLLAMA_MAX_QUEUE"], "32")
+        XCTAssertEqual(environment["ROACHNET_APPLE_SILICON_NATIVE"], "1")
+        XCTAssertEqual(
+            environment["ROACHNET_LOCAL_AI_PROFILE"],
+            ManagedAppRuntimeBridge.appleSiliconLocalAIProfile
+        )
+    }
+
+    func testAppleSiliconLocalAIEnvironmentDefaultsCanBeDisabled() {
+        var environment = [
+            "ROACHNET_DISABLE_APPLE_SILICON_AI_DEFAULTS": "1"
+        ]
+
+        ManagedAppRuntimeBridge.applyAppleSiliconLocalAIEnvironmentDefaults(
+            to: &environment,
+            isAppleSiliconNative: true
+        )
+
+        XCTAssertNil(environment["OLLAMA_FLASH_ATTENTION"])
+        XCTAssertNil(environment["ROACHNET_LOCAL_AI_PROFILE"])
+    }
+
+    func testAppleSiliconLocalAIEnvironmentDefaultsSkipNonAppleSiliconRuntime() {
+        var environment: [String: String] = [:]
+
+        ManagedAppRuntimeBridge.applyAppleSiliconLocalAIEnvironmentDefaults(
+            to: &environment,
+            isAppleSiliconNative: false
+        )
+
+        XCTAssertTrue(environment.isEmpty)
+    }
 }

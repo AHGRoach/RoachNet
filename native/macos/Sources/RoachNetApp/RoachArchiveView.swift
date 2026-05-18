@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import RoachNetDesign
 
 struct RoachArchiveVaultPanel: View {
@@ -7,88 +8,283 @@ struct RoachArchiveVaultPanel: View {
     @ObservedObject var store: RoachArchiveStore
 
     var body: some View {
-        RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 16) {
-                responsiveHeader
-                searchBar
+        VStack(alignment: .leading, spacing: 12) {
+            responsiveHeader
+            archiveSearchDock
 
-                if let errorLine = store.errorLine {
-                    RoachNotice(title: "Roach's Archive notice", detail: errorLine)
-                }
-
-                if !store.results.isEmpty {
-                    resultsGrid
-                }
-
-                if !store.vaultRecords.isEmpty {
-                    importedShelf
-                }
-
-                torrentStrip
+            if let errorLine = store.errorLine {
+                RoachNotice(title: "Roach's Archive notice", detail: errorLine)
             }
+
+            if !store.results.isEmpty {
+                resultsGrid
+            }
+
+            if !store.vaultRecords.isEmpty {
+                importedShelf
+            } else if store.results.isEmpty {
+                archiveEmptyState
+            }
+
+            torrentStrip
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            RoachPalette.panelRaised.opacity(0.88),
+                            RoachPalette.panel.opacity(0.82),
+                            Color.black.opacity(0.18),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                .allowsHitTesting(false)
+        )
+        .shadow(color: RoachPalette.shadow.opacity(0.10), radius: 14, x: 0, y: 8)
         .task(id: model.storagePath) {
             store.configure(storagePath: model.storagePath)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var responsiveHeader: some View {
         responsiveBar {
             RoachSectionHeader(
                 "Roach's Archive",
-                title: "Search the preservation lanes.",
-                detail: "Bulk metadata, torrents, and local mirrors feed this shelf. The public website can keep its CAPTCHA."
+                title: "Book search.",
+                detail: nil
             )
         } actions: {
-            HStack(spacing: 8) {
-                Button(store.isRefreshingTorrents ? "Refreshing..." : "Refresh Torrents") {
-                    Task { await store.refreshTorrentManifest() }
-                }
-                .buttonStyle(RoachSecondaryButtonStyle())
-                .disabled(store.isRefreshingTorrents)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    archiveRefreshButton
 
-                if let booksRootURL = store.booksRootURL {
-                    Button("Reveal Books") {
-                        NSWorkspace.shared.open(booksRootURL)
+                    if let booksRootURL = store.booksRootURL {
+                        Button {
+                            NSWorkspace.shared.open(booksRootURL)
+                        } label: {
+                            Label("Reveal Books", systemImage: "folder")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
                     }
-                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                    RoachTag("\(store.metadataTorrentCount) metadata torrents", accent: RoachPalette.cyan)
                 }
 
-                RoachTag("\(store.metadataTorrentCount) metadata torrents", accent: RoachPalette.cyan)
+                VStack(alignment: .leading, spacing: 8) {
+                    archiveRefreshButton
+
+                    if let booksRootURL = store.booksRootURL {
+                        Button {
+                            NSWorkspace.shared.open(booksRootURL)
+                        } label: {
+                            Label("Reveal Books", systemImage: "folder")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                    }
+
+                    RoachTag("\(store.metadataTorrentCount) metadata torrents", accent: RoachPalette.cyan)
+                }
             }
         }
     }
 
+    private var archiveSearchDock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            searchBar
+            archiveStatusRow
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            RoachPalette.panelRaised.opacity(0.94),
+                            RoachPalette.panel.opacity(0.88),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(RoachPalette.borderStrong.opacity(0.82), lineWidth: 1)
+        )
+        .shadow(color: RoachPalette.shadow.opacity(0.10), radius: 14, x: 0, y: 8)
+        .layoutPriority(1)
+    }
+
     private var searchBar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                TextField("Title, author, ISBN, DOI, keyword", text: $store.query)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        Task { await store.search() }
-                    }
-
-                Button(store.isSearching ? "Searching..." : "Search") {
-                    Task { await store.search() }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    archiveSearchField
+                        .frame(minWidth: 260)
+                        .layoutPriority(2)
+                    archiveSearchButton
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                .buttonStyle(RoachPrimaryButtonStyle())
-                .disabled(store.isSearching)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    archiveSearchField
+                    archiveSearchButton
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+        }
+    }
+
+    private var archiveStatusRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        archiveStatusPills
+                    }
+                }
+                .frame(maxWidth: 320)
+                archiveStatusText
             }
 
-            HStack(spacing: 8) {
-                RoachTag("API \(shortEndpoint)", accent: RoachPalette.green)
-                RoachTag("Metadata \(shortMetadataPath)", accent: RoachPalette.bronze)
-                Text(store.statusLine)
-                    .font(.system(size: 12, weight: .medium))
+            VStack(alignment: .leading, spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        archiveStatusPills
+                    }
+                }
+                archiveStatusText
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var archiveStatusPills: some View {
+        RoachTag("API \(shortEndpoint)", accent: RoachPalette.green)
+        RoachTag("Metadata \(shortMetadataPath)", accent: RoachPalette.bronze)
+    }
+
+    private var archiveStatusText: some View {
+        Text(store.statusLine)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(RoachPalette.muted)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var archiveSearchField: some View {
+        TextField("Title, author, ISBN, DOI, keyword", text: $store.query)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(RoachPalette.text)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.black.opacity(0.22))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(RoachPalette.borderStrong, lineWidth: 1)
+            )
+            .onSubmit {
+                Task { await store.search() }
+            }
+    }
+
+    private var archiveSearchButton: some View {
+        Button {
+            Task { await store.search() }
+        } label: {
+            Label(store.isSearching ? "Searching" : "Search", systemImage: "magnifyingglass")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachPrimaryButtonStyle())
+        .disabled(store.isSearching)
+        .accessibilityLabel("Search Roach archive")
+    }
+
+    private var archiveRefreshButton: some View {
+        Button {
+            Task { await store.refreshTorrentManifest() }
+        } label: {
+            Label(store.isRefreshingTorrents ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+        .disabled(store.isRefreshingTorrents)
+    }
+
+    private var archiveEmptyState: some View {
+        RoachSpotlightPanel(accent: RoachPalette.cyan) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    archiveEmptyStateCopy
+                    Spacer(minLength: 12)
+                    archiveEmptyStateActions
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    archiveEmptyStateCopy
+                    archiveEmptyStateActions
+                }
+            }
+        }
+    }
+
+    private var archiveEmptyStateCopy: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "books.vertical.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(RoachPalette.cyan)
+                .frame(width: 44, height: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(RoachPalette.panelGlass)
+                )
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Build the local shelf." : "No match in the stacks yet.")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(RoachPalette.text)
+                Text(store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Search title, author, DOI, ISBN, or keyword." : "Try a broader title, author, DOI, or ISBN.")
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(RoachPalette.muted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var archiveEmptyStateActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                archiveSearchButton
+                archiveRefreshButton
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                archiveSearchButton
+                archiveRefreshButton
             }
         }
     }
 
     private var resultsGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], alignment: .leading, spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], alignment: .leading, spacing: 12) {
             ForEach(store.results) { result in
                 RoachArchiveResultCard(result: result) {
                     Task {
@@ -108,43 +304,100 @@ struct RoachArchiveVaultPanel: View {
             RoachSectionHeader(
                 "Bookshelf",
                 title: "Recently added",
-                detail: "Files and metadata land in Vault. If a mirror only exposes metadata, RoachNet keeps the record ready for a local copy later."
+                detail: nil
             )
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 12)], alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], alignment: .leading, spacing: 12) {
                 ForEach(store.vaultRecords.prefix(6)) { record in
-                    Button {
-                        if let filePath = record.filePath {
-                            model.previewVaultFile(filePath)
-                        } else {
-                            model.previewVaultFile(record.metadataPath)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button {
+                            store.markOpened(record.id)
+                            if let filePath = record.filePath {
+                                model.previewVaultFile(filePath)
+                            } else {
+                                model.previewVaultFile(record.metadataPath)
+                            }
+                        } label: {
+                            VaultVirtualShelfCard(
+                                title: record.result.title,
+                                detail: record.result.authors.isEmpty ? record.status : record.result.authors.joined(separator: ", "),
+                                pathLabel: record.filePath ?? record.metadataPath,
+                                kindLabel: record.result.format?.uppercased() ?? "Book",
+                                actionLabel: "Open in Vault",
+                                accent: record.filePath == nil ? RoachPalette.bronze : RoachPalette.magenta,
+                                fallbackSystemName: "book.closed.fill",
+                                extraTags: archiveRecordTags(record)
+                            )
                         }
-                    } label: {
-                        VaultVirtualShelfCard(
-                            title: record.result.title,
-                            detail: record.result.authors.isEmpty ? record.status : record.result.authors.joined(separator: ", "),
-                            pathLabel: record.filePath ?? record.metadataPath,
-                            kindLabel: record.result.format?.uppercased() ?? "Book",
-                            actionLabel: "Open in Vault",
-                            accent: record.filePath == nil ? RoachPalette.bronze : RoachPalette.magenta,
-                            fallbackSystemName: "book.closed.fill",
-                            extraTags: [record.result.source, record.status]
-                        )
+                        .buttonStyle(RoachCardButtonStyle())
+
+                        ProgressView(value: record.readingProgress)
+                            .progressViewStyle(.linear)
+                            .tint(record.readingProgress >= 1 ? RoachPalette.green : RoachPalette.magenta)
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) {
+                                archiveRecordActions(record)
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                archiveRecordActions(record)
+                            }
+                        }
                     }
-                    .buttonStyle(RoachCardButtonStyle())
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func archiveRecordActions(_ record: RoachArchiveVaultRecord) -> some View {
+        if record.filePath == nil {
+            Button {
+                if let url = chooseBookFile(), let attached = store.attachLocalBook(url, to: record.id) {
+                    model.previewVaultURL(attached)
+                }
+            } label: {
+                Label("Attach", systemImage: "paperclip")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(RoachSecondaryButtonStyle())
+        }
+
+        Button {
+            store.updateReadingProgress(0.25, for: record.id)
+        } label: {
+            Label("25%", systemImage: "bookmark")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+
+        Button {
+            store.updateReadingProgress(1, for: record.id)
+        } label: {
+            Label("Read", systemImage: "checkmark.circle")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
+    private func archiveRecordTags(_ record: RoachArchiveVaultRecord) -> [String] {
+        var tags = [record.result.source, record.status]
+        if record.readingProgress > 0 {
+            tags.append("\(Int(record.readingProgress * 100))%")
+        }
+        tags.append(contentsOf: record.tags.prefix(2))
+        return tags
     }
 
     private var torrentStrip: some View {
         VStack(alignment: .leading, spacing: 10) {
             RoachSectionHeader(
                 "Torrent Index",
-                title: "Bulk lanes, not scrape jobs.",
+                title: "Metadata lanes.",
                 detail: store.torrentItems.isEmpty
-                    ? "Refresh the torrent manifest to see Anna's metadata and data lanes."
-                    : "Use these records to seed a local Roach's Archive mirror/API. RoachNet searches that mirror first."
+                    ? "Refresh the manifest."
+                    : "Local mirror. Public API spine."
             )
 
             if !store.torrentItems.isEmpty {
@@ -216,6 +469,26 @@ struct RoachArchiveVaultPanel: View {
             }
         }
     }
+
+    private func chooseBookFile() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "Attach a local book or document"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [
+            .pdf,
+            UTType(filenameExtension: "epub") ?? .data,
+            UTType(filenameExtension: "mobi") ?? .data,
+            UTType(filenameExtension: "azw") ?? .data,
+            UTType(filenameExtension: "azw3") ?? .data,
+            UTType(filenameExtension: "cbz") ?? .zip,
+            UTType(filenameExtension: "cbr") ?? .data,
+            .plainText,
+            .data,
+        ]
+        return panel.runModal() == .OK ? panel.url : nil
+    }
 }
 
 private struct RoachArchiveResultCard: View {
@@ -235,11 +508,13 @@ private struct RoachArchiveResultCard: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(RoachPalette.text)
                         .lineLimit(2)
+                        .truncationMode(.tail)
                     if !result.authors.isEmpty {
                         Text(result.authors.joined(separator: ", "))
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
             }

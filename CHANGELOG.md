@@ -4,6 +4,34 @@
 
 - No unreleased changes.
 
+## v1.0.5 - 2026-05-18
+
+### Native shell and installer
+
+- Rebuilt RoachNet around the Apple Silicon native macOS shell, keeping Electron/WebUI out of the shipping lane and moving the product toward one contained desktop app instead of a stack of web windows wearing a trench coat.
+- Polished the main app frame, command bar, About RoachNet panel, Settings/Updates lane, in-app guide, and long-scroll surfaces so content stops hiding behind chrome and the app behaves like a real consumer desktop product.
+- Cut the native app bundle down to about `404M` and the setup app to about `540M` by keeping heavy speech/model packs optional instead of stapling every possible brick to the installer.
+- Verified the setup app overwrite flow and the Homebrew lane against the rebuilt DMG on Apple Silicon. Still unsigned until RoachWares has a Developer ID, but the bits install and boot locally.
+
+### RoachClaw, RoachSpeech, and command bar
+
+- Added the RoachNet-owned native RoachClaw agent spine with local context budgeting, RoachBrain memory/wiki support, and Hermes-inspired planning without shipping Hermes as an upstream runtime dependency.
+- Added native RoachSpeech model-pack support with Core ML pack validation, local install APIs, bundled RoachWhisper/Kokoro packs, and an optional Chatterbox voice-cloning pack for users who want the heavier voice lane.
+- Reworked the Raycast-style command bar around `Ctrl-Cmd-R`, in-app/global command launching, RoachClaw prompts, guide/about/settings routing, and tighter copy that says what it does without writing a novel on the button.
+
+### Vault, RoachArcade, Dev, and Maps
+
+- Expanded Vault with drag/drop import, reader/player/preview upgrades, book metadata search scaffolding, safer destination handling, and transcript/lyrics sidecar planning for media in the vault.
+- Expanded RoachArcade with ES-DE import, ROM metadata handling, emulator/player scaffolding, mod/cheat metadata, Vortex manifest import tests, and Windows-runner readiness checks.
+- Reworked Dev into a larger IDE-style workbench with explorer, editor, terminal transcript, inline RoachClaw assist, project context, and less dead copy taking up room that should belong to tools.
+- Added native Maps/GPS support paths, curated pack metadata, phone GPS packet parsing, stale/live fix labeling, and offline map-source profiles.
+
+### Public release rails
+
+- Moved public release surfaces to the RoachWares organization lanes, updated Blacksmith-backed CI, Convex metadata wiring, Homebrew cask metadata, SideStore feed metadata, wiki/API/docs, and RoachNet.org v1.0.5/v0.1.5 install pages.
+- Added first-party RoachVoice/RoachWhisper model packs and stack bundles to the RoachNet Apps catalog so optional heavy lanes can be installed into RoachNet instead of bloating the base app.
+- Rebuilt the RoachNetiOS v0.1.5 unsigned IPA with refreshed Apps, Runtime, Vault, and RoachClaw surfaces plus updated SideStore/AltStore install metadata.
+
 ## v1.0 - 2026-04-04
 
 ### Contained installer and clean-machine runtime
@@ -29,7 +57,7 @@
 ### Dev Studio and command bar
 
 - Expanded the native `Dev` lane with richer project bootstraps, grouped secret templates, inline code suggestions, contextual shell commands, and one-tap insertion of RoachClaw responses back into the active document.
-- Added a detached global command bar on `Shift-Command-R` so RoachNet can surface a compact launcher panel over the desktop without pulling the full shell forward when the app is not active.
+- Added a detached global command bar on `Ctrl-Cmd-R` so RoachNet can surface a compact launcher panel over the desktop without pulling the full shell forward when the app is not active.
 
 ### Apps catalog and install handoff
 

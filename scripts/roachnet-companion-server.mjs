@@ -5,15 +5,32 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
+import {
+  buildUpstreamCompanionUrl,
+  isCompanionProxyPath,
+  resolveCompanionTargetOrigin,
+  sanitizeUserFacingHost,
+} from './lib/roachnet_companion_security.mjs'
+import { requestLocalRuntimeHttp } from './lib/roachnet_http.mjs'
 
-const host = process.env.ROACHNET_COMPANION_HOST?.trim() || '0.0.0.0'
+const host = process.env.ROACHNET_COMPANION_HOST?.trim() || '127.0.0.1'
 const port = Number(process.env.ROACHNET_COMPANION_PORT || '38111')
 const token = process.env.ROACHNET_COMPANION_TOKEN?.trim() || ''
-const targetOrigin = process.env.ROACHNET_COMPANION_TARGET_URL?.trim() || 'http://127.0.0.1:8080'
+const maxRequestBodyBytes = positiveIntegerEnv('ROACHNET_COMPANION_MAX_BODY_BYTES', 2 * 1024 * 1024)
+const maxResponseBodyBytes = positiveIntegerEnv('ROACHNET_COMPANION_MAX_RESPONSE_BYTES', 10 * 1024 * 1024)
+const upstreamTimeoutMs = positiveIntegerEnv('ROACHNET_COMPANION_UPSTREAM_TIMEOUT_MS', 30_000)
+const targetOrigin = resolveCompanionTargetOrigin(
+  process.env.ROACHNET_COMPANION_TARGET_URL?.trim() || 'http://127.0.0.1:8080'
+)
 const storagePath =
   process.env.ROACHNET_STORAGE_PATH?.trim() || process.env.ROACHNET_HOST_STORAGE_PATH?.trim() || ''
 const roachTailStatePath = storagePath ? path.join(storagePath, 'vault', 'roachtail', 'state.json') : ''
 const roachNetAliasHost = process.env.ROACHNET_LOCAL_HOSTNAME?.trim() || 'RoachNet'
+
+function positiveIntegerEnv(name, fallback) {
+  const value = Number(process.env[name])
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback
+}
 
 function writeJson(response, statusCode, payload) {
   const body = JSON.stringify(payload)
@@ -27,11 +44,35 @@ function writeJson(response, statusCode, payload) {
   response.end(body)
 }
 
+class RequestBodyTooLargeError extends Error {
+  constructor(limit) {
+    super(`Companion request body is larger than ${limit} bytes.`)
+    this.statusCode = 413
+  }
+}
+
 function readBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = []
+    let size = 0
 
-    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+    const contentLength = Number(request.headers['content-length'] || 0)
+    if (contentLength > maxRequestBodyBytes) {
+      reject(new RequestBodyTooLargeError(maxRequestBodyBytes))
+      request.destroy()
+      return
+    }
+
+    request.on('data', (chunk) => {
+      const buffer = Buffer.from(chunk)
+      size += buffer.byteLength
+      if (size > maxRequestBodyBytes) {
+        reject(new RequestBodyTooLargeError(maxRequestBodyBytes))
+        request.destroy()
+        return
+      }
+      chunks.push(buffer)
+    })
     request.on('end', () => resolve(Buffer.concat(chunks)))
     request.on('error', reject)
   })
@@ -53,36 +94,6 @@ function extractToken(request) {
 
 function hashToken(value) {
   return createHash('sha256').update(value).digest('hex')
-}
-
-function isIPAddress(host) {
-  const normalized = host.trim().replace(/^\[|\]$/g, '')
-  return /^(\d{1,3}\.){3}\d{1,3}$/.test(normalized) || /^[0-9a-f:]+$/i.test(normalized)
-}
-
-function isLoopbackHost(host) {
-  const normalized = host.trim().replace(/^\[|\]$/g, '').toLowerCase()
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '0.0.0.0'
-}
-
-function sanitizeUserFacingHost(rawValue) {
-  const trimmed = rawValue?.trim()
-  if (!trimmed) {
-    return roachNetAliasHost
-  }
-
-  try {
-    const parsed = new URL(trimmed)
-    if (isLoopbackHost(parsed.hostname) || isIPAddress(parsed.hostname)) {
-      return roachNetAliasHost
-    }
-    return parsed.host || parsed.hostname || roachNetAliasHost
-  } catch {
-    if (isLoopbackHost(trimmed) || isIPAddress(trimmed)) {
-      return roachNetAliasHost
-    }
-    return trimmed
-  }
 }
 
 async function resolvePeerToken(tokenValue, { allowDisabled = false } = {}) {
@@ -153,19 +164,19 @@ function requestPeerEndpoint(request) {
   const forwardedHost = request.headers['x-forwarded-host']
   const forwardedHostValue = Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost
   if (forwardedHostValue?.trim()) {
-    return sanitizeUserFacingHost(forwardedHostValue)
+    return sanitizeUserFacingHost(forwardedHostValue, roachNetAliasHost)
   }
 
   const forwardedFor = request.headers['x-forwarded-for']
   const forwardedValue = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
   const firstForwarded = forwardedValue?.split(',')[0]?.trim()
   if (firstForwarded) {
-    return sanitizeUserFacingHost(firstForwarded)
+    return sanitizeUserFacingHost(firstForwarded, roachNetAliasHost)
   }
 
   const remoteAddress = request.socket.remoteAddress?.trim()
   if (remoteAddress) {
-    return sanitizeUserFacingHost(remoteAddress)
+    return sanitizeUserFacingHost(remoteAddress, roachNetAliasHost)
   }
 
   return roachNetAliasHost
@@ -216,8 +227,8 @@ async function recordPeerActivity(authContext, request) {
   }
 }
 
-async function proxyRequest(request, response, pathname, authContext = null) {
-  const upstreamUrl = new URL(pathname, targetOrigin)
+async function proxyRequest(request, response, requestUrl, authContext = null) {
+  const upstreamUrl = buildUpstreamCompanionUrl(requestUrl, targetOrigin)
   const method = request.method || 'GET'
   const bodyBuffer = method === 'GET' || method === 'HEAD' ? null : await readBody(request)
 
@@ -239,22 +250,22 @@ async function proxyRequest(request, response, pathname, authContext = null) {
 
   await recordPeerActivity(authContext, request)
 
-  const upstreamResponse = await fetch(upstreamUrl, {
+  const upstreamResponse = await requestLocalRuntimeHttp(upstreamUrl, {
     method,
     headers: upstreamHeaders,
     body: bodyBuffer && bodyBuffer.length > 0 ? bodyBuffer : undefined,
+    timeoutMs: upstreamTimeoutMs,
+    maxResponseBytes: maxResponseBodyBytes,
   })
-
-  const payload = Buffer.from(await upstreamResponse.arrayBuffer())
 
   response.writeHead(upstreamResponse.status, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-RoachNet-Companion-Token',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Cache-Control': 'no-store',
-    'Content-Type': upstreamResponse.headers.get('content-type') || 'application/json; charset=utf-8',
+    'Content-Type': upstreamResponse.headers['content-type'] || 'application/json; charset=utf-8',
   })
-  response.end(payload)
+  response.end(upstreamResponse.body)
 }
 
 const server = createServer(async (request, response) => {
@@ -283,7 +294,7 @@ const server = createServer(async (request, response) => {
 
   const pairingRequest = pathname === '/api/companion/roachtail/pair' && request.method === 'POST'
 
-  if (!pathname.startsWith('/api/companion')) {
+  if (!isCompanionProxyPath(pathname)) {
     writeJson(response, 404, {
       error: 'Not found',
     })
@@ -300,10 +311,15 @@ const server = createServer(async (request, response) => {
   }
 
   try {
-    await proxyRequest(request, response, `${pathname}${url.search}`, authContext)
+    await proxyRequest(request, response, url, authContext)
   } catch (error) {
-    writeJson(response, 502, {
-      error: error instanceof Error ? error.message : 'Failed to proxy companion request',
+    const statusCode = Number(error?.statusCode || 502)
+    writeJson(response, statusCode, {
+      error: statusCode === 413
+        ? 'Companion request body is too large.'
+        : error instanceof Error
+          ? error.message
+          : 'Failed to proxy companion request',
     })
   }
 })

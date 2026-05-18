@@ -3,6 +3,157 @@ import Foundation
 import GameController
 import WebKit
 
+private struct RoachArcadeESDEGame {
+    var title: String
+    var system: String
+    var romPath: String
+    var artworkPath: String?
+    var notes: String
+}
+
+private final class RoachArcadeESDEGameListParser: NSObject, XMLParserDelegate {
+    private let baseURL: URL
+    private let system: String
+    private var currentElement = ""
+    private var currentValues: [String: String] = [:]
+    private var currentText = ""
+    private var insideGame = false
+
+    private(set) var games: [RoachArcadeESDEGame] = []
+
+    init(baseURL: URL, system: String) {
+        self.baseURL = baseURL
+        self.system = system
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        if elementName == "game" {
+            insideGame = true
+            currentValues = [:]
+            currentText = ""
+            currentElement = ""
+            return
+        }
+
+        guard insideGame else { return }
+        currentElement = elementName
+        currentText = ""
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard insideGame, !currentElement.isEmpty else { return }
+        currentText += string
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        guard insideGame else { return }
+
+        if elementName == "game" {
+            if let game = buildGame() {
+                games.append(game)
+            }
+            insideGame = false
+            currentElement = ""
+            currentValues = [:]
+            currentText = ""
+            return
+        }
+
+        if elementName == currentElement {
+            currentValues[elementName] = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            currentElement = ""
+            currentText = ""
+        }
+    }
+
+    private func buildGame() -> RoachArcadeESDEGame? {
+        guard let rawPath = currentValues["path"], !rawPath.isEmpty else { return nil }
+
+        let romPath = resolveESDEPath(rawPath, baseURL: baseURL)
+        let title = currentValues["name"]?.nilIfBlank
+            ?? URL(fileURLWithPath: romPath).deletingPathExtension().lastPathComponent
+        let artworkPath = currentValues["image"].flatMap { value in
+            value.nilIfBlank.map { resolveESDEPath($0, baseURL: baseURL) }
+        }
+        let notes = currentValues["desc"]?.nilIfBlank ?? ""
+
+        return RoachArcadeESDEGame(
+            title: title,
+            system: system,
+            romPath: romPath,
+            artworkPath: artworkPath,
+            notes: notes
+        )
+    }
+
+    private func resolveESDEPath(_ rawValue: String, baseURL: URL) -> String {
+        let expanded = NSString(string: rawValue).expandingTildeInPath
+        if let url = URL(string: expanded), url.isFileURL {
+            return url.path
+        }
+        if expanded.hasPrefix("/") {
+            return expanded
+        }
+
+        let trimmed = expanded.hasPrefix("./") ? String(expanded.dropFirst(2)) : expanded
+        return baseURL.appendingPathComponent(trimmed).standardizedFileURL.path
+    }
+}
+
+struct RoachArcadeRunnerDiagnostic: Identifiable, Hashable {
+    var id: String
+    var label: String
+    var value: String
+    var detail: String
+    var isReady: Bool
+}
+
+struct RoachArcadeSystemSummary: Identifiable, Hashable {
+    var id: String { system }
+    var system: String
+    var count: Int
+    var playable: Int
+    var core: String?
+
+    var readinessLabel: String {
+        "\(playable)/\(count) boot"
+    }
+}
+
+enum RoachArcadeHTMLSanitizer {
+    static func javaScriptStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let literal = String(data: data, encoding: .utf8)
+        else {
+            return "\"\""
+        }
+        return scriptSafeJavaScriptLiteral(literal)
+    }
+
+    static func javaScriptLiteral(jsonData: Data) -> String {
+        let literal = String(data: jsonData, encoding: .utf8) ?? "null"
+        return scriptSafeJavaScriptLiteral(literal)
+    }
+
+    static func htmlAttributeValue(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private static func scriptSafeJavaScriptLiteral(_ literal: String) -> String {
+        literal
+            .replacingOccurrences(of: "&", with: "\\u0026")
+            .replacingOccurrences(of: "<", with: "\\u003C")
+            .replacingOccurrences(of: ">", with: "\\u003E")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    }
+}
+
 @MainActor
 final class RoachArcadeLibraryStore: ObservableObject {
     @Published private(set) var library: RoachArcadeLibrary = .empty
@@ -11,6 +162,7 @@ final class RoachArcadeLibraryStore: ObservableObject {
     @Published var statusLine = "RoachArcade ready."
     @Published var errorLine: String?
     @Published var searchText = ""
+    @Published var libraryFilter: RoachArcadeLibraryFilter = .all
     @Published private(set) var connectedControllers: [String] = []
 
     private var storageRoot: URL?
@@ -32,18 +184,19 @@ final class RoachArcadeLibraryStore: ObservableObject {
 
     var filteredGames: [RoachArcadeGame] {
         let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return games }
         return games.filter { game in
-            [
-                game.title,
-                game.system,
-                game.source,
-                game.tags.joined(separator: " "),
-                game.notes,
-            ]
-            .joined(separator: " ")
-            .lowercased()
-            .contains(needle)
+            matchesFilter(game) && (
+                needle.isEmpty || [
+                    game.title,
+                    game.system,
+                    game.source,
+                    game.tags.joined(separator: " "),
+                    game.notes,
+                ]
+                .joined(separator: " ")
+                .lowercased()
+                .contains(needle)
+            )
         }
     }
 
@@ -65,8 +218,9 @@ final class RoachArcadeLibraryStore: ObservableObject {
         connectedControllers.isEmpty ? "None" : connectedControllers.joined(separator: ", ")
     }
 
-    var stats: (games: Int, roms: Int, native: Int, windows: Int, profiles: Int, cheats: Int, playable: Int) {
+    var stats: (games: Int, roms: Int, native: Int, windows: Int, profiles: Int, cheats: Int, playable: Int, attention: Int, favorites: Int, recent: Int) {
         let refreshed = games
+        let recentCutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? .distantPast
         return (
             games: refreshed.count,
             roms: refreshed.filter { $0.kind == .rom }.count,
@@ -74,8 +228,95 @@ final class RoachArcadeLibraryStore: ObservableObject {
             windows: refreshed.filter { $0.kind == .windows }.count,
             profiles: library.modProfiles.count,
             cheats: refreshed.reduce(0) { $0 + $1.cheats.count },
-            playable: refreshed.filter { $0.status == .ready }.count
+            playable: refreshed.filter { $0.status == .ready }.count,
+            attention: refreshed.filter { $0.status != .ready && $0.status != .tracked }.count,
+            favorites: refreshed.filter(\.favorite).count,
+            recent: refreshed.filter { ($0.lastPlayedAt ?? .distantPast) >= recentCutoff }.count
         )
+    }
+
+    var systemShelf: [RoachArcadeSystemSummary] {
+        let grouped = Dictionary(grouping: games) { game in
+            let trimmed = game.system.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? game.kind.label : trimmed
+        }
+
+        return grouped.map { system, games in
+            RoachArcadeSystemSummary(
+                system: system,
+                count: games.count,
+                playable: games.filter { $0.status == .ready }.count,
+                core: games.first?.resolvedCore
+            )
+        }
+        .sorted {
+            if $0.count != $1.count {
+                return $0.count > $1.count
+            }
+            return $0.system.localizedCaseInsensitiveCompare($1.system) == .orderedAscending
+        }
+    }
+
+    var runnerDiagnostics: [RoachArcadeRunnerDiagnostic] {
+        let emulatorPath = library.emulatorJSDataPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let emulatorReady = emulatorPath.isEmpty
+            || emulatorPath.hasPrefix("http://")
+            || emulatorPath.hasPrefix("https://")
+            || firstExistingPath([emulatorPath]) != nil
+        let gamePortingPath = firstExistingPath([
+            library.gamePortingToolkitRunnerPath,
+            "/opt/homebrew/bin/gameportingtoolkit",
+            "/usr/local/bin/gameportingtoolkit",
+        ])
+        let crossoverPath = firstExistingPath([
+            library.crossoverAppPath,
+            "/Applications/CrossOver.app",
+        ])
+        let winePath = firstExistingPath([
+            library.wineRunnerPath,
+            "/opt/homebrew/bin/wine64",
+            "/usr/local/bin/wine64",
+            "/opt/homebrew/bin/wine",
+            "/usr/local/bin/wine",
+        ])
+
+        return [
+            RoachArcadeRunnerDiagnostic(
+                id: "emulatorjs",
+                label: "EmulatorJS",
+                value: emulatorReady ? "Ready" : "Missing",
+                detail: emulatorPath.isEmpty ? "Using CDN fallback" : emulatorPath,
+                isReady: emulatorReady
+            ),
+            RoachArcadeRunnerDiagnostic(
+                id: "gptk",
+                label: "Game Porting Toolkit",
+                value: gamePortingPath == nil ? "Missing" : "Ready",
+                detail: gamePortingPath ?? "Set a runner path for Windows games.",
+                isReady: gamePortingPath != nil
+            ),
+            RoachArcadeRunnerDiagnostic(
+                id: "crossover",
+                label: "CrossOver",
+                value: crossoverPath == nil ? "Missing" : "Ready",
+                detail: crossoverPath ?? "Install CrossOver or point RoachNet at the app.",
+                isReady: crossoverPath != nil
+            ),
+            RoachArcadeRunnerDiagnostic(
+                id: "wine",
+                label: "Wine",
+                value: winePath == nil ? "Missing" : "Ready",
+                detail: winePath ?? "Install wine64 with Homebrew or set a custom path.",
+                isReady: winePath != nil
+            ),
+            RoachArcadeRunnerDiagnostic(
+                id: "controllers",
+                label: "Controllers",
+                value: connectedControllers.isEmpty ? "None" : "\(connectedControllers.count)",
+                detail: connectedControllerSummary,
+                isReady: !connectedControllers.isEmpty
+            ),
+        ]
     }
 
     func configure(storagePath: String) {
@@ -128,15 +369,16 @@ final class RoachArcadeLibraryStore: ObservableObject {
         do {
             let candidates = try scanROMs(in: folderURL)
             var imported = 0
+            var existingROMPaths = Set(library.games.compactMap(\.romPath))
             for romURL in candidates {
-                if library.games.contains(where: { $0.romPath == romURL.path }) {
+                if !existingROMPaths.insert(romURL.path).inserted {
                     continue
                 }
                 let title = romURL.deletingPathExtension().lastPathComponent
                     .replacingOccurrences(of: "_", with: " ")
                     .replacingOccurrences(of: "-", with: " ")
                 let system = RoachArcadeCoreResolver.system(forROM: romURL)
-                upsert(
+                appendImportedGame(
                     RoachArcadeGame(
                         title: title,
                         kind: .rom,
@@ -149,9 +391,45 @@ final class RoachArcadeLibraryStore: ObservableObject {
                 )
                 imported += 1
             }
-            statusLine = "Imported \(imported) ROM\(imported == 1 ? "" : "s") from \(folderURL.lastPathComponent)."
+            persistAfterMutation("Imported \(imported) ROM\(imported == 1 ? "" : "s") from \(folderURL.lastPathComponent).")
         } catch {
             errorLine = "ROM scan failed: \(error.localizedDescription)"
+        }
+    }
+
+    func importESDELibrary(_ folderURL: URL) {
+        do {
+            let entries = try scanESDEGameLists(in: folderURL)
+            guard !entries.isEmpty else {
+                importROMFolder(folderURL)
+                return
+            }
+
+            var imported = 0
+            var existingROMPaths = Set(library.games.compactMap(\.romPath))
+            for entry in entries {
+                if !existingROMPaths.insert(entry.romPath).inserted {
+                    continue
+                }
+                appendImportedGame(
+                    RoachArcadeGame(
+                        title: entry.title,
+                        kind: .rom,
+                        system: entry.system,
+                        source: "ES-DE",
+                        romPath: entry.romPath,
+                        artworkPath: entry.artworkPath,
+                        emulatorCore: RoachArcadeCoreResolver.core(forSystem: entry.system, path: entry.romPath),
+                        notes: entry.notes,
+                        tags: ["es-de", "rom", entry.system]
+                    )
+                )
+                imported += 1
+            }
+
+            persistAfterMutation("Imported \(imported) of \(entries.count) ES-DE game\(entries.count == 1 ? "" : "s").")
+        } catch {
+            errorLine = "ES-DE import failed: \(error.localizedDescription)"
         }
     }
 
@@ -171,6 +449,35 @@ final class RoachArcadeLibraryStore: ObservableObject {
         statusLine = "Added \(title)."
     }
 
+    func importInstalledMacGames(from folderURL: URL = URL(fileURLWithPath: "/Applications", isDirectory: true)) {
+        do {
+            let apps = try scanApplications(in: folderURL)
+            var imported = 0
+            for appURL in apps {
+                if library.games.contains(where: { $0.executablePath == appURL.path }) {
+                    continue
+                }
+                let title = appURL.deletingPathExtension().lastPathComponent
+                if mergeGame(
+                    RoachArcadeGame(
+                        title: title,
+                        kind: .macOS,
+                        system: "macOS",
+                        source: folderURL.path == "/Applications" ? "Applications scan" : folderURL.lastPathComponent,
+                        executablePath: appURL.path,
+                        installPath: appURL.deletingLastPathComponent().path,
+                        tags: ["macOS", "scanned"]
+                    )
+                ) {
+                    imported += 1
+                }
+            }
+            persistAfterMutation("Scanned \(apps.count) app\(apps.count == 1 ? "" : "s"); imported \(imported).")
+        } catch {
+            errorLine = "Application scan failed: \(error.localizedDescription)"
+        }
+    }
+
     func importWindowsGame(_ executableURL: URL, runner: RoachArcadeCompatibilityRunner = .gamePortingToolkit) {
         let title = executableURL.deletingPathExtension().lastPathComponent
         upsert(
@@ -186,6 +493,44 @@ final class RoachArcadeLibraryStore: ObservableObject {
             )
         )
         statusLine = "Added \(title) for \(runner.label)."
+    }
+
+    func toggleFavorite(_ gameID: UUID) {
+        guard let index = library.games.firstIndex(where: { $0.id == gameID }) else { return }
+        library.games[index].favorite.toggle()
+        library.games[index].updatedAt = Date()
+        persistAfterMutation(library.games[index].favorite ? "Pinned \(library.games[index].title) to favorites." : "Removed favorite.")
+    }
+
+    func updateGameMetadata(
+        gameID: UUID,
+        notes: String,
+        tagsText: String,
+        artworkPath: String,
+        storeURL: String,
+        runnerPath: String,
+        bottlePath: String
+    ) {
+        guard let index = library.games.firstIndex(where: { $0.id == gameID }) else { return }
+        library.games[index].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        library.games[index].tags = tagsText
+            .split { $0 == "," || $0 == "\n" }
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniqued()
+        library.games[index].artworkPath = artworkPath.nilIfBlank
+        library.games[index].storeURL = storeURL.nilIfBlank
+        library.games[index].runnerPath = runnerPath.nilIfBlank
+        library.games[index].bottlePath = bottlePath.nilIfBlank
+        library.games[index].updatedAt = Date()
+        persistAfterMutation("Updated \(library.games[index].title).")
+    }
+
+    func setCompatibilityRunner(_ runner: RoachArcadeCompatibilityRunner, for gameID: UUID) {
+        guard let index = library.games.firstIndex(where: { $0.id == gameID }) else { return }
+        library.games[index].compatibilityRunner = runner
+        library.games[index].updatedAt = Date()
+        persistAfterMutation("Updated runner for \(library.games[index].title).")
     }
 
     func addCheat(to gameID: UUID, name: String, code: String) {
@@ -271,6 +616,55 @@ final class RoachArcadeLibraryStore: ObservableObject {
         persistAfterMutation("Imported \(entry.name) into \(library.modProfiles[profileIndex].name).")
     }
 
+    func setModEnabled(_ enabled: Bool, modID: UUID, profileID: UUID) {
+        guard
+            let profileIndex = library.modProfiles.firstIndex(where: { $0.id == profileID }),
+            let modIndex = library.modProfiles[profileIndex].mods.firstIndex(where: { $0.id == modID })
+        else {
+            return
+        }
+
+        library.modProfiles[profileIndex].mods[modIndex].enabled = enabled
+        library.modProfiles[profileIndex].updatedAt = Date()
+        persistAfterMutation(enabled ? "Enabled mod." : "Disabled mod.")
+    }
+
+    func moveMod(_ modID: UUID, profileID: UUID, direction: Int) {
+        guard
+            direction != 0,
+            let profileIndex = library.modProfiles.firstIndex(where: { $0.id == profileID }),
+            let currentIndex = library.modProfiles[profileIndex].mods.firstIndex(where: { $0.id == modID })
+        else {
+            return
+        }
+
+        let targetIndex = max(0, min(library.modProfiles[profileIndex].mods.count - 1, currentIndex + direction))
+        guard targetIndex != currentIndex else { return }
+
+        library.modProfiles[profileIndex].mods.swapAt(currentIndex, targetIndex)
+        for index in library.modProfiles[profileIndex].mods.indices {
+            library.modProfiles[profileIndex].mods[index].loadOrder = index + 1
+        }
+        library.modProfiles[profileIndex].updatedAt = Date()
+        persistAfterMutation("Updated mod load order.")
+    }
+
+    func removeMod(_ modID: UUID, profileID: UUID) {
+        guard let profileIndex = library.modProfiles.firstIndex(where: { $0.id == profileID }) else { return }
+        library.modProfiles[profileIndex].mods.removeAll { $0.id == modID }
+        for index in library.modProfiles[profileIndex].mods.indices {
+            library.modProfiles[profileIndex].mods[index].loadOrder = index + 1
+        }
+        library.modProfiles[profileIndex].updatedAt = Date()
+        persistAfterMutation("Removed mod.")
+    }
+
+    func deleteProfile(_ profileID: UUID) {
+        library.modProfiles.removeAll { $0.id == profileID }
+        library.vortexCollections.removeAll { $0.profileID == profileID }
+        persistAfterMutation("Deleted mod profile.")
+    }
+
     func importVortexCollection(
         gameID: UUID,
         title: String,
@@ -283,24 +677,9 @@ final class RoachArcadeLibraryStore: ObservableObject {
         var mods: [RoachArcadeModEntry] = []
 
         if let localFolderURL {
-            let folders = (try? fileManager.contentsOfDirectory(
-                at: localFolderURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-
-            for folder in folders {
-                let values = try? folder.resourceValues(forKeys: [.isDirectoryKey])
-                if values?.isDirectory == true {
-                    mods.append(
-                        RoachArcadeModEntry(
-                            name: folder.lastPathComponent,
-                            sourcePath: folder.path,
-                            loadOrder: mods.count + 1,
-                            conflictGroup: profileName
-                        )
-                    )
-                }
+            mods = parseVortexManifest(in: localFolderURL, profileName: profileName)
+            if mods.isEmpty {
+                mods = scanModFolders(in: localFolderURL, profileName: profileName)
             }
         }
 
@@ -383,6 +762,11 @@ final class RoachArcadeLibraryStore: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
+    func revealLibraryFolder() {
+        guard let storageRoot else { return }
+        NSWorkspace.shared.open(storageRoot)
+    }
+
     func remove(_ game: RoachArcadeGame) {
         library.games.removeAll { $0.id == game.id }
         library.modProfiles.removeAll { $0.gameID == game.id }
@@ -394,6 +778,12 @@ final class RoachArcadeLibraryStore: ObservableObject {
     }
 
     private func upsert(_ game: RoachArcadeGame) {
+        _ = mergeGame(game)
+        persistAfterMutation(nil)
+    }
+
+    @discardableResult
+    private func mergeGame(_ game: RoachArcadeGame) -> Bool {
         var next = refreshStatus(game)
         next.updatedAt = Date()
 
@@ -409,12 +799,19 @@ final class RoachArcadeLibraryStore: ObservableObject {
             next.lastPlayedAt = existing.lastPlayedAt
             next.createdAt = existing.createdAt
             library.games[existingIndex] = next
+            return false
         } else {
             library.games.append(next)
             selectedGameID = next.id
+            return true
         }
+    }
 
-        persistAfterMutation(nil)
+    private func appendImportedGame(_ game: RoachArcadeGame) {
+        var next = refreshStatus(game)
+        next.updatedAt = Date()
+        library.games.append(next)
+        selectedGameID = next.id
     }
 
     private func persistAfterMutation(_ message: String?) {
@@ -425,6 +822,32 @@ final class RoachArcadeLibraryStore: ObservableObject {
             }
         } catch {
             errorLine = "RoachArcade could not save: \(error.localizedDescription)"
+        }
+    }
+
+    private func matchesFilter(_ game: RoachArcadeGame) -> Bool {
+        switch libraryFilter {
+        case .all:
+            return true
+        case .ready:
+            return game.status == .ready
+        case .attention:
+            return game.status != .ready && game.status != .tracked
+        case .favorites:
+            return game.favorite
+        case .roms:
+            return game.kind == .rom
+        case .native:
+            return game.kind == .macOS || game.kind == .pc
+        case .windows:
+            return game.kind == .windows
+        case .modded:
+            return library.modProfiles.contains { $0.gameID == game.id && !$0.mods.isEmpty }
+        case .cheats:
+            return !game.cheats.isEmpty
+        case .recent:
+            let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? .distantPast
+            return (game.lastPlayedAt ?? .distantPast) >= cutoff
         }
     }
 
@@ -449,6 +872,22 @@ final class RoachArcadeLibraryStore: ObservableObject {
         return copy
     }
 
+    private func scanApplications(in folderURL: URL) throws -> [URL] {
+        guard let enumerator = fileManager.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: [.isPackageKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var urls: [URL] = []
+        for case let url as URL in enumerator where url.pathExtension.lowercased() == "app" {
+            urls.append(url)
+        }
+        return urls.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
     private func scanROMs(in folderURL: URL) throws -> [URL] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
         guard let enumerator = fileManager.enumerator(
@@ -465,7 +904,129 @@ final class RoachArcadeLibraryStore: ObservableObject {
                 urls.append(url)
             }
         }
-        return Array(urls.prefix(1_500))
+        return urls.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
+    private func scanESDEGameLists(in folderURL: URL) throws -> [RoachArcadeESDEGame] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
+        guard let enumerator = fileManager.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var entries: [RoachArcadeESDEGame] = []
+        for case let url as URL in enumerator where url.lastPathComponent.lowercased() == "gamelist.xml" {
+            let system = url.deletingLastPathComponent().lastPathComponent
+            let parserDelegate = RoachArcadeESDEGameListParser(
+                baseURL: url.deletingLastPathComponent(),
+                system: system.isEmpty ? "ES-DE" : system
+            )
+            guard let parser = XMLParser(contentsOf: url) else { continue }
+            parser.delegate = parserDelegate
+            if parser.parse() {
+                entries.append(contentsOf: parserDelegate.games)
+            }
+        }
+
+        return entries
+    }
+
+    private func scanModFolders(in folderURL: URL, profileName: String) -> [RoachArcadeModEntry] {
+        let folders = (try? fileManager.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        var mods: [RoachArcadeModEntry] = []
+        for folder in folders {
+            let values = try? folder.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                mods.append(
+                    RoachArcadeModEntry(
+                        name: folder.lastPathComponent,
+                        sourcePath: folder.path,
+                        loadOrder: mods.count + 1,
+                        conflictGroup: profileName
+                    )
+                )
+            }
+        }
+        return mods
+    }
+
+    private func parseVortexManifest(in folderURL: URL, profileName: String) -> [RoachArcadeModEntry] {
+        let manifestNames = ["collection.json", "manifest.json", "mods.json", "vortex.collection.json"]
+        guard
+            let manifestURL = manifestNames
+                .map({ folderURL.appendingPathComponent($0) })
+                .first(where: { fileManager.fileExists(atPath: $0.path) }),
+            let data = try? Data(contentsOf: manifestURL),
+            let root = try? JSONSerialization.jsonObject(with: data)
+        else {
+            return []
+        }
+
+        let objects: [[String: Any]]
+        if let array = root as? [[String: Any]] {
+            objects = array
+        } else if let dictionary = root as? [String: Any] {
+            objects = (
+                dictionary["mods"] as? [[String: Any]]
+                    ?? dictionary["files"] as? [[String: Any]]
+                    ?? dictionary["items"] as? [[String: Any]]
+                    ?? dictionary["downloads"] as? [[String: Any]]
+                    ?? []
+            )
+        } else {
+            objects = []
+        }
+
+        return objects.enumerated().compactMap { offset, object in
+            let name = object.stringValue(for: ["name", "title", "displayName", "fileName", "modName"])
+                ?? "Mod \(offset + 1)"
+            let rawPath = object.stringValue(for: ["path", "sourcePath", "source_path", "filePath", "file_name", "fileName"])
+            let sourcePath = rawPath
+                .map { resolveCollectionPath($0, relativeTo: folderURL).path }
+                ?? folderURL.appendingPathComponent(name.safeFileComponent).path
+            let loadOrder = object.intValue(for: ["loadOrder", "load_order", "priority", "index"]) ?? offset + 1
+            let enabled = object.boolValue(for: ["enabled", "isEnabled", "installed"]) ?? true
+
+            return RoachArcadeModEntry(
+                name: name,
+                sourcePath: sourcePath,
+                enabled: enabled,
+                loadOrder: loadOrder,
+                conflictGroup: object.stringValue(for: ["group", "conflictGroup", "conflict_group"]) ?? profileName,
+                notes: object.stringValue(for: ["notes", "description", "summary"]) ?? ""
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.loadOrder != rhs.loadOrder {
+                return lhs.loadOrder < rhs.loadOrder
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        .enumerated()
+        .map { offset, mod in
+            var copy = mod
+            copy.loadOrder = offset + 1
+            return copy
+        }
+    }
+
+    private func resolveCollectionPath(_ rawValue: String, relativeTo folderURL: URL) -> URL {
+        let expanded = NSString(string: rawValue).expandingTildeInPath
+        if let url = URL(string: expanded), url.isFileURL {
+            return url
+        }
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded)
+        }
+        return folderURL.appendingPathComponent(expanded).standardizedFileURL
     }
 
     private func prepareEmbeddedSession(for game: RoachArcadeGame) throws -> RoachArcadePlayerSession {
@@ -488,7 +1049,12 @@ final class RoachArcadeLibraryStore: ObservableObject {
             .filter(\.enabled)
             .map { [$0.name, $0.code] }
         let cheatsJSONData = try JSONSerialization.data(withJSONObject: cheats, options: [])
-        let cheatsJSON = String(data: cheatsJSONData, encoding: .utf8) ?? "[]"
+        let cheatsJSON = RoachArcadeHTMLSanitizer.javaScriptLiteral(jsonData: cheatsJSONData)
+        let titleLiteral = RoachArcadeHTMLSanitizer.javaScriptStringLiteral(game.title)
+        let gameURLLiteral = RoachArcadeHTMLSanitizer.javaScriptStringLiteral(romURL.absoluteString)
+        let coreLiteral = RoachArcadeHTMLSanitizer.javaScriptStringLiteral(core)
+        let dataPathLiteral = RoachArcadeHTMLSanitizer.javaScriptStringLiteral(dataPath)
+        let loaderScriptURL = RoachArcadeHTMLSanitizer.htmlAttributeValue("\(dataPath)loader.js")
         let html = """
         <!doctype html>
         <html>
@@ -503,17 +1069,17 @@ final class RoachArcadeLibraryStore: ObservableObject {
           <div id="game"></div>
           <script>
             window.EJS_player = "#game";
-            window.EJS_gameName = "\(game.title.javaScriptEscaped)";
-            window.EJS_gameUrl = "\(romURL.absoluteString.javaScriptEscaped)";
-            window.EJS_core = "\(core.javaScriptEscaped)";
-            window.EJS_pathtodata = "\(dataPath.javaScriptEscaped)";
+            window.EJS_gameName = \(titleLiteral);
+            window.EJS_gameUrl = \(gameURLLiteral);
+            window.EJS_core = \(coreLiteral);
+            window.EJS_pathtodata = \(dataPathLiteral);
             window.EJS_color = "#00ff66";
             window.EJS_startOnLoaded = true;
             window.EJS_disableDatabases = false;
             window.EJS_gamepad = true;
             window.EJS_cheats = \(cheatsJSON);
           </script>
-          <script src="\(dataPath.javaScriptEscaped)loader.js"></script>
+          <script src="\(loaderScriptURL)"></script>
         </body>
         </html>
         """
@@ -754,11 +1320,56 @@ private extension String {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var javaScriptEscaped: String {
-        replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "")
+}
+
+private extension Dictionary where Key == String, Value == Any {
+    func stringValue(for keys: [String]) -> String? {
+        for key in keys {
+            if let string = self[key] as? String, let value = string.nilIfBlank {
+                return value
+            }
+            if let number = self[key] as? NSNumber {
+                return number.stringValue
+            }
+        }
+        return nil
+    }
+
+    func intValue(for keys: [String]) -> Int? {
+        for key in keys {
+            if let intValue = self[key] as? Int {
+                return intValue
+            }
+            if let number = self[key] as? NSNumber {
+                return number.intValue
+            }
+            if let string = self[key] as? String, let intValue = Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return intValue
+            }
+        }
+        return nil
+    }
+
+    func boolValue(for keys: [String]) -> Bool? {
+        for key in keys {
+            if let boolValue = self[key] as? Bool {
+                return boolValue
+            }
+            if let number = self[key] as? NSNumber {
+                return number.boolValue
+            }
+            if let string = self[key] as? String {
+                switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                case "true", "yes", "1", "enabled":
+                    return true
+                case "false", "no", "0", "disabled":
+                    return false
+                default:
+                    break
+                }
+            }
+        }
+        return nil
     }
 }
 

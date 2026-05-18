@@ -64,20 +64,20 @@ GitHub does not host the support widgets used on the public site, so the repo ke
 ## Platform Status
 
 - `macOS Apple Silicon`
-  Current native release lane with the contained setup flow.
+  Current v1.0.5 native release lane with the contained setup flow and verified Homebrew-style install path.
 - `Windows 11 x64`
-  No public installer lane in v1.0.4. RoachArcade keeps Windows-game runner planning inside the macOS app instead of shipping another half-built desktop target.
+  No public installer lane in v1.0.5. RoachArcade keeps Windows-game runner planning inside the macOS app instead of shipping another half-built desktop target.
 - `Linux`
   Runtime and packaging work still moving toward a native desktop lane.
 
 ## Repo Layout
 
-- [`admin/`](./admin)
-  Local API, runtime services, maps, archives, content installs, and RoachClaw plumbing.
 - [`native/macos/`](./native/macos)
   SwiftUI/AppKit shell, setup app, and desktop runtime bridge.
 - [`scripts/`](./scripts)
   Setup, runtime, packaging, companion, and release automation.
+- [`admin/`](./admin)
+  Legacy WebUI reference code kept for parity review while the public lane moves native.
 - [`docs/`](./docs)
   Architecture, brand voice, upstream notes, and rewrite planning.
 
@@ -85,7 +85,7 @@ The public site and Apps storefront live in [`RoachWares/roachnet-org`](https://
 
 ## Local Development
 
-Start the source runtime:
+Start the dependency-free native API bridge:
 
 ```bash
 npm start

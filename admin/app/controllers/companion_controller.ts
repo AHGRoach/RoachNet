@@ -21,6 +21,9 @@ type CompanionInstallInput = {
   option?: string
   optionId?: string
   model?: string
+  pack?: string
+  packID?: string
+  kind?: string
   url?: string
   filetype?: string
   resourceType?: string
@@ -35,6 +38,8 @@ type CompanionInstallAction = {
   resource?: string
   option?: string
   model?: string
+  pack?: string
+  kind?: string
   url?: string
   filetype?: string
   metadata?: Record<string, unknown>
@@ -1167,6 +1172,8 @@ export default class CompanionController {
         resource: query.resource || query.resourceId,
         option: query.option || query.optionId,
         model: query.model,
+        pack: query.pack || query.packID,
+        kind: query.kind,
         url: query.url,
         filetype: query.filetype || query.resourceType,
       }
@@ -1180,6 +1187,8 @@ export default class CompanionController {
       resource: input.resource || input.resourceId,
       option: input.option || input.optionId,
       model: input.model,
+      pack: input.pack || input.packID,
+      kind: input.kind,
       url: input.url,
       filetype: input.filetype || input.resourceType,
       metadata: input.metadata,
@@ -1238,6 +1247,19 @@ export default class CompanionController {
           body: JSON.stringify({ model: input.model }),
         })
         return { queuedModel, appliedModel }
+      case 'roachspeech-pack':
+      case 'roachvoice-pack':
+        if (!input.url || !input.pack) {
+          throw new Error('RoachSpeech pack installs need a pack id and URL')
+        }
+        return this.relayJson('/api/roachspeech/model-packs/download', request, {
+          method: 'POST',
+          body: JSON.stringify({
+            url: input.url,
+            packID: input.pack,
+            kind: input.kind || 'roachVoice',
+          }),
+        })
       case 'direct-download':
         if (!input.url) {
           throw new Error('Direct download installs need a URL')

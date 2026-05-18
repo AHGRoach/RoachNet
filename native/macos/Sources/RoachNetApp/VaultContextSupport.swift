@@ -12,6 +12,8 @@ enum VaultPreviewAssetSupport {
         "kt", "go", "rs", "cs", "php", "sql", "log", "plist"
     ]
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "bmp"]
+    static let bookExtensions: Set<String> = ["epub", "mobi", "azw", "azw3", "cbz", "cbr"]
+    static let archiveExtensions: Set<String> = ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz"]
 
     static func loadText(from url: URL) throws -> String {
         let data = try Data(contentsOf: url)
@@ -73,6 +75,62 @@ enum VaultPreviewAssetSupport {
     }
 }
 
+enum VaultDropImportSupport {
+    static func vaultRootURL(storagePath: String) -> URL {
+        URL(fileURLWithPath: NSString(string: storagePath).expandingTildeInPath, isDirectory: true)
+            .appendingPathComponent("Vault", isDirectory: true)
+    }
+
+    static func destinationURL(
+        for sourceURL: URL,
+        in vaultRootURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL {
+        let sanitizedName = sanitizedFileName(sourceURL.lastPathComponent)
+        let baseDestination = vaultRootURL.appendingPathComponent(sanitizedName, isDirectory: sourceURL.hasDirectoryPath)
+        guard fileManager.fileExists(atPath: baseDestination.path) else {
+            return baseDestination
+        }
+
+        let extensionValue = sourceURL.hasDirectoryPath ? "" : sourceURL.pathExtension
+        let baseName = extensionValue.isEmpty
+            ? sanitizedName
+            : String(sanitizedName.dropLast(extensionValue.count + 1))
+
+        for index in 2...999 {
+            let candidateName = extensionValue.isEmpty
+                ? "\(baseName) \(index)"
+                : "\(baseName) \(index).\(extensionValue)"
+            let candidate = vaultRootURL.appendingPathComponent(candidateName, isDirectory: sourceURL.hasDirectoryPath)
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        let fallbackName = extensionValue.isEmpty
+            ? "\(baseName)-\(UUID().uuidString)"
+            : "\(baseName)-\(UUID().uuidString).\(extensionValue)"
+        return vaultRootURL.appendingPathComponent(fallbackName, isDirectory: sourceURL.hasDirectoryPath)
+    }
+
+    static func isInsideVault(_ sourceURL: URL, vaultRootURL: URL) -> Bool {
+        let sourcePath = sourceURL.standardizedFileURL.path
+        let vaultPath = vaultRootURL.standardizedFileURL.path
+        return sourcePath == vaultPath || sourcePath.hasPrefix(vaultPath + "/")
+    }
+
+    static func sanitizedFileName(_ rawName: String) -> String {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = trimmed.isEmpty ? "vault-drop" : trimmed
+        let forbidden = CharacterSet(charactersIn: "/:\\")
+        let sanitized = fallback.unicodeScalars
+            .map { forbidden.contains($0) ? "-" : Character($0) }
+            .reduce("") { $0 + String($1) }
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return sanitized.isEmpty ? "vault-drop" : sanitized
+    }
+}
+
 enum VaultPreviewKind: Equatable {
     case markdown
     case text
@@ -81,6 +139,7 @@ enum VaultPreviewKind: Equatable {
     case video
     case pdf
     case book
+    case archive
     case folder
     case generic
 
@@ -102,8 +161,10 @@ enum VaultPreviewKind: Equatable {
             return .video
         case "pdf":
             return .pdf
-        case "epub":
+        case let ext where VaultPreviewAssetSupport.bookExtensions.contains(ext):
             return .book
+        case let ext where VaultPreviewAssetSupport.archiveExtensions.contains(ext):
+            return .archive
         default:
             return .generic
         }
@@ -123,6 +184,8 @@ enum VaultPreviewKind: Equatable {
             return "Screening Room"
         case .pdf, .book:
             return "Reader"
+        case .archive:
+            return "Archive"
         case .folder:
             return "Shelf Folder"
         case .generic:

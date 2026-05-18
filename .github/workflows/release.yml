@@ -2,8 +2,7 @@ name: Release SemVer
 
 on: workflow_dispatch
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   check_authorization:
@@ -14,12 +13,16 @@ jobs:
     steps:
       - name: check-auth
         id: check-auth
-        run: echo "is_authorized=${{ contains(secrets.DEPLOYMENT_AUTHORIZED_USERS, github.triggering_actor) }}" >> $GITHUB_OUTPUT
+        env:
+          IS_AUTHORIZED: ${{ contains(secrets.DEPLOYMENT_AUTHORIZED_USERS, github.triggering_actor) }}
+        run: echo "is_authorized=${IS_AUTHORIZED}" >> "$GITHUB_OUTPUT"
   release:
     name: Release
     needs: check_authorization
     if: needs.check_authorization.outputs.isAuthorized == 'true'
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: write
     outputs:
       didRelease: ${{ steps.semver.outputs.new_release_published }}
       newVersion: ${{ steps.semver.outputs.new_release_version }}

@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import process from 'node:process'
+import { fileURLToPath } from 'node:url'
+
+import { requestHttp } from './lib/roachnet_http.mjs'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const repoRoot = path.resolve(__dirname, '..')
+const metadataPath = path.join(repoRoot, 'docs', 'release-gates', 'upstream-projects.json')
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message)
+  }
+}
+
+function readJson(filePath) {
+  return JSON.parse(readFileSync(filePath, 'utf8'))
+}
+
+async function fetchJson(url, headers = {}) {
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || ''
+  const authHeaders = token && String(url).startsWith('https://api.github.com/')
+    ? { authorization: `Bearer ${token}` }
+    : {}
+  const response = await requestHttp(url, {
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'RoachNet-Upstream-Project-Audit',
+      ...authHeaders,
+      ...headers,
+    },
+    timeoutMs: 30_000,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Request to ${url} failed with ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+async function fetchGitHubRelease(project) {
+  const release = await fetchJson(`https://api.github.com/repos/${project.repository}/releases/latest`)
+  const head = await fetchJson(`https://api.github.com/repos/${project.repository}/commits/HEAD`)
+  return {
+    tag: release.tag_name,
+    name: release.name,
+    publishedAt: release.published_at,
+    observedHead: head.sha,
+  }
+}
+
+async function fetchGitLabRelease(project) {
+  const encodedProject = encodeURIComponent(project.project)
+  const releases = await fetchJson(`https://gitlab.com/api/v4/projects/${encodedProject}/releases?per_page=1`)
+  const release = Array.isArray(releases) ? releases[0] : null
+  return {
+    tag: release?.tag_name,
+    name: release?.name,
+    publishedAt: release?.released_at,
+    commit: release?.commit?.id,
+  }
+}
+
+async function fetchHuggingFaceModel(project) {
+  const model = await fetchJson(`https://huggingface.co/api/models/${project.repository}`)
+  return {
+    sha: model.sha,
+    lastModified: model.lastModified,
+    license: model.cardData?.license,
+  }
+}
+
+function compareRelease(projectId, expected, actual) {
+  for (const field of ['tag', 'name', 'publishedAt']) {
+    assert(
+      expected[field] === actual[field],
+      `${projectId} upstream release drift: metadata ${field}=${expected[field] || 'missing'}, latest ${field}=${actual[field] || 'missing'}`
+    )
+  }
+
+  if (expected.commit || actual.commit) {
+    assert(
+      expected.commit === actual.commit,
+      `${projectId} upstream release drift: metadata commit=${expected.commit || 'missing'}, latest commit=${actual.commit || 'missing'}`
+    )
+  }
+}
+
+async function main() {
+  assert(existsSync(metadataPath), `Missing upstream project metadata at ${metadataPath}.`)
+  const metadata = readJson(metadataPath)
+  const projects = Object.entries(metadata.projects || {})
+  assert(projects.length > 0, 'Upstream project metadata must include at least one project.')
+
+  const branchMovements = []
+
+  for (const [projectId, project] of projects) {
+    const expected = project.latestRelease || {}
+    if (project.provider === 'huggingface') {
+      const latest = await fetchHuggingFaceModel(project)
+      const expected = project.latestModel || {}
+      for (const field of ['sha', 'lastModified', 'license']) {
+        assert(
+          expected[field] === latest[field],
+          `${projectId} upstream model drift: metadata ${field}=${expected[field] || 'missing'}, latest ${field}=${latest[field] || 'missing'}`
+        )
+      }
+      continue
+    }
+
+    const latest = project.provider === 'gitlab'
+      ? await fetchGitLabRelease(project)
+      : await fetchGitHubRelease(project)
+
+    compareRelease(projectId, expected, latest)
+
+    if (expected.observedHead && latest.observedHead && expected.observedHead !== latest.observedHead) {
+      branchMovements.push(
+        `${projectId} default branch moved since audit metadata: ${expected.observedHead.slice(0, 12)} -> ${latest.observedHead.slice(0, 12)}`
+      )
+    }
+  }
+
+  if (branchMovements.length > 0 && process.env.ROACHNET_UPSTREAM_VERBOSE === '1') {
+    for (const movement of branchMovements) {
+      console.log(`Upstream audit context: ${movement}`)
+    }
+  }
+
+  const branchContext = branchMovements.length > 0
+    ? ` Default-branch movement observed for ${branchMovements.length} project${branchMovements.length === 1 ? '' : 's'}; stable release metadata is unchanged and remains the blocking gate.`
+    : ''
+  console.log(`Upstream project audit passed for ${projects.length} stable release references.${branchContext}`)
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error)
+  process.exitCode = 1
+})

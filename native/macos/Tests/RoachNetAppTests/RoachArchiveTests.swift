@@ -48,6 +48,89 @@ final class RoachArchiveTests: XCTestCase {
         XCTAssertEqual(item.id, "0123456789abcdef")
     }
 
+    func testVaultRecordDecodesLegacyMetadataDefaults() throws {
+        let json = """
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "result": {
+            "id": "legacy-book",
+            "title": "Legacy Book",
+            "authors": [],
+            "source": "local"
+          },
+          "metadataPath": "/tmp/legacy.metadata.json",
+          "importedAt": "2026-05-01T00:00:00Z",
+          "status": "Metadata added"
+        }
+        """
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let record = try decoder.decode(RoachArchiveVaultRecord.self, from: Data(json.utf8))
+
+        XCTAssertEqual(record.result.title, "Legacy Book")
+        XCTAssertEqual(record.readingProgress, 0)
+        XCTAssertNil(record.lastOpenedAt)
+        XCTAssertEqual(record.notes, "")
+        XCTAssertEqual(record.tags, [])
+    }
+
+    @MainActor
+    func testArchiveStoreClearsStaleDevelopmentEndpoint() {
+        let defaults = UserDefaults.standard
+        let previousEndpoint = defaults.string(forKey: RoachArchiveStore.endpointKey)
+        defer {
+            if let previousEndpoint {
+                defaults.set(previousEndpoint, forKey: RoachArchiveStore.endpointKey)
+            } else {
+                defaults.removeObject(forKey: RoachArchiveStore.endpointKey)
+            }
+        }
+
+        defaults.set("http://127.0.0.1:38221", forKey: RoachArchiveStore.endpointKey)
+
+        let store = RoachArchiveStore()
+
+        XCTAssertEqual(store.endpointURLString, "")
+        XCTAssertNil(defaults.string(forKey: RoachArchiveStore.endpointKey))
+    }
+
+    @MainActor
+    func testConfigureResetsTransientMetadataPath() throws {
+        let defaults = UserDefaults.standard
+        let previousMetadataPath = defaults.string(forKey: RoachArchiveStore.metadataDirectoryKey)
+        defer {
+            if let previousMetadataPath {
+                defaults.set(previousMetadataPath, forKey: RoachArchiveStore.metadataDirectoryKey)
+            } else {
+                defaults.removeObject(forKey: RoachArchiveStore.metadataDirectoryKey)
+            }
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RoachArchiveConfigTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        defaults.set(
+            "/private/var/folders/demo/T/roachnet-setup-smoke-demo/installed/RoachNet/storage/RoachArchive/Metadata",
+            forKey: RoachArchiveStore.metadataDirectoryKey
+        )
+
+        let store = RoachArchiveStore()
+        store.configure(storagePath: root.path)
+
+        let expectedPath = root
+            .appendingPathComponent("RoachArchive", isDirectory: true)
+            .appendingPathComponent("Metadata", isDirectory: true)
+            .standardizedFileURL
+            .path
+
+        XCTAssertEqual(URL(fileURLWithPath: store.metadataDirectoryPath).standardizedFileURL.path, expectedPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expectedPath))
+    }
+
     @MainActor
     func testLocalMetadataSearchFindsBookRecords() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -73,5 +156,67 @@ final class RoachArchiveTests: XCTestCase {
 
         XCTAssertEqual(store.results.map(\.title), ["Offline Library Systems"])
         XCTAssertNil(store.errorLine)
+    }
+
+    @MainActor
+    func testAttachLocalBookAndReadingProgress() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RoachArchiveAttachTests-\(UUID().uuidString)", isDirectory: true)
+        let sourceURL = root.appendingPathComponent("source.epub")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("book".utf8).write(to: sourceURL)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let store = RoachArchiveStore()
+        store.configure(storagePath: root.path)
+        let result = RoachArchiveSearchResult(
+            id: "attach-demo",
+            title: "Attach Demo",
+            authors: ["B. Roach"],
+            format: "epub",
+            source: "local metadata"
+        )
+
+        _ = await store.addToVault(result)
+        let record = try XCTUnwrap(store.vaultRecords.first)
+        let attached = try XCTUnwrap(store.attachLocalBook(sourceURL, to: record.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: attached.path))
+
+        store.updateReadingProgress(1.4, for: record.id)
+        let updated = try XCTUnwrap(store.vaultRecords.first)
+        XCTAssertEqual(updated.filePath, attached.path)
+        XCTAssertEqual(updated.readingProgress, 1)
+        XCTAssertEqual(updated.status, "Read")
+    }
+
+    @MainActor
+    func testAttachLocalBookSanitizesFormatBeforeBuildingDestinationPath() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RoachArchiveFormatTests-\(UUID().uuidString)", isDirectory: true)
+        let sourceURL = root.appendingPathComponent("source")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("book".utf8).write(to: sourceURL)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let store = RoachArchiveStore()
+        store.configure(storagePath: root.path)
+        let result = RoachArchiveSearchResult(
+            id: "format-demo",
+            title: "Format Demo",
+            format: "../../private-key",
+            source: "local metadata"
+        )
+
+        _ = await store.addToVault(result)
+        let record = try XCTUnwrap(store.vaultRecords.first)
+        let attached = try XCTUnwrap(store.attachLocalBook(sourceURL, to: record.id))
+        let booksRoot = try XCTUnwrap(store.booksRootURL?.standardizedFileURL.path)
+
+        XCTAssertEqual(attached.deletingLastPathComponent().standardizedFileURL.path, booksRoot)
+        XCTAssertEqual(attached.lastPathComponent, "Format Demo.private-key")
     }
 }

@@ -6,11 +6,11 @@ public enum RoachPalette {
     public static let magenta = Color(red: 0.5686, green: 0.2196, blue: 0.8471)
     public static let bronze = Color(red: 0.98, green: 0.74, blue: 0.20)
     public static let cyan = Color(red: 0.40, green: 0.84, blue: 1.0)
-    public static let background = Color(red: 0.035, green: 0.036, blue: 0.044)
-    public static let backgroundRaised = Color(red: 0.058, green: 0.060, blue: 0.072)
-    public static let panel = Color(red: 0.088, green: 0.091, blue: 0.103)
-    public static let panelRaised = Color(red: 0.108, green: 0.111, blue: 0.126)
-    public static let panelSoft = Color(red: 0.150, green: 0.154, blue: 0.172)
+    public static let background = Color(red: 0.010, green: 0.012, blue: 0.015)
+    public static let backgroundRaised = Color(red: 0.026, green: 0.029, blue: 0.034)
+    public static let panel = Color(red: 0.043, green: 0.047, blue: 0.055)
+    public static let panelRaised = Color(red: 0.068, green: 0.073, blue: 0.084)
+    public static let panelSoft = Color(red: 0.104, green: 0.110, blue: 0.126)
     public static let panelGlass = Color.white.opacity(0.045)
     public static let panelSpecular = Color.white.opacity(0.08)
     public static let border = Color.white.opacity(0.085)
@@ -22,144 +22,481 @@ public enum RoachPalette {
     public static let shadow = Color.black.opacity(0.24)
 }
 
+fileprivate enum RoachDither {
+    static let bayer4: [Double] = [
+        0, 8, 2, 10,
+        12, 4, 14, 6,
+        3, 11, 1, 9,
+        15, 7, 13, 5,
+    ]
+
+    static func threshold(row: Int, column: Int) -> Double {
+        bayer4[((row & 3) * 4) + (column & 3)] / 16.0
+    }
+
+    static func cellColor(row: Int, column: Int, accent: Color, intensity: Double) -> Color {
+        let alpha = min(0.18, max(0.018, intensity))
+
+        switch abs((row * 3 + column * 5) % 9) {
+        case 0:
+            return RoachPalette.magenta.opacity(alpha * 0.64)
+        case 1, 5:
+            return RoachPalette.cyan.opacity(alpha * 0.72)
+        case 2:
+            return accent.opacity(alpha * 0.92)
+        default:
+            return RoachPalette.green.opacity(alpha)
+        }
+    }
+}
+
 public struct RoachBackground: View {
-    @State private var drift = false
-    @State private var sweep = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init() {}
 
     public var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    RoachPalette.background,
-                    RoachPalette.backgroundRaised,
-                    RoachPalette.background,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+        TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 : 1.0 / 24.0, paused: reduceMotion)) { timeline in
+            let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
 
-            Circle()
-                .fill(RoachPalette.green.opacity(0.085))
-                .frame(width: 440, height: 440)
-                .blur(radius: 126)
-                .offset(x: drift ? -18 : -122, y: drift ? -52 : -136)
-
-            Circle()
-                .fill(RoachPalette.magenta.opacity(0.092))
-                .frame(width: 410, height: 410)
-                .blur(radius: 116)
-                .offset(x: drift ? 138 : 88, y: drift ? -106 : -68)
-
-            Circle()
-                .fill(RoachPalette.cyan.opacity(0.045))
-                .frame(width: 240, height: 240)
-                .blur(radius: 96)
-                .offset(x: drift ? -132 : -78, y: drift ? 182 : 236)
-
-            LinearGradient(
-                colors: [
-                    Color.clear,
-                    Color.white.opacity(0.012),
-                    Color.clear,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.02),
-                            Color.clear,
-                            Color.white.opacity(0.016),
-                            Color.clear,
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color.black,
+                        RoachPalette.background,
+                        RoachPalette.backgroundRaised.opacity(0.95),
+                        Color.black.opacity(0.98),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
-                .blendMode(.screen)
-                .opacity(0.12)
 
-            RadialGradient(
-                colors: [
-                    Color.clear,
-                    Color.black.opacity(0.10),
-                    Color.black.opacity(0.24),
-                ],
-                center: .center,
-                startRadius: 120,
-                endRadius: 780
+                Canvas { context, size in
+                    Self.drawDitherField(context: &context, size: size, time: time)
+                    Self.drawPerspectiveBunkerGrid(context: &context, size: size, time: time)
+                    Self.drawCircuitTraces(context: &context, size: size, time: time)
+                    Self.drawRoachSigil(context: &context, size: size, time: time)
+                    Self.drawSignalDither(context: &context, size: size, time: time)
+                    Self.drawSignalPackets(context: &context, size: size, time: time)
+                }
+                .blendMode(.screen)
+
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.0),
+                        Color.black.opacity(0.18),
+                        Color.black.opacity(0.40),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                RadialGradient(
+                    colors: [
+                        Color.clear,
+                        Color.black.opacity(0.18),
+                        Color.black.opacity(0.48),
+                    ],
+                    center: .center,
+                    startRadius: 160,
+                    endRadius: 820
+                )
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private static func drawDitherField(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let cell: CGFloat = size.width < 900 ? 7 : 8
+        let columns = max(1, Int(ceil(size.width / cell)))
+        let rows = max(1, Int(ceil(size.height / cell)))
+        let crawl = time * 0.044
+        let shimmer = time * 0.86
+
+        for row in 0...rows {
+            for column in 0...columns {
+                let nx = Double(column) / Double(columns)
+                let ny = Double(row) / Double(rows)
+                let centerFade = max(0, 1.0 - abs(nx - 0.55) * 0.84 - abs(ny - 0.46) * 0.92)
+                let diagonalA = 0.5 + 0.5 * sin(((nx * 2.4) + (ny * 3.4) + crawl) * Double.pi * 2.0)
+                let diagonalB = 0.5 + 0.5 * sin(((nx * -3.1) + (ny * 1.9) + time * 0.021) * Double.pi * 2.0)
+                let crawlNoise = 0.5 + 0.5 * sin((ny * 48.0) + shimmer + sin(nx * 9.5 + time * 0.19))
+                let lowerRack = max(0, 1.0 - abs((ny + (0.035 * sin(time * 0.18))) - 0.78) * 5.6)
+                let leftSignal = max(0, 1.0 - abs((nx - ny * 0.30) - 0.08 - (0.05 * sin(time * 0.24))) * 8.6)
+                let rightSignal = max(0, 1.0 - abs((nx + ny * 0.20) - 0.92 - (0.04 * cos(time * 0.20))) * 7.0)
+                let intensity = 0.014
+                    + (centerFade * 0.032)
+                    + (diagonalA * diagonalB * 0.052)
+                    + (crawlNoise * 0.016)
+                    + (lowerRack * 0.086)
+                    + (leftSignal * 0.064)
+                    + (rightSignal * 0.036)
+                let threshold = RoachDither.threshold(row: row, column: column) * 0.24
+
+                guard intensity > threshold else { continue }
+
+                let flicker = 0.68 + (0.32 * sin(shimmer + Double(row * 11 + column * 7)))
+                let alpha = min(0.17, max(0.012, (intensity - threshold) * flicker))
+                let rect = CGRect(
+                    x: CGFloat(column) * cell,
+                    y: CGFloat(row) * cell,
+                    width: max(1, cell - 2),
+                    height: max(1, cell - 2)
+                )
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 1.4),
+                    with: .color(RoachDither.cellColor(row: row, column: column, accent: RoachPalette.green, intensity: alpha))
+                )
+            }
+        }
+    }
+
+    private static func drawSignalDither(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let cell: CGFloat = size.width < 900 ? 5 : 6
+        let columns = max(1, Int(ceil(size.width / cell)))
+        let rows = max(1, Int(ceil(size.height / cell)))
+        let sweepA = 0.5 + 0.42 * sin(time * 0.31)
+        let sweepB = 0.58 + 0.30 * cos(time * 0.23)
+
+        for row in 0...rows {
+            for column in 0...columns {
+                let nx = Double(column) / Double(columns)
+                let ny = Double(row) / Double(rows)
+                let beamA = max(0, 1.0 - abs((nx * 0.78 + ny * 0.22) - sweepA) * 34.0)
+                let beamB = max(0, 1.0 - abs((nx * -0.18 + ny * 0.96) - sweepB) * 28.0)
+                let pulse = 0.5 + 0.5 * sin(time * 5.2 + Double(column * 3 - row * 5))
+                let threshold = 0.52 + RoachDither.threshold(row: row, column: column) * 0.32
+                let intensity = (beamA * 0.36) + (beamB * 0.24) + (pulse * 0.025)
+
+                guard intensity > threshold else { continue }
+
+                let rect = CGRect(
+                    x: CGFloat(column) * cell,
+                    y: CGFloat(row) * cell,
+                    width: max(1, cell - 2),
+                    height: max(1, cell - 2)
+                )
+                let accent: Color = (row + column) % 7 == 0 ? RoachPalette.cyan : RoachPalette.green
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 0.8),
+                    with: .color(accent.opacity(min(0.24, max(0.04, intensity - threshold + 0.05))))
+                )
+            }
+        }
+    }
+
+    private static func drawPerspectiveBunkerGrid(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let horizon = size.height * (0.58 + (0.018 * sin(time * 0.11)))
+        let vanishing = CGPoint(
+            x: size.width * (0.55 + (0.025 * cos(time * 0.10))),
+            y: horizon
+        )
+        let floorBottom = size.height + 72
+        let spacing = max(54, size.width / 12)
+
+        for index in -8...8 {
+            let bottomX = (size.width * 0.5) + (CGFloat(index) * spacing)
+            let accent: Color = index.isMultiple(of: 3) ? RoachPalette.cyan : RoachPalette.green
+            drawDitherLine(
+                context: &context,
+                from: CGPoint(x: bottomX, y: floorBottom),
+                to: vanishing,
+                cell: 7,
+                color: accent,
+                intensity: 0.030,
+                time: time,
+                phase: Double(index) * 0.47
+            )
+        }
+
+        for index in 1...15 {
+            let depth = CGFloat(index) / 15
+            let eased = pow(depth, 1.85)
+            let y = horizon + eased * (size.height - horizon + 78)
+            let left = CGPoint(
+                x: vanishing.x + (-size.width * 0.66 - vanishing.x) * depth,
+                y: y
+            )
+            let right = CGPoint(
+                x: vanishing.x + (size.width * 1.18 - vanishing.x) * depth,
+                y: y
+            )
+            let accent: Color = index.isMultiple(of: 4) ? RoachPalette.bronze : RoachPalette.green
+            drawDitherLine(
+                context: &context,
+                from: left,
+                to: right,
+                cell: index.isMultiple(of: 5) ? 6 : 8,
+                color: accent,
+                intensity: index.isMultiple(of: 5) ? 0.044 : 0.026,
+                time: time,
+                phase: Double(index) * 0.33
+            )
+        }
+
+        for index in 0..<6 {
+            let t = CGFloat(index) / 5
+            let y = size.height * (0.12 + (t * 0.38))
+            let inset = size.width * (0.04 + (t * 0.11))
+            let leftTop = CGPoint(x: inset, y: y)
+            let leftBottom = CGPoint(x: max(0, vanishing.x - size.width * (0.44 - t * 0.15)), y: horizon + 18 + t * 44)
+            let rightTop = CGPoint(x: size.width - inset, y: y + 8)
+            let rightBottom = CGPoint(x: min(size.width, vanishing.x + size.width * (0.42 - t * 0.13)), y: horizon + 22 + t * 40)
+
+            drawDitherLine(
+                context: &context,
+                from: leftTop,
+                to: leftBottom,
+                cell: 9,
+                color: t > 0.5 ? RoachPalette.magenta : RoachPalette.green,
+                intensity: 0.020,
+                time: time,
+                phase: Double(index) * 0.41
+            )
+            drawDitherLine(
+                context: &context,
+                from: rightTop,
+                to: rightBottom,
+                cell: 9,
+                color: t > 0.5 ? RoachPalette.cyan : RoachPalette.green,
+                intensity: 0.020,
+                time: time,
+                phase: Double(index) * 0.59
+            )
+        }
+    }
+
+    private static func drawCircuitTraces(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let leftOrigins: [CGFloat] = [0.18, 0.31, 0.47, 0.69]
+        for (index, yRatio) in leftOrigins.enumerated() {
+            let y = size.height * (yRatio + (0.010 * sin(time * 0.18 + Double(index))))
+            let points = [
+                CGPoint(x: -24, y: y),
+                CGPoint(x: size.width * (0.16 + CGFloat(index) * 0.025), y: y),
+                CGPoint(x: size.width * (0.16 + CGFloat(index) * 0.025), y: y + CGFloat(index.isMultiple(of: 2) ? 42 : -38)),
+                CGPoint(x: size.width * (0.30 + CGFloat(index) * 0.032), y: y + CGFloat(index.isMultiple(of: 2) ? 42 : -38)),
+            ]
+            drawTrace(points, context: &context, cell: 6, color: index.isMultiple(of: 2) ? RoachPalette.green : RoachPalette.cyan, intensity: 0.052, time: time, phase: Double(index) * 0.8)
+            drawDitherNode(context: &context, center: points.last ?? .zero, radius: 13, color: RoachPalette.green, intensity: 0.08, time: time, phase: Double(index))
+        }
+
+        let rightOrigins: [CGFloat] = [0.24, 0.39, 0.56, 0.73]
+        for (index, yRatio) in rightOrigins.enumerated() {
+            let y = size.height * (yRatio + (0.012 * cos(time * 0.16 + Double(index))))
+            let points = [
+                CGPoint(x: size.width + 24, y: y),
+                CGPoint(x: size.width * (0.86 - CGFloat(index) * 0.018), y: y),
+                CGPoint(x: size.width * (0.86 - CGFloat(index) * 0.018), y: y + CGFloat(index.isMultiple(of: 2) ? -48 : 36)),
+                CGPoint(x: size.width * (0.70 - CGFloat(index) * 0.026), y: y + CGFloat(index.isMultiple(of: 2) ? -48 : 36)),
+            ]
+            drawTrace(points, context: &context, cell: 6, color: index.isMultiple(of: 2) ? RoachPalette.magenta : RoachPalette.bronze, intensity: 0.040, time: time, phase: Double(index) * 1.2)
+            drawDitherNode(context: &context, center: points.last ?? .zero, radius: 11, color: index.isMultiple(of: 2) ? RoachPalette.magenta : RoachPalette.bronze, intensity: 0.06, time: time, phase: Double(index) + 2)
+        }
+    }
+
+    private static func drawRoachSigil(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let scale = min(max(min(size.width, size.height) * 0.19, 112), 230)
+        let center = CGPoint(
+            x: size.width * (size.width < 820 ? 0.78 : 0.84),
+            y: size.height * (0.74 + (0.012 * sin(time * 0.12)))
+        )
+        let cell: CGFloat = 6
+        let width = scale * 0.72
+        let height = scale
+        let cols = max(1, Int(width / cell))
+        let rows = max(1, Int(height / cell))
+
+        for row in 0...rows {
+            for column in 0...cols {
+                let localX = (CGFloat(column) / CGFloat(cols) - 0.5) * 2
+                let localY = (CGFloat(row) / CGFloat(rows) - 0.5) * 2
+                let abdomen = pow(localX / 0.46, 2) + pow((localY - 0.18) / 0.78, 2)
+                let thorax = pow(localX / 0.38, 2) + pow((localY + 0.26) / 0.42, 2)
+                let head = pow(localX / 0.30, 2) + pow((localY + 0.72) / 0.25, 2)
+                let shellLine = max(0, 1.0 - abs(abs(Double(localX)) - 0.20) * 15) * max(0, 1 - abs(Double(localY)) * 0.72)
+                let body = abdomen < 1 || thorax < 1 || head < 1
+                let outline = abs(abdomen - 1) < 0.11 || abs(thorax - 1) < 0.13 || abs(head - 1) < 0.15
+                let threshold = RoachDither.threshold(row: row, column: column)
+                let pulse = 0.5 + 0.5 * sin(time * 1.3 + Double(row + column) * 0.38)
+                let intensity = (outline ? 0.13 : 0) + (body ? 0.033 : 0) + (shellLine * 0.085) + (pulse * 0.010)
+
+                guard intensity > threshold * 0.30 else { continue }
+
+                let rect = CGRect(
+                    x: center.x - width / 2 + CGFloat(column) * cell,
+                    y: center.y - height / 2 + CGFloat(row) * cell,
+                    width: max(1, cell - 2),
+                    height: max(1, cell - 2)
+                )
+                let color = outline ? RoachPalette.green : RoachPalette.cyan
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 1),
+                    with: .color(color.opacity(min(0.18, intensity * 0.70)))
+                )
+            }
+        }
+
+        for side: CGFloat in [-1, 1] {
+            for index in 0..<3 {
+                let y = center.y - scale * (0.18 - CGFloat(index) * 0.22)
+                let start = CGPoint(x: center.x + side * scale * 0.18, y: y)
+                let mid = CGPoint(x: center.x + side * scale * (0.42 + CGFloat(index) * 0.05), y: y + CGFloat(index - 1) * 16)
+                let end = CGPoint(x: center.x + side * scale * (0.58 + CGFloat(index) * 0.06), y: y + CGFloat(index - 1) * 31)
+                drawDitherLine(context: &context, from: start, to: mid, cell: 6, color: RoachPalette.green, intensity: 0.070, time: time, phase: Double(index) + Double(side))
+                drawDitherLine(context: &context, from: mid, to: end, cell: 6, color: RoachPalette.green, intensity: 0.060, time: time, phase: Double(index) + 2.0)
+            }
+
+            let antennaBase = CGPoint(x: center.x + side * scale * 0.13, y: center.y - scale * 0.46)
+            let antennaTip = CGPoint(x: center.x + side * scale * 0.46, y: center.y - scale * 0.72)
+            drawDitherLine(context: &context, from: antennaBase, to: antennaTip, cell: 5, color: RoachPalette.bronze, intensity: 0.058, time: time, phase: Double(side) + 3.0)
+        }
+    }
+
+    private static func drawSignalPackets(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        for index in 0..<18 {
+            let lane = Double(index % 6) / 5.0
+            let progress = (time * (0.035 + Double(index % 4) * 0.006) + Double(index) * 0.137)
+                .truncatingRemainder(dividingBy: 1)
+            let x = size.width * CGFloat(0.08 + (progress * 0.84))
+            let yBase = size.height * CGFloat(0.22 + lane * 0.54)
+            let y = yBase + CGFloat(sin(time * 0.42 + Double(index) * 1.7)) * 22
+            let color: Color
+
+            switch index % 4 {
+            case 0:
+                color = RoachPalette.green
+            case 1:
+                color = RoachPalette.cyan
+            case 2:
+                color = RoachPalette.magenta
+            default:
+                color = RoachPalette.bronze
+            }
+
+            drawDitherNode(
+                context: &context,
+                center: CGPoint(x: x, y: y),
+                radius: CGFloat(7 + (index % 3) * 3),
+                color: color,
+                intensity: 0.070,
+                time: time,
+                phase: Double(index) * 0.9
             )
 
-            Canvas { context, size in
-                let cell: CGFloat = 36
-                let rows = Int(ceil(size.height / cell))
-                let columns = Int(ceil(size.width / cell))
-
-                for row in 0...rows {
-                    let y = CGFloat(row) * cell
-                    var path = Path()
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: size.width, y: y))
-                    context.stroke(
-                        path,
-                        with: .color(Color.white.opacity(row.isMultiple(of: 2) ? 0.01 : 0.004)),
-                        lineWidth: 1
-                    )
-                }
-
-                for column in 0...columns {
-                    let x = CGFloat(column) * cell
-                    var path = Path()
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: size.height))
-                    context.stroke(
-                        path,
-                        with: .color(Color.white.opacity(column.isMultiple(of: 2) ? 0.006 : 0.003)),
-                        lineWidth: 1
-                    )
-                }
-            }
-            .opacity(0.11)
-            .blendMode(.overlay)
-
-            GeometryReader { proxy in
-                RoundedRectangle(cornerRadius: proxy.size.width * 0.2, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.clear,
-                                RoachPalette.green.opacity(0.10),
-                                RoachPalette.cyan.opacity(0.07),
-                                Color.clear,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: proxy.size.width * 0.56, height: 220)
-                    .blur(radius: 58)
-                    .rotationEffect(.degrees(-18))
-                    .offset(
-                        x: sweep ? proxy.size.width * 0.38 : -proxy.size.width * 0.34,
-                        y: sweep ? proxy.size.height * 0.08 : -proxy.size.height * 0.16
-                    )
-            }
-            .allowsHitTesting(false)
-            .blendMode(.screen)
-            .opacity(0.42)
+            let tail = CGPoint(x: x - CGFloat(34 + (index % 4) * 8), y: y + CGFloat((index % 3) - 1) * 8)
+            drawDitherLine(context: &context, from: tail, to: CGPoint(x: x, y: y), cell: 5, color: color, intensity: 0.036, time: time, phase: Double(index) * 0.31)
         }
-        .ignoresSafeArea()
-        .onAppear {
-            withAnimation(.easeInOut(duration: 24).repeatForever(autoreverses: true)) {
-                drift = true
-            }
-            withAnimation(.easeInOut(duration: 18).repeatForever(autoreverses: true)) {
-                sweep = true
+    }
+
+    private static func drawTrace(_ points: [CGPoint], context: inout GraphicsContext, cell: CGFloat, color: Color, intensity: Double, time: TimeInterval, phase: Double) {
+        guard points.count >= 2 else { return }
+
+        for index in 0..<(points.count - 1) {
+            drawDitherLine(
+                context: &context,
+                from: points[index],
+                to: points[index + 1],
+                cell: cell,
+                color: color,
+                intensity: intensity,
+                time: time,
+                phase: phase + Double(index) * 0.37
+            )
+        }
+    }
+
+    private static func drawDitherLine(
+        context: inout GraphicsContext,
+        from start: CGPoint,
+        to end: CGPoint,
+        cell: CGFloat,
+        color: Color,
+        intensity: Double,
+        time: TimeInterval,
+        phase: Double
+    ) {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let distance = max(1, hypot(dx, dy))
+        let steps = max(1, Int(distance / max(3, cell * 0.86)))
+
+        for step in 0...steps {
+            let t = CGFloat(step) / CGFloat(steps)
+            let x = start.x + dx * t
+            let y = start.y + dy * t
+            let row = Int((y / cell).rounded(.down))
+            let column = Int((x / cell).rounded(.down))
+            let packet = 0.5 + 0.5 * sin(time * 1.2 + Double(step) * 0.22 + phase)
+            let threshold = RoachDither.threshold(row: row, column: column) * 0.34
+            let fade = 0.52 + 0.48 * Double(1 - abs(t - 0.5) * 1.3)
+            let alpha = (intensity * fade) + (packet * 0.014)
+
+            guard alpha > threshold else { continue }
+
+            let rect = CGRect(
+                x: x - cell / 2,
+                y: y - cell / 2,
+                width: max(1, cell - 2),
+                height: max(1, cell - 2)
+            )
+            context.fill(
+                Path(roundedRect: rect, cornerRadius: 1),
+                with: .color(color.opacity(min(0.20, max(0.018, alpha - threshold + 0.014))))
+            )
+        }
+    }
+
+    private static func drawDitherNode(
+        context: inout GraphicsContext,
+        center: CGPoint,
+        radius: CGFloat,
+        color: Color,
+        intensity: Double,
+        time: TimeInterval,
+        phase: Double
+    ) {
+        let cell: CGFloat = 5
+        let steps = max(2, Int((radius * 2) / cell))
+
+        for row in -steps...steps {
+            for column in -steps...steps {
+                let x = CGFloat(column) * cell
+                let y = CGFloat(row) * cell
+                let distance = hypot(x, y)
+                guard distance <= radius else { continue }
+
+                let gridRow = Int(((center.y + y) / cell).rounded(.down))
+                let gridColumn = Int(((center.x + x) / cell).rounded(.down))
+                let ring = max(0, 1.0 - abs(Double(distance / max(1, radius)) - 0.72) * 4.0)
+                let core = max(0, 1.0 - Double(distance / max(1, radius)))
+                let pulse = 0.5 + 0.5 * sin(time * 2.3 + phase)
+                let alpha = intensity * (ring * 0.75 + core * 0.55 + pulse * 0.12)
+                let threshold = RoachDither.threshold(row: gridRow, column: gridColumn) * 0.30
+
+                guard alpha > threshold else { continue }
+
+                let rect = CGRect(
+                    x: center.x + x - cell / 2,
+                    y: center.y + y - cell / 2,
+                    width: max(1, cell - 1.7),
+                    height: max(1, cell - 1.7)
+                )
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 1.2),
+                    with: .color(color.opacity(min(0.18, alpha - threshold + 0.018)))
+                )
             }
         }
     }
@@ -168,119 +505,66 @@ public struct RoachBackground: View {
 private struct RoachAnimatedChrome: View {
     let cornerRadius: CGFloat
     let accent: Color
-    @State private var sweep = false
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.08),
-                                accent.opacity(0.18),
-                                RoachPalette.borderStrong,
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
+        TimelineView(.animation(minimumInterval: 1.0 / 16.0, paused: false)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
 
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                accent.opacity(0.11),
-                                Color.clear,
-                                RoachPalette.cyan.opacity(0.05),
-                                Color.clear,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+            Canvas { context, size in
+                let rect = CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5)
+                let rounded = Path(roundedRect: rect, cornerRadius: cornerRadius)
+
+                context.stroke(
+                    rounded,
+                    with: .linearGradient(
+                        Gradient(colors: [
+                            Color.white.opacity(0.08),
+                            accent.opacity(0.18),
+                            RoachPalette.borderStrong,
+                        ]),
+                        startPoint: .zero,
+                        endPoint: CGPoint(x: size.width, y: size.height)
+                    ),
+                    lineWidth: 1
+                )
+
+                let cell: CGFloat = 5
+                let columns = max(1, Int(ceil(size.width / cell)))
+                let rows = max(1, Int(ceil(size.height / cell)))
+                let pulse = 0.5 + 0.5 * sin(time * 0.9)
+
+                for row in 0...rows {
+                    for column in 0...columns {
+                        let x = CGFloat(column) * cell
+                        let y = CGFloat(row) * cell
+                        let distanceToEdge = min(min(x, y), min(max(0, size.width - x), max(0, size.height - y)))
+                        let edge = max(0, 1 - Double(distanceToEdge / 76))
+                        let drift = 0.5 + 0.5 * sin((Double(column) * 0.18) + (Double(row) * 0.11) + (time * 0.7))
+                        let threshold = RoachDither.threshold(row: row, column: column) * 0.42
+                        let intensity = (edge * 0.11) + (drift * 0.030) + (pulse * 0.012)
+
+                        guard intensity > threshold else { continue }
+
+                        let fill = RoachDither.cellColor(
+                            row: row,
+                            column: column,
+                            accent: accent,
+                            intensity: min(0.14, intensity - threshold + 0.018)
                         )
-                    )
-                    .frame(width: proxy.size.width * 0.48, height: max(96, proxy.size.height * 0.42))
-                    .blur(radius: 34)
-                    .rotationEffect(.degrees(-15))
-                    .offset(
-                        x: sweep ? proxy.size.width * 0.44 : -proxy.size.width * 0.28,
-                        y: sweep ? proxy.size.height * 0.12 : -proxy.size.height * 0.10
-                    )
-                    .opacity(0.55)
-
-                RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.clear,
-                                Color.white.opacity(0.18),
-                                accent.opacity(0.18),
-                                Color.clear,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: min(proxy.size.width * 0.66, 320), height: 2)
-                    .rotationEffect(.degrees(-17))
-                    .offset(
-                        x: sweep ? proxy.size.width * 0.28 : -proxy.size.width * 0.24,
-                        y: sweep ? proxy.size.height * 0.80 : proxy.size.height * 0.62
-                    )
-                    .opacity(0.62)
-
-                RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                accent.opacity(0.44),
-                                RoachPalette.magenta.opacity(0.22),
-                                Color.clear,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: min(proxy.size.width * 0.42, 240), height: 3)
-                    .padding(.leading, 18)
-                    .padding(.top, 14)
-                    .blur(radius: 0.2)
-
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                accent.opacity(0.18),
-                                Color.clear,
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: min(proxy.size.width * 0.18, 92), height: min(proxy.size.width * 0.18, 92))
-                    .blur(radius: 18)
-                    .offset(x: proxy.size.width * 0.78, y: proxy.size.height * 0.72)
-
-                Circle()
-                    .fill(accent.opacity(0.10))
-                    .frame(width: min(proxy.size.width * 0.22, 120), height: min(proxy.size.width * 0.22, 120))
-                    .blur(radius: 18)
-                    .offset(x: proxy.size.width * 0.70, y: proxy.size.height * 0.14)
+                        let cellRect = CGRect(x: x, y: y, width: max(1, cell - 2), height: max(1, cell - 2))
+                        context.fill(Path(roundedRect: cellRect, cornerRadius: 1), with: .color(fill))
+                    }
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
         .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 7.5).repeatForever(autoreverses: true)) {
-                sweep = true
-            }
-        }
     }
 }
 
 public struct RoachPanel<Content: View>: View {
     private let content: Content
+    private let radius: CGFloat = 16
 
     public init(@ViewBuilder content: () -> Content) {
         self.content = content()
@@ -288,21 +572,21 @@ public struct RoachPanel<Content: View>: View {
 
     public var body: some View {
         content
-            .padding(20)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(.ultraThinMaterial)
                     .allowsHitTesting(false)
             )
             .background(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
-                                RoachPalette.panel.opacity(0.92),
-                                RoachPalette.panelRaised.opacity(0.88),
-                                Color.black.opacity(0.22),
+                                RoachPalette.panel.opacity(0.94),
+                                RoachPalette.panelRaised.opacity(0.90),
+                                Color.black.opacity(0.28),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -311,18 +595,18 @@ public struct RoachPanel<Content: View>: View {
                     .allowsHitTesting(false)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 1)
                     .allowsHitTesting(false)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
-                                RoachPalette.panelSpecular,
+                                Color.white.opacity(0.08),
                                 Color.clear,
-                                Color.white.opacity(0.015),
+                                Color.white.opacity(0.012),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -332,23 +616,23 @@ public struct RoachPanel<Content: View>: View {
                     .allowsHitTesting(false)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .inset(by: 1)
-                    .stroke(Color.white.opacity(0.025), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.022), lineWidth: 1)
                     .allowsHitTesting(false)
             )
             .overlay(
-                RoachAnimatedChrome(cornerRadius: 26, accent: RoachPalette.green)
+                RoachAnimatedChrome(cornerRadius: radius, accent: RoachPalette.green)
             )
-            .shadow(color: RoachPalette.shadow.opacity(0.88), radius: 34, x: 0, y: 18)
-            .shadow(color: RoachPalette.green.opacity(0.05), radius: 48, x: 0, y: 24)
+            .shadow(color: RoachPalette.shadow.opacity(0.48), radius: 22, x: 0, y: 12)
+            .shadow(color: RoachPalette.green.opacity(0.03), radius: 28, x: 0, y: 14)
     }
 }
 
 public struct RoachSpotlightPanel<Content: View>: View {
     private let accent: Color
     private let content: Content
-    @State private var breathe = false
+    private let radius: CGFloat = 18
 
     public init(accent: Color = RoachPalette.magenta, @ViewBuilder content: () -> Content) {
         self.accent = accent
@@ -357,11 +641,11 @@ public struct RoachSpotlightPanel<Content: View>: View {
 
     public var body: some View {
         content
-            .padding(24)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
@@ -374,12 +658,12 @@ public struct RoachSpotlightPanel<Content: View>: View {
                             )
                         )
 
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    accent.opacity(0.12),
-                                    RoachPalette.cyan.opacity(0.03),
+                                    accent.opacity(0.10),
+                                    RoachPalette.green.opacity(0.035),
                                     Color.clear,
                                 ],
                                 startPoint: .topLeading,
@@ -387,75 +671,51 @@ public struct RoachSpotlightPanel<Content: View>: View {
                             )
                         )
 
-                    Circle()
-                        .fill(accent.opacity(0.16))
-                        .frame(width: 240, height: 240)
-                        .blur(radius: 72)
-                        .offset(x: breathe ? -20 : -64, y: breathe ? -18 : -54)
+                    TimelineView(.animation(minimumInterval: 1.0 / 18.0, paused: false)) { timeline in
+                        Canvas { context, size in
+                            let time = timeline.date.timeIntervalSinceReferenceDate
+                            let cell: CGFloat = size.width < 620 ? 6 : 7
+                            let columns = max(1, Int(ceil(size.width / cell)))
+                            let rows = max(1, Int(ceil(size.height / cell)))
 
-                    Circle()
-                        .fill(RoachPalette.green.opacity(0.08))
-                        .frame(width: 180, height: 180)
-                        .blur(radius: 66)
-                        .offset(x: breathe ? 220 : 180, y: breathe ? -12 : 24)
+                            for row in 0...rows {
+                                for column in 0...columns {
+                                    let nx = Double(column) / Double(columns)
+                                    let ny = Double(row) / Double(rows)
+                                    let topEdge = max(0, 1.0 - ny * 4.4)
+                                    let leftEdge = max(0, 1.0 - nx * 3.7)
+                                    let crawl = 0.5 + 0.5 * sin((nx * 8.2) + (ny * 12.0) + time * 0.9)
+                                    let threshold = RoachDither.threshold(row: row, column: column) * 0.52
+                                    let intensity = (topEdge * 0.18) + (leftEdge * 0.08) + (crawl * 0.035)
 
-                    RoundedRectangle(cornerRadius: 999, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.clear,
-                                    Color.white.opacity(0.16),
-                                    accent.opacity(0.18),
-                                    Color.clear,
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: 280, height: 2)
-                        .rotationEffect(.degrees(-15))
-                        .offset(x: breathe ? 168 : -92, y: breathe ? 188 : 136)
-                        .blur(radius: 0.2)
+                                    guard intensity > threshold else { continue }
 
-                    RoundedRectangle(cornerRadius: 999, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.clear,
-                                    accent.opacity(0.22),
-                                    Color.white.opacity(0.10),
-                                    Color.clear,
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: 220, height: 1.5)
-                        .rotationEffect(.degrees(14))
-                        .offset(x: breathe ? 32 : -124, y: breathe ? 42 : 18)
-                        .blur(radius: 0.15)
-
-                    LinearGradient(
-                        colors: [
-                            accent.opacity(0.42),
-                            accent.opacity(0.08),
-                            Color.clear,
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(height: 3)
-                    .padding(.top, 1)
+                                    let rect = CGRect(
+                                        x: CGFloat(column) * cell,
+                                        y: CGFloat(row) * cell,
+                                        width: max(1, cell - 2),
+                                        height: max(1, cell - 2)
+                                    )
+                                    context.fill(
+                                        Path(roundedRect: rect, cornerRadius: 1.1),
+                                        with: .color(RoachDither.cellColor(row: row, column: column, accent: accent, intensity: min(0.16, intensity - threshold + 0.025)))
+                                    )
+                                }
+                            }
+                        }
+                        .blendMode(.screen)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                 }
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .stroke(
                         LinearGradient(
                             colors: [
-                                accent.opacity(0.30),
-                                Color.white.opacity(0.08),
-                                RoachPalette.green.opacity(0.16),
+                                accent.opacity(0.26),
+                                Color.white.opacity(0.07),
+                                RoachPalette.green.opacity(0.14),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -464,14 +724,9 @@ public struct RoachSpotlightPanel<Content: View>: View {
                     )
             )
             .overlay(
-                RoachAnimatedChrome(cornerRadius: 30, accent: accent)
+                RoachAnimatedChrome(cornerRadius: radius, accent: accent)
             )
-            .shadow(color: accent.opacity(0.10), radius: 28, x: 0, y: 16)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 6.5).repeatForever(autoreverses: true)) {
-                    breathe = true
-                }
-            }
+            .shadow(color: accent.opacity(0.07), radius: 18, x: 0, y: 10)
     }
 }
 
@@ -485,7 +740,7 @@ public struct RoachKicker: View {
     public var body: some View {
         Text(text.uppercased())
             .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .tracking(1.8)
+            .tracking(0.9)
             .foregroundStyle(
                 LinearGradient(
                     colors: [
@@ -517,6 +772,18 @@ public struct RoachSecondaryButtonStyle: ButtonStyle {
     }
 }
 
+public struct RoachUtilityButtonStyle: ButtonStyle {
+    private let tint: Color
+
+    public init(tint: Color = RoachPalette.green) {
+        self.tint = tint
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        RoachUtilityButtonBody(configuration: configuration, tint: tint)
+    }
+}
+
 public struct RoachCardButtonStyle: ButtonStyle {
     public init() {}
 
@@ -531,14 +798,16 @@ private struct RoachPrimaryButtonBody: View {
 
     var body: some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundStyle(RoachPalette.text)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .frame(minHeight: 46)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(minHeight: 26)
             .background(
                 ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
@@ -551,7 +820,7 @@ private struct RoachPrimaryButtonBody: View {
                             )
                         )
 
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(
                             LinearGradient(
                                 colors: [
@@ -565,7 +834,7 @@ private struct RoachPrimaryButtonBody: View {
                             lineWidth: 1.0
                         )
 
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
@@ -579,9 +848,9 @@ private struct RoachPrimaryButtonBody: View {
                         .blendMode(.screen)
                 }
             )
-            .shadow(color: RoachPalette.magenta.opacity(configuration.isPressed ? 0.16 : (hovered ? 0.34 : 0.22)), radius: hovered ? 30 : 20, x: 0, y: hovered ? 18 : 10)
-            .scaleEffect(configuration.isPressed ? 0.975 : (hovered ? 1.02 : 1.0))
-            .offset(y: configuration.isPressed ? 1 : (hovered ? -2 : 0))
+            .shadow(color: RoachPalette.magenta.opacity(configuration.isPressed ? 0.10 : (hovered ? 0.20 : 0.13)), radius: hovered ? 18 : 10, x: 0, y: hovered ? 9 : 5)
+            .scaleEffect(configuration.isPressed ? 0.98 : (hovered ? 1.01 : 1.0))
+            .offset(y: configuration.isPressed ? 1 : (hovered ? -1 : 0))
             .onHover { inside in
                 hovered = inside
             }
@@ -596,14 +865,16 @@ private struct RoachSecondaryButtonBody: View {
 
     var body: some View {
         configuration.label
-            .font(.system(size: 14, weight: .medium, design: .rounded))
+            .font(.system(size: 11, weight: .medium, design: .rounded))
             .foregroundStyle(RoachPalette.text)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .frame(minHeight: 44)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(minHeight: 26)
             .background(
                 ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
@@ -614,7 +885,7 @@ private struct RoachSecondaryButtonBody: View {
                                 endPoint: .bottomTrailing
                             )
                         )
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [Color.white.opacity(0.10), Color.clear],
@@ -626,17 +897,72 @@ private struct RoachSecondaryButtonBody: View {
                 }
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(hovered ? RoachPalette.green.opacity(0.20) : RoachPalette.border, lineWidth: 1)
             )
-            .shadow(color: hovered ? RoachPalette.green.opacity(0.10) : .clear, radius: hovered ? 18 : 0, x: 0, y: hovered ? 12 : 0)
-            .scaleEffect(configuration.isPressed ? 0.98 : (hovered ? 1.02 : 1.0))
-            .offset(y: configuration.isPressed ? 1 : (hovered ? -2 : 0))
+            .shadow(color: hovered ? RoachPalette.green.opacity(0.07) : .clear, radius: hovered ? 9 : 0, x: 0, y: hovered ? 5 : 0)
+            .scaleEffect(configuration.isPressed ? 0.985 : (hovered ? 1.01 : 1.0))
+            .offset(y: configuration.isPressed ? 1 : (hovered ? -1 : 0))
             .onHover { inside in
                 hovered = inside
             }
             .animation(.spring(response: 0.30, dampingFraction: 0.82), value: configuration.isPressed)
             .animation(.spring(response: 0.30, dampingFraction: 0.82), value: hovered)
+    }
+}
+
+private struct RoachUtilityButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let tint: Color
+    @State private var hovered = false
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(hovered ? RoachPalette.text : tint)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .frame(minWidth: 28, minHeight: 28)
+            .padding(.horizontal, 2)
+            .background(
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    RoachPalette.panelRaised.opacity(configuration.isPressed ? 0.76 : (hovered ? 0.88 : 0.78)),
+                                    RoachPalette.panel.opacity(configuration.isPressed ? 0.72 : (hovered ? 0.82 : 0.72)),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    tint.opacity(hovered ? 0.14 : 0.08),
+                                    Color.clear,
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(hovered ? tint.opacity(0.24) : Color.white.opacity(0.06), lineWidth: 1)
+            )
+            .shadow(color: tint.opacity(hovered ? 0.10 : 0.04), radius: hovered ? 12 : 8, x: 0, y: hovered ? 7 : 4)
+            .scaleEffect(configuration.isPressed ? 0.98 : (hovered ? 1.01 : 1.0))
+            .offset(y: configuration.isPressed ? 1 : (hovered ? -1 : 0))
+            .onHover { inside in
+                hovered = inside
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.82), value: configuration.isPressed)
+            .animation(.spring(response: 0.28, dampingFraction: 0.82), value: hovered)
     }
 }
 
@@ -711,7 +1037,7 @@ public struct RoachInfoPill: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Capsule(style: .continuous)
                     .fill(
@@ -737,11 +1063,11 @@ public struct RoachInfoPill: View {
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
@@ -754,7 +1080,7 @@ public struct RoachInfoPill: View {
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(RoachPalette.borderStrong, lineWidth: 1)
             )
     }
@@ -835,7 +1161,7 @@ public struct RoachDigestRow: View {
     }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(
@@ -847,10 +1173,10 @@ public struct RoachDigestRow: View {
                     )
 
                 Image(systemName: systemName)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(accent)
             }
-            .frame(width: 38, height: 38)
+            .frame(width: 30, height: 30)
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(accent.opacity(0.18), lineWidth: 1)
@@ -863,13 +1189,13 @@ public struct RoachDigestRow: View {
                     .foregroundStyle(RoachPalette.muted)
 
                 Text(value)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(RoachPalette.text)
                     .lineLimit(2)
                     .minimumScaleFactor(0.82)
 
                 Text(detail)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(RoachPalette.muted)
                     .lineSpacing(1.4)
                     .fixedSize(horizontal: false, vertical: true)
@@ -877,8 +1203,8 @@ public struct RoachDigestRow: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 13)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -995,34 +1321,45 @@ public struct RoachModuleMark: View {
 }
 
 public struct RoachOrbitMark: View {
-    @State private var breathe = false
-
     public init() {}
 
     public var body: some View {
         GeometryReader { proxy in
             let size = min(proxy.size.width, proxy.size.height)
-            let haloSize = size * 0.96
             let iconSize = size * 0.90
 
             ZStack {
-                Circle()
-                    .fill(RoachPalette.green.opacity(0.20))
-                    .frame(width: haloSize, height: haloSize)
-                    .blur(radius: size * 0.18)
-                    .offset(x: breathe ? -size * 0.04 : -size * 0.11, y: breathe ? -size * 0.05 : -size * 0.13)
+                TimelineView(.animation(minimumInterval: 1.0 / 18.0, paused: false)) { timeline in
+                    Canvas { context, canvasSize in
+                        let time = timeline.date.timeIntervalSinceReferenceDate
+                        let cell = max(3.5, size * 0.036)
+                        let columns = max(1, Int(ceil(canvasSize.width / cell)))
+                        let rows = max(1, Int(ceil(canvasSize.height / cell)))
+                        let center = CGPoint(x: canvasSize.width * 0.5, y: canvasSize.height * 0.5)
 
-                Circle()
-                    .fill(RoachPalette.magenta.opacity(0.22))
-                    .frame(width: haloSize * 0.88, height: haloSize * 0.88)
-                    .blur(radius: size * 0.18)
-                    .offset(x: breathe ? size * 0.08 : size * 0.04, y: breathe ? size * 0.08 : size * 0.03)
+                        for row in 0...rows {
+                            for column in 0...columns {
+                                let point = CGPoint(x: CGFloat(column) * cell, y: CGFloat(row) * cell)
+                                let dx = (point.x - center.x) / max(1, size * 0.48)
+                                let dy = (point.y - center.y) / max(1, size * 0.48)
+                                let radius = sqrt(dx * dx + dy * dy)
+                                let ring = max(0, 1 - abs(Double(radius) - 0.72) * 3.2)
+                                let crawl = 0.5 + 0.5 * sin(Double(column + row) * 0.36 + time * 1.3)
+                                let threshold = RoachDither.threshold(row: row, column: column) * 0.44
+                                let intensity = ring * (0.32 + crawl * 0.26)
 
-                Circle()
-                    .fill(RoachPalette.cyan.opacity(0.08))
-                    .frame(width: haloSize * 0.64, height: haloSize * 0.64)
-                    .blur(radius: size * 0.12)
-                    .offset(y: size * 0.03)
+                                guard intensity > threshold else { continue }
+
+                                let rect = CGRect(x: point.x, y: point.y, width: max(1, cell - 1.5), height: max(1, cell - 1.5))
+                                context.fill(
+                                    Path(roundedRect: rect, cornerRadius: 1),
+                                    with: .color(RoachDither.cellColor(row: row, column: column, accent: RoachPalette.green, intensity: min(0.22, intensity - threshold + 0.04)))
+                                )
+                            }
+                        }
+                    }
+                    .blendMode(.screen)
+                }
 
                 if let iconImage = roachRuntimeImage(named: "RoachNet.icns") {
                     Image(nsImage: iconImage)
@@ -1030,8 +1367,7 @@ public struct RoachOrbitMark: View {
                         .interpolation(.high)
                         .scaledToFit()
                         .frame(width: iconSize, height: iconSize)
-                        .shadow(color: RoachPalette.green.opacity(0.18), radius: size * 0.16, y: size * 0.05)
-                        .shadow(color: RoachPalette.magenta.opacity(0.14), radius: size * 0.18, y: size * 0.04)
+                        .shadow(color: RoachPalette.green.opacity(0.20), radius: size * 0.12, y: size * 0.04)
                 } else {
                     VStack(spacing: size * 0.04) {
                         Image(systemName: "ant.fill")
@@ -1053,11 +1389,6 @@ public struct RoachOrbitMark: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .aspectRatio(1, contentMode: .fit)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 5.8).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
-        }
     }
 }
 
@@ -1073,18 +1404,18 @@ public struct RoachSectionHeader: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             RoachKicker(kicker)
             Text(title)
-                .font(.system(size: 30, weight: .black, design: .rounded))
+                .font(.system(size: 16, weight: .black, design: .rounded))
                 .foregroundStyle(RoachPalette.text)
                 .lineSpacing(1.1)
-                .lineLimit(3)
+                .lineLimit(2)
                 .minimumScaleFactor(0.84)
                 .allowsTightening(true)
             if let detail, !detail.isEmpty {
                 Text(detail)
-                    .font(.system(size: 14, weight: .regular))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(RoachPalette.muted)
                     .lineSpacing(2)
             }
@@ -1115,7 +1446,7 @@ public struct RoachFeatureTile: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(label.uppercased())
@@ -1124,7 +1455,7 @@ public struct RoachFeatureTile: View {
                         .foregroundStyle(RoachPalette.muted)
 
                     Text(title)
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundStyle(RoachPalette.text)
                         .lineLimit(2)
                         .minimumScaleFactor(0.88)
@@ -1154,8 +1485,9 @@ public struct RoachFeatureTile: View {
             }
 
             Text(detail)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(RoachPalette.muted)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(alignment: .center, spacing: 10) {
@@ -1177,11 +1509,11 @@ public struct RoachFeatureTile: View {
                     .offset(x: hovered ? 1 : 0, y: hovered ? -1 : 0)
             }
         }
-        .padding(18)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
@@ -1194,7 +1526,7 @@ public struct RoachFeatureTile: View {
                         )
                     )
 
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
@@ -1209,11 +1541,11 @@ public struct RoachFeatureTile: View {
             }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(accent.opacity(hovered ? 0.24 : 0.14), lineWidth: 1)
         )
         .overlay(
-            RoachAnimatedChrome(cornerRadius: 24, accent: accent)
+            RoachAnimatedChrome(cornerRadius: 16, accent: accent)
         )
         .shadow(color: accent.opacity(hovered ? 0.10 : 0.04), radius: hovered ? 24 : 18, x: 0, y: hovered ? 16 : 10)
         .scaleEffect(hovered ? 1.01 : 1.0)
@@ -1283,16 +1615,18 @@ public struct RoachTag: View {
 
     public var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .tracking(0.7)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .tracking(0.55)
             .foregroundStyle(accent)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .background(
                 Capsule(style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [accent.opacity(0.16), accent.opacity(0.07)],
+                            colors: [accent.opacity(0.12), accent.opacity(0.05)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -1300,7 +1634,7 @@ public struct RoachTag: View {
             )
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(accent.opacity(0.22), lineWidth: 1)
+                    .stroke(accent.opacity(0.18), lineWidth: 1)
             )
     }
 }
@@ -1309,6 +1643,7 @@ public struct RoachCommandTray: View {
     private let label: String
     private let prompt: String
     private let keys: String
+    @State private var hovered = false
 
     public init(label: String, prompt: String, keys: String = "⌘K") {
         self.label = label
@@ -1317,15 +1652,15 @@ public struct RoachCommandTray: View {
     }
 
     public var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
                                 RoachPalette.panelGlass,
-                                Color.white.opacity(0.03),
-                                RoachPalette.green.opacity(0.04),
+                                Color.white.opacity(hovered ? 0.05 : 0.03),
+                                RoachPalette.green.opacity(hovered ? 0.10 : 0.04),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -1336,31 +1671,32 @@ public struct RoachCommandTray: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(RoachPalette.green)
             }
-            .frame(width: 36, height: 36)
+            .frame(width: 30, height: 30)
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(hovered ? RoachPalette.green.opacity(0.32) : RoachPalette.borderStrong, lineWidth: 1)
             )
-            .shadow(color: RoachPalette.green.opacity(0.12), radius: 18, x: 0, y: 10)
+            .shadow(color: RoachPalette.green.opacity(hovered ? 0.20 : 0.12), radius: hovered ? 22 : 18, x: 0, y: hovered ? 12 : 10)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(label.uppercased())
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .tracking(1.2)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(0.8)
                     .foregroundStyle(RoachPalette.muted)
                 Text(prompt)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(RoachPalette.text)
                     .lineLimit(2)
+                    .minimumScaleFactor(0.86)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Text(keys)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(RoachPalette.muted)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(hovered ? RoachPalette.green : RoachPalette.muted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .background(
                     Capsule(style: .continuous)
                         .fill(
@@ -1376,11 +1712,11 @@ public struct RoachCommandTray: View {
                         .stroke(RoachPalette.borderStrong, lineWidth: 1)
                 )
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
@@ -1393,7 +1729,7 @@ public struct RoachCommandTray: View {
                         )
                     )
 
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [
@@ -1408,13 +1744,18 @@ public struct RoachCommandTray: View {
             }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(RoachPalette.borderStrong, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(hovered ? RoachPalette.green.opacity(0.24) : RoachPalette.borderStrong, lineWidth: 1)
         )
         .overlay(
-            RoachAnimatedChrome(cornerRadius: 24, accent: RoachPalette.green)
+            RoachAnimatedChrome(cornerRadius: 16, accent: RoachPalette.green)
         )
-        .shadow(color: RoachPalette.shadow.opacity(0.16), radius: 24, x: 0, y: 12)
+        .shadow(color: RoachPalette.shadow.opacity(hovered ? 0.22 : 0.16), radius: hovered ? 28 : 24, x: 0, y: hovered ? 16 : 12)
+        .scaleEffect(hovered ? 1.01 : 1)
+        .offset(y: hovered ? -1 : 0)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onHover { hovered = $0 }
+        .animation(.spring(response: 0.24, dampingFraction: 0.84), value: hovered)
     }
 }
 
@@ -1445,31 +1786,34 @@ public struct RoachSidebarTile: View {
 
     public var body: some View {
         Group {
-                if isCompact {
-                    RoachModuleMark(
-                        systemName: systemName,
-                        assetName: assetName,
-                        size: assetName == nil ? 16 : 18,
-                        isSelected: isSelected
-                    )
-                        .frame(width: 48, height: 48)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: isSelected
-                                            ? [RoachPalette.panelSoft.opacity(hovered ? 0.92 : 0.80), RoachPalette.panelRaised.opacity(0.74)]
-                                            : [RoachPalette.panelRaised.opacity(hovered ? 0.76 : 0.60), RoachPalette.panel.opacity(0.58)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
+            if isCompact {
+                RoachModuleMark(
+                    systemName: systemName,
+                    assetName: assetName,
+                    size: assetName == nil ? 16 : 18,
+                    isSelected: isSelected
+                )
+                    .frame(width: 48, height: 48)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: isSelected
+                                        ? [RoachPalette.panelSoft.opacity(hovered ? 0.84 : 0.72), RoachPalette.panelRaised.opacity(0.68)]
+                                        : [RoachPalette.panelRaised.opacity(hovered ? 0.62 : 0.42), RoachPalette.panel.opacity(0.42)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
                                 )
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(isSelected ? RoachPalette.green.opacity(0.28) : (hovered ? RoachPalette.green.opacity(0.12) : RoachPalette.border), lineWidth: 1)
-                        )
-                        .shadow(color: isSelected ? RoachPalette.green.opacity(hovered ? 0.16 : 0.10) : .clear, radius: hovered ? 18 : 14, x: 0, y: hovered ? 10 : 8)
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(
+                                isSelected ? RoachPalette.green.opacity(0.22) : (hovered ? RoachPalette.green.opacity(0.10) : RoachPalette.border.opacity(0.8)),
+                                lineWidth: 1
+                            )
+                    )
+                    .shadow(color: isSelected ? RoachPalette.green.opacity(hovered ? 0.12 : 0.06) : .clear, radius: hovered ? 14 : 10, x: 0, y: hovered ? 8 : 6)
             } else {
                 HStack(spacing: 12) {
                     RoachModuleMark(
@@ -1499,80 +1843,57 @@ public struct RoachSidebarTile: View {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(RoachPalette.text)
                         Text(subtitle)
-                            .font(.system(size: 12, weight: .regular))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
                     }
 
                     Spacer()
 
-                    HStack(spacing: 8) {
-                        if hovered && !isSelected {
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(RoachPalette.green.opacity(0.72))
-                        }
-
-                        Circle()
-                            .fill(isSelected ? RoachPalette.green : (hovered ? RoachPalette.green.opacity(0.44) : Color.clear))
-                            .frame(width: 7, height: 7)
-                            .shadow(color: RoachPalette.green.opacity(isSelected ? 0.32 : 0.16), radius: 8, x: 0, y: 0)
-                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(isSelected ? RoachPalette.green.opacity(0.88) : RoachPalette.muted.opacity(hovered ? 0.82 : 0.44))
+                        .opacity(isSelected || hovered ? 1 : 0.75)
                 }
-                .padding(14)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: isSelected
-                                        ? [RoachPalette.panelSoft.opacity(hovered ? 0.90 : 0.76), RoachPalette.panelRaised.opacity(0.70)]
-                                        : [RoachPalette.panel.opacity(hovered ? 0.44 : 0.26), RoachPalette.panelRaised.opacity(0.34)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: isSelected
+                                    ? [RoachPalette.panelRaised.opacity(0.78), RoachPalette.panel.opacity(0.62)]
+                                    : [RoachPalette.panel.opacity(hovered ? 0.34 : 0.12), Color.clear],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
                             )
-
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        isSelected ? RoachPalette.green.opacity(0.12) : Color.clear,
-                                        Color.clear,
-                                        hovered ? RoachPalette.magenta.opacity(0.03) : Color.clear,
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    }
+                        )
                 )
                 .overlay(alignment: .leading) {
                     Capsule(style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    RoachPalette.green.opacity(isSelected ? 0.88 : (hovered ? 0.42 : 0.0)),
+                                    RoachPalette.green.opacity(isSelected ? 0.92 : (hovered ? 0.34 : 0.0)),
                                     accentlessSidebarGlow,
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
                         )
-                        .frame(width: 3, height: isSelected ? 34 : (hovered ? 20 : 0))
-                        .padding(.leading, 8)
+                        .frame(width: 2.5, height: isSelected ? 30 : (hovered ? 16 : 0))
+                        .padding(.leading, 4)
                 }
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(isSelected ? RoachPalette.green.opacity(0.18) : (hovered ? RoachPalette.green.opacity(0.08) : RoachPalette.border), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(isSelected ? RoachPalette.green.opacity(0.14) : Color.white.opacity(hovered ? 0.08 : 0.03), lineWidth: 1)
                 )
-                .shadow(color: isSelected ? RoachPalette.green.opacity(hovered ? 0.12 : 0.06) : .clear, radius: hovered ? 14 : 10, x: 0, y: hovered ? 8 : 6)
+                .shadow(color: isSelected ? RoachPalette.green.opacity(hovered ? 0.08 : 0.03) : .clear, radius: hovered ? 12 : 8, x: 0, y: hovered ? 6 : 4)
             }
         }
-        .scaleEffect(isCompact ? (hovered ? 1.05 : 1.0) : (hovered ? 1.01 : 1.0))
-        .offset(y: hovered ? -1 : 0)
+        .scaleEffect(isCompact ? (hovered ? 1.05 : 1.0) : (hovered ? 1.005 : 1.0))
+        .offset(y: hovered ? -0.5 : 0)
         .onHover { inside in
             hovered = inside
         }
@@ -1588,6 +1909,7 @@ public struct RoachMetricCard: View {
     private let label: String
     private let value: String
     private let detail: String
+    @State private var hovered = false
 
     public init(label: String, value: String, detail: String) {
         self.label = label
@@ -1596,62 +1918,71 @@ public struct RoachMetricCard: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label.uppercased())
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .tracking(1.3)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(0)
                 .foregroundStyle(RoachPalette.muted)
             Text(value)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(RoachPalette.text)
                 .lineLimit(2)
-                .minimumScaleFactor(0.82)
+                .minimumScaleFactor(0.86)
+                .allowsTightening(false)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
             Text(detail)
-                .font(.system(size: 13, weight: .regular))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(RoachPalette.muted)
-                .lineLimit(3)
+                .lineLimit(2)
+                .truncationMode(.middle)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(
-                            LinearGradient(
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+        .background(
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
                             colors: [
-                                RoachPalette.panelRaised.opacity(0.70),
-                                RoachPalette.panel.opacity(0.58),
+                                RoachPalette.panelRaised.opacity(hovered ? 0.74 : 0.64),
+                                RoachPalette.panel.opacity(0.54),
                                 Color.black.opacity(0.12),
                             ],
                             startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+                            endPoint: .bottomTrailing
                         )
+                    )
 
                 Circle()
-                    .fill(RoachPalette.magenta.opacity(0.14))
+                    .fill(RoachPalette.magenta.opacity(hovered ? 0.18 : 0.12))
                     .frame(width: 110, height: 110)
                     .blur(radius: 34)
-                    .offset(x: 120, y: -20)
+                    .offset(x: hovered ? 108 : 120, y: hovered ? -26 : -20)
 
                 Capsule(style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [RoachPalette.green.opacity(0.92), RoachPalette.magenta.opacity(0.72)],
+                            colors: [RoachPalette.green.opacity(0.86), RoachPalette.magenta.opacity(0.68)],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: 50, height: 3)
-                    .padding(.leading, 18)
-                    .padding(.top, 14)
+                    .frame(width: hovered ? 42 : 34, height: 3)
+                    .padding(.leading, 12)
+                    .padding(.top, 10)
             }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(hovered ? RoachPalette.green.opacity(0.16) : Color.white.opacity(0.06), lineWidth: 1)
         )
-        .shadow(color: RoachPalette.shadow.opacity(0.12), radius: 14, x: 0, y: 8)
+        .shadow(color: RoachPalette.shadow.opacity(hovered ? 0.14 : 0.10), radius: hovered ? 14 : 12, x: 0, y: hovered ? 10 : 8)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .help("\(label): \(value)\n\(detail)")
+        .onHover { hovered = $0 }
+        .animation(.spring(response: 0.22, dampingFraction: 0.84), value: hovered)
     }
 }
 
@@ -1664,16 +1995,16 @@ public struct RoachInsetPanel<Content: View>: View {
 
     public var body: some View {
         content
-            .padding(18)
+            .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    RoachPalette.panelRaised.opacity(0.90),
-                                    RoachPalette.panel.opacity(0.84),
+                                    RoachPalette.panelRaised.opacity(0.84),
+                                    RoachPalette.panel.opacity(0.80),
                                     Color.black.opacity(0.12),
                                 ],
                                 startPoint: .topLeading,
@@ -1681,13 +2012,13 @@ public struct RoachInsetPanel<Content: View>: View {
                             )
                         )
 
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    RoachPalette.magenta.opacity(0.10),
+                                    RoachPalette.magenta.opacity(0.07),
                                     Color.clear,
-                                    RoachPalette.cyan.opacity(0.03),
+                                    RoachPalette.cyan.opacity(0.025),
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -1697,15 +2028,15 @@ public struct RoachInsetPanel<Content: View>: View {
                 }
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
                     .allowsHitTesting(false)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.08), Color.clear, Color.clear],
+                            colors: [Color.white.opacity(0.06), Color.clear, Color.clear],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -1713,7 +2044,7 @@ public struct RoachInsetPanel<Content: View>: View {
                     .blendMode(.screen)
                     .allowsHitTesting(false)
             )
-            .shadow(color: RoachPalette.shadow.opacity(0.12), radius: 16, x: 0, y: 8)
+            .shadow(color: RoachPalette.shadow.opacity(0.07), radius: 10, x: 0, y: 6)
     }
 }
 
@@ -1731,11 +2062,11 @@ public struct RoachNotice: View {
     }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(accent)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(
@@ -1764,10 +2095,10 @@ public struct RoachNotice: View {
 
             Spacer()
         }
-        .padding(16)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [RoachPalette.panelRaised.opacity(0.76), RoachPalette.panel.opacity(0.68)],
@@ -1777,12 +2108,12 @@ public struct RoachNotice: View {
                 )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(accent.opacity(0.22), lineWidth: 1)
         )
         .overlay(
-            RoachAnimatedChrome(cornerRadius: 22, accent: accent)
+            RoachAnimatedChrome(cornerRadius: 18, accent: accent)
         )
-        .shadow(color: RoachPalette.shadow.opacity(0.14), radius: 16, x: 0, y: 8)
+        .shadow(color: RoachPalette.shadow.opacity(0.08), radius: 10, x: 0, y: 6)
     }
 }

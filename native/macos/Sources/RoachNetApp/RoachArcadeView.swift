@@ -12,6 +12,13 @@ struct RoachArcadeView: View {
     @State private var newProfileName = ""
     @State private var vortexCollectionTitle = ""
     @State private var vortexCollectionURL = ""
+    @State private var metadataGameID: UUID?
+    @State private var metadataNotes = ""
+    @State private var metadataTags = ""
+    @State private var metadataArtworkPath = ""
+    @State private var metadataStoreURL = ""
+    @State private var metadataRunnerPath = ""
+    @State private var metadataBottlePath = ""
 
     private var displayStoragePath: String {
         let home = NSHomeDirectory()
@@ -26,7 +33,7 @@ struct RoachArcadeView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 10) {
             header
 
             if let errorLine = store.errorLine {
@@ -37,68 +44,167 @@ struct RoachArcadeView: View {
                 player(session)
             }
 
-            HStack(alignment: .top, spacing: 18) {
-                libraryColumn
-                    .frame(minWidth: 300, idealWidth: 380, maxWidth: 440)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 18) {
+                    libraryColumn
+                        .frame(minWidth: 300, idealWidth: 380, maxWidth: 440)
 
-                detailColumn
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    detailColumn
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    libraryColumn
+                    detailColumn
+                }
             }
         }
+        .padding(.bottom, 16)
     }
 
     private var header: some View {
         let stats = store.stats
         return RoachSpotlightPanel(accent: RoachPalette.magenta) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 16) {
-                    RoachModuleMark(systemName: "gamecontroller.fill", size: 56, isSelected: true, glow: true)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
+                    RoachModuleMark(systemName: "gamecontroller.fill", size: 34, isSelected: true, glow: true)
                     RoachSectionHeader(
                         "RoachArcade",
-                        title: "Games stay on disk. RoachArcade keeps them bootable.",
-                        detail: "ROMs run in this tab. macOS games launch from the same shelf. Mods, cheats, collection notes, play counts, and source paths stay local."
+                        title: "Backlog graveyard. Still boots.",
+                        detail: nil
                     )
                     Spacer(minLength: 12)
-                    Button("Import ROM Folder") {
-                        if let url = chooseFolder(title: "Choose a ROM folder") {
-                            store.importROMFolder(url)
-                        }
-                    }
-                    .buttonStyle(RoachPrimaryButtonStyle())
-                    Button("Add macOS Game") {
-                        if let url = chooseApplication() {
-                            store.importMacGame(url)
-                        }
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-                    Button("Add Windows Game") {
-                        if let url = chooseWindowsExecutable() {
-                            store.importWindowsGame(url)
-                        }
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
+                    arcadeImportActions
                 }
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], alignment: .leading, spacing: 12) {
-                    RoachInfoPill(title: "Games", value: "\(stats.games)")
-                    RoachInfoPill(title: "ROMs", value: "\(stats.roms)")
-                    RoachInfoPill(title: "Native", value: "\(stats.native)")
-                    RoachInfoPill(title: "Windows", value: "\(stats.windows)")
-                    RoachInfoPill(title: "Playable", value: "\(stats.playable)")
-                    RoachInfoPill(title: "Controllers", value: "\(store.connectedControllers.count)")
-                    RoachInfoPill(title: "Mods", value: "\(stats.profiles)")
-                    RoachInfoPill(title: "Cheats", value: "\(stats.cheats)")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 8)], alignment: .leading, spacing: 8) {
+                    RoachMetricCard(label: "Games", value: "\(stats.games)", detail: "On disk")
+                    RoachMetricCard(label: "Playable", value: "\(stats.playable)", detail: "Bootable")
+                    RoachMetricCard(label: "Needs Work", value: "\(stats.attention)", detail: "Bad paths")
+                    RoachMetricCard(label: "Controllers", value: "\(store.connectedControllers.count)", detail: store.connectedControllerSummary)
+                }
+
+                if !store.systemShelf.isEmpty {
+                    systemShelfStrip
                 }
             }
         }
+    }
+
+    private var systemShelfStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(store.systemShelf.prefix(12)) { summary in
+                    Button {
+                        store.searchText = summary.system
+                        store.libraryFilter = .all
+                    } label: {
+                        HStack(spacing: 9) {
+                            Image(systemName: summary.core == nil ? "questionmark.square.dashed" : "memorychip.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(summary.core == nil ? RoachPalette.warning : RoachPalette.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(summary.system)
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .foregroundStyle(RoachPalette.text)
+                                    .lineLimit(1)
+                                Text(summary.readinessLabel)
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(RoachPalette.muted)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(RoachPalette.panelRaised.opacity(0.62))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(RoachPalette.magenta.opacity(0.22), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Filter to \(summary.system)")
+                }
+            }
+        }
+    }
+
+    private var arcadeImportActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                arcadeImportButtons
+            }
+
+            VStack(alignment: .trailing, spacing: 8) {
+                arcadeImportButtons
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var arcadeImportButtons: some View {
+        Button {
+            if let url = chooseFolder(title: "Choose an ES-DE library folder") {
+                store.importESDELibrary(url)
+            }
+        } label: {
+            Label("ES-DE", systemImage: "square.grid.3x3.fill")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachPrimaryButtonStyle())
+
+        Button {
+            if let url = chooseFolder(title: "Choose a ROM folder") {
+                store.importROMFolder(url)
+            }
+        } label: {
+            Label("ROMs", systemImage: "rectangle.on.rectangle.circle.fill")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+
+        Button {
+            if let url = chooseApplication() {
+                store.importMacGame(url)
+            }
+        } label: {
+            Label("Mac App", systemImage: "app.fill")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+
+        Button {
+            store.importInstalledMacGames()
+        } label: {
+            Label("Scan", systemImage: "magnifyingglass")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+
+        Button {
+            if let url = chooseWindowsExecutable() {
+                store.importWindowsGame(url)
+            }
+        } label: {
+            Label("Windows", systemImage: "pc")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
     }
 
     private func player(_ session: RoachArcadePlayerSession) -> some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    RoachSectionHeader("Now Playing", title: session.title, detail: "The game keeps running while you open the vault, music, or RoachClaw.")
+                    RoachSectionHeader(
+                        "Now Playing",
+                        title: session.title,
+                        detail: "Embedded in RoachArcade. Controllers stay wired to the room."
+                    )
                     Spacer()
+                    RoachTag("In-tab emulator", accent: RoachPalette.magenta)
                     Button("Close Player") {
                         store.activePlayerSession = nil
                     }
@@ -117,10 +223,81 @@ struct RoachArcadeView: View {
 
     private var libraryColumn: some View {
         RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 14) {
-                RoachSectionHeader("Library", title: "Games", detail: store.statusLine)
-                TextField("Search games", text: $store.searchText)
-                    .textFieldStyle(.roundedBorder)
+            VStack(alignment: .leading, spacing: 12) {
+                RoachSectionHeader("Library", title: "Game shelf", detail: store.statusLine)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        TextField("Search games", text: $store.searchText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .fill(Color.black.opacity(0.22))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(RoachPalette.border, lineWidth: 1)
+                            )
+                        Picker("Filter", selection: $store.libraryFilter) {
+                            ForEach(RoachArcadeLibraryFilter.allCases) { filter in
+                                Text(filter.label).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 142)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("Search games", text: $store.searchText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .fill(Color.black.opacity(0.22))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(RoachPalette.border, lineWidth: 1)
+                            )
+                        Picker("Filter", selection: $store.libraryFilter) {
+                            ForEach(RoachArcadeLibraryFilter.allCases) { filter in
+                                Text(filter.label).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        Text("\(store.libraryFilter.label) · \(store.filteredGames.count) shown")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        Button("Reveal") {
+                            store.revealLibraryFolder()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("\(store.libraryFilter.label) · \(store.filteredGames.count) shown")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+
+                        Button("Reveal") {
+                            store.revealLibraryFolder()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                    }
+                }
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -142,15 +319,15 @@ struct RoachArcadeView: View {
                         }
 
                         if store.filteredGames.isEmpty {
-                            Text("No games in this library yet.")
-                                .font(.system(size: 13, weight: .medium))
+                            Label("No fossils on the shelf", systemImage: "tray")
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(RoachPalette.muted)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, minHeight: 96, alignment: .center)
                                 .padding(14)
                         }
                     }
                 }
-                .frame(minHeight: 320)
+                .frame(minHeight: 420)
             }
         }
     }
@@ -159,16 +336,20 @@ struct RoachArcadeView: View {
         let isSelected = store.selectedGame?.id == game.id
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Image(systemName: game.kind == .rom ? "rectangle.on.rectangle.circle.fill" : (game.kind == .windows ? "pc" : "gamecontroller.fill"))
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(isSelected ? RoachPalette.green : RoachPalette.muted)
-                    .frame(width: 22)
+                gameArtwork(game, width: 42, height: 52, cornerRadius: 12)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(game.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(RoachPalette.text)
-                        .lineLimit(1)
-                    Text("\(game.system) · \(game.kind.label)")
+                    HStack(spacing: 6) {
+                        if game.favorite {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(RoachPalette.bronze)
+                        }
+                        Text(game.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(RoachPalette.text)
+                            .lineLimit(1)
+                    }
+                    Text("\(game.system) · \(game.kind.label) · \(game.source)")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
                         .lineLimit(1)
@@ -194,14 +375,61 @@ struct RoachArcadeView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     gameDetail(game)
+                    runnerReadinessPanel
+                    gameManagementPanel(game)
                     cheatsPanel(game)
                     modsPanel(game)
                     vortexPanel(game)
                 }
             }
+            .onAppear {
+                syncMetadataDraft(for: game)
+            }
+            .onChange(of: game.id) { _, _ in
+                syncMetadataDraft(for: game)
+            }
         } else {
-            RoachInsetPanel {
-                RoachSectionHeader("Empty", title: "Drag the backlog out of launcher jail.", detail: "RoachArcade stores the library under \(displayStoragePath).")
+            arcadeEmptyState
+        }
+    }
+
+    private var arcadeEmptyState: some View {
+        RoachSpotlightPanel(accent: RoachPalette.magenta) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 18) {
+                    arcadeEmptyStateTitle
+                    Spacer(minLength: 12)
+                    arcadeImportActions
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    arcadeEmptyStateTitle
+                    arcadeImportActions
+                }
+            }
+        }
+    }
+
+    private var arcadeEmptyStateTitle: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(RoachPalette.magenta.opacity(0.14))
+                Image(systemName: store.games.isEmpty ? "gamecontroller.fill" : "list.bullet.rectangle")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(RoachPalette.magenta)
+            }
+            .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(store.games.isEmpty ? "Build the shelf." : "Pick a fossil.")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(RoachPalette.text)
+                Text("Library root: \(displayStoragePath)")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(RoachPalette.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
     }
@@ -209,34 +437,46 @@ struct RoachArcadeView: View {
     private func gameDetail(_ game: RoachArcadeGame) -> some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        RoachSectionHeader(game.kind.label, title: game.title, detail: game.launchPath ?? "No launch path linked")
-                        HStack(spacing: 8) {
-                            RoachTag(game.status.label, accent: game.status == .ready ? RoachPalette.green : RoachPalette.warning)
-                            RoachTag(game.kind == .windows ? game.compatibilityRunner.label : (game.resolvedCore ?? "native"), accent: RoachPalette.cyan)
-                            RoachTag("\(game.playCount) plays", accent: RoachPalette.bronze)
-                            if !store.connectedControllers.isEmpty {
-                                RoachTag("Controller ready", accent: RoachPalette.green)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 14) {
+                        gameArtwork(game, width: 118, height: 154, cornerRadius: 18)
+
+                        gameTitleBlock(game)
+
+                        Spacer(minLength: 12)
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                gameDetailActions(game)
+                            }
+
+                            VStack(alignment: .trailing, spacing: 8) {
+                                gameDetailActions(game)
                             }
                         }
                     }
-                    Spacer()
-                    Button(game.kind == .rom ? "Play In Tab" : "Launch") {
-                        store.play(game)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 14) {
+                            gameArtwork(game, width: 86, height: 112, cornerRadius: 16)
+                            gameTitleBlock(game)
+                        }
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                gameDetailActions(game)
+                            }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                gameDetailActions(game)
+                            }
+                        }
                     }
-                    .buttonStyle(RoachPrimaryButtonStyle())
-                    .disabled(game.status != .ready)
-                    Button("Reveal") {
-                        store.reveal(game.launchPath)
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-                    .disabled(game.launchPath == nil)
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 12)], alignment: .leading, spacing: 12) {
                     RoachMetricCard(label: "System", value: game.system, detail: game.source)
-                    RoachMetricCard(label: game.kind == .windows ? "Runner" : "Core", value: game.kind == .windows ? game.compatibilityRunner.label : (game.resolvedCore ?? "None"), detail: game.kind == .rom ? "Embedded player mapping" : "Launch route")
+                    RoachMetricCard(label: game.kind == .windows ? "Runner" : "Core", value: game.kind == .windows ? game.compatibilityRunner.label : (game.resolvedCore ?? "None"), detail: game.kind == .rom ? "In-tab emulator" : "Launch route")
                     RoachMetricCard(label: "Controllers", value: "\(store.connectedControllers.count)", detail: store.connectedControllerSummary)
                     RoachMetricCard(label: "Mods", value: "\(store.profilesForSelectedGame.count)", detail: "Profiles attached to this game")
                     RoachMetricCard(label: "Cheats", value: "\(game.cheats.count)", detail: "Stored with this game")
@@ -245,21 +485,220 @@ struct RoachArcadeView: View {
         }
     }
 
+    private func gameTitleBlock(_ game: RoachArcadeGame) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoachSectionHeader(game.kind.label, title: game.title, detail: game.launchPath ?? "No launch path linked")
+            gameTagStrip(game)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func gameTagStrip(_ game: RoachArcadeGame) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if game.favorite {
+                    RoachTag("Favorite", accent: RoachPalette.bronze)
+                }
+                RoachTag(game.status.label, accent: game.status == .ready ? RoachPalette.green : RoachPalette.warning)
+                RoachTag(game.kind == .windows ? game.compatibilityRunner.label : (game.resolvedCore ?? "native"), accent: RoachPalette.cyan)
+                RoachTag("\(game.playCount) plays", accent: RoachPalette.bronze)
+                if !store.connectedControllers.isEmpty {
+                    RoachTag("Controller ready", accent: RoachPalette.green)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func gameDetailActions(_ game: RoachArcadeGame) -> some View {
+        Button {
+            store.play(game)
+        } label: {
+            Label(game.kind == .rom ? "Play" : "Launch", systemImage: game.kind == .rom ? "play.rectangle.fill" : "play.fill")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachPrimaryButtonStyle())
+        .disabled(game.status != .ready)
+
+        Button {
+            store.reveal(game.launchPath)
+        } label: {
+            Label("Reveal", systemImage: "folder")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+        .disabled(game.launchPath == nil)
+
+        Button {
+            store.toggleFavorite(game.id)
+        } label: {
+            Label(game.favorite ? "Unpin" : "Pin", systemImage: game.favorite ? "star.slash" : "star")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
+    private var runnerReadinessPanel: some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                RoachSectionHeader("Readiness", title: "Runners and input", detail: nil)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 10)], alignment: .leading, spacing: 10) {
+                    ForEach(store.runnerDiagnostics) { diagnostic in
+                        RoachMetricCard(
+                            label: diagnostic.label,
+                            value: diagnostic.value,
+                            detail: diagnostic.detail
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func gameManagementPanel(_ game: RoachArcadeGame) -> some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                RoachSectionHeader("Metadata", title: "Launch context", detail: nil)
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], alignment: .leading, spacing: 10) {
+                    arcadeTextField("Tags, comma separated", text: $metadataTags)
+                    arcadeTextField("Artwork path", text: $metadataArtworkPath, monospaced: true)
+                    arcadeTextField("Store URL", text: $metadataStoreURL, monospaced: true)
+                }
+
+                if game.kind == .windows {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], alignment: .leading, spacing: 10) {
+                        Picker("Runner", selection: Binding(
+                            get: { game.compatibilityRunner },
+                            set: { store.setCompatibilityRunner($0, for: game.id) }
+                        )) {
+                            ForEach(RoachArcadeCompatibilityRunner.allCases) { runner in
+                                Text(runner.label).tag(runner)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        arcadeTextField("Runner path override", text: $metadataRunnerPath, monospaced: true)
+                        arcadeTextField("Bottle / prefix path", text: $metadataBottlePath, monospaced: true)
+                    }
+                }
+
+                TextEditor(text: $metadataNotes)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(RoachPalette.text)
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 92)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(RoachPalette.panelRaised.opacity(0.64))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(RoachPalette.border, lineWidth: 1)
+                    )
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Button("Choose Artwork") {
+                            if let url = chooseArtwork() {
+                                metadataArtworkPath = url.path
+                            }
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button("Save Metadata") {
+                            store.updateGameMetadata(
+                                gameID: game.id,
+                                notes: metadataNotes,
+                                tagsText: metadataTags,
+                                artworkPath: metadataArtworkPath,
+                                storeURL: metadataStoreURL,
+                                runnerPath: metadataRunnerPath,
+                                bottlePath: metadataBottlePath
+                            )
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button("Choose Artwork") {
+                            if let url = chooseArtwork() {
+                                metadataArtworkPath = url.path
+                            }
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button("Save Metadata") {
+                            store.updateGameMetadata(
+                                gameID: game.id,
+                                notes: metadataNotes,
+                                tagsText: metadataTags,
+                                artworkPath: metadataArtworkPath,
+                                storeURL: metadataStoreURL,
+                                runnerPath: metadataRunnerPath,
+                                bottlePath: metadataBottlePath
+                            )
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func gameArtwork(_ game: RoachArcadeGame, width: CGFloat, height: CGFloat, cornerRadius: CGFloat) -> some View {
+        if
+            let artworkPath = game.artworkPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !artworkPath.isEmpty,
+            let image = NSImage(contentsOfFile: NSString(string: artworkPath).expandingTildeInPath)
+        {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(RoachPalette.borderStrong, lineWidth: 1)
+                )
+        } else {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        RoachPalette.panelRaised.opacity(0.92),
+                        game.kind == .rom ? RoachPalette.magenta.opacity(0.18) : RoachPalette.green.opacity(0.16),
+                        Color.black.opacity(0.28),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Image(systemName: game.kind == .rom ? "rectangle.on.rectangle.circle.fill" : (game.kind == .windows ? "pc" : "gamecontroller.fill"))
+                    .font(.system(size: min(width, height) * 0.36, weight: .semibold))
+                    .foregroundStyle(RoachPalette.green.opacity(0.84))
+            }
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(RoachPalette.border, lineWidth: 1)
+            )
+        }
+    }
+
     private func cheatsPanel(_ game: RoachArcadeGame) -> some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
-                RoachSectionHeader("Cheats", title: "Game codes", detail: "If you are going to break the game, do it offline.")
-                HStack(spacing: 10) {
-                    TextField("Cheat name", text: $newCheatName)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("Code", text: $newCheatCode)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Add") {
-                        store.addCheat(to: game.id, name: newCheatName, code: newCheatCode)
-                        newCheatName = ""
-                        newCheatCode = ""
+                RoachSectionHeader("Cheats", title: "Game codes", detail: "Codes stay attached to this game.")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        cheatEntryFields(game)
                     }
-                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        cheatEntryFields(game)
+                    }
                 }
 
                 ForEach(game.cheats) { cheat in
@@ -293,69 +732,67 @@ struct RoachArcadeView: View {
         }
     }
 
+    @ViewBuilder
+    private func cheatEntryFields(_ game: RoachArcadeGame) -> some View {
+        arcadeTextField("Cheat name", text: $newCheatName)
+        arcadeTextField("Code", text: $newCheatCode, monospaced: true)
+        Button("Add") {
+            store.addCheat(to: game.id, name: newCheatName, code: newCheatCode)
+            newCheatName = ""
+            newCheatCode = ""
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
     private func modsPanel(_ game: RoachArcadeGame) -> some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
-                RoachSectionHeader("Mods", title: "Profiles and deployment", detail: "Profiles keep mod folders, order, and conflict groups attached to the game.")
-                HStack(spacing: 10) {
-                    RoachTag(game.modDirectoryPath == nil ? "No deploy folder" : "Deploy folder set", accent: game.modDirectoryPath == nil ? RoachPalette.warning : RoachPalette.green)
-                    Text(game.modDirectoryPath ?? "Pick the folder this game actually reads for mods. RoachArcade will not guess and wreck a save.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
-                        .lineLimit(2)
-                    Spacer()
-                    Button("Set Mod Folder") {
-                        if let url = chooseFolder(title: "Choose this game's mod folder") {
-                            store.setModDirectory(url, for: game.id)
-                        }
+                RoachSectionHeader("Mods", title: "Profiles and deployment", detail: "Folders, order, conflicts.")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        modFolderControls(game)
                     }
-                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        modFolderControls(game)
+                    }
                 }
-                HStack(spacing: 10) {
-                    TextField("Profile name", text: $newProfileName)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Create Profile") {
-                        store.createProfile(for: game.id, name: newProfileName)
-                        newProfileName = ""
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        profileEntryFields(game)
                     }
-                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        profileEntryFields(game)
+                    }
                 }
 
                 ForEach(store.profilesForSelectedGame) { profile in
                     RoachInsetPanel {
                         VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(profile.name)
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Text("\(profile.mods.count) mod\(profile.mods.count == 1 ? "" : "s")")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 10) {
+                                    profileHeaderControls(profile, game: game)
                                 }
-                                Spacer()
-                                Button("Add Mod Folder") {
-                                    if let url = chooseFolder(title: "Choose a mod folder") {
-                                        store.importModFolder(url, for: profile.id)
-                                    }
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    profileHeaderControls(profile, game: game)
                                 }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-                                Button("Deploy") {
-                                    store.deployProfile(profile, for: game)
-                                }
-                                .buttonStyle(RoachPrimaryButtonStyle())
                             }
 
                             ForEach(profile.mods) { mod in
-                                HStack {
-                                    Text("\(mod.loadOrder). \(mod.name)")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Spacer()
-                                    Text(URL(fileURLWithPath: mod.sourcePath).lastPathComponent)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 10) {
+                                        modRowControls(mod, profileID: profile.id)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        modRowControls(mod, profileID: profile.id)
+                                    }
                                 }
+                                .padding(10)
+                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(RoachPalette.panelRaised.opacity(0.48)))
                             }
                         }
                     }
@@ -364,27 +801,107 @@ struct RoachArcadeView: View {
         }
     }
 
+    @ViewBuilder
+    private func modFolderControls(_ game: RoachArcadeGame) -> some View {
+        RoachTag(game.modDirectoryPath == nil ? "No deploy folder" : "Deploy folder set", accent: game.modDirectoryPath == nil ? RoachPalette.warning : RoachPalette.green)
+        Text(game.modDirectoryPath ?? "Pick the folder this game reads for mods.")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(RoachPalette.muted)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        Button("Set Folder") {
+            if let url = chooseFolder(title: "Choose this game's mod folder") {
+                store.setModDirectory(url, for: game.id)
+            }
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
+    @ViewBuilder
+    private func profileEntryFields(_ game: RoachArcadeGame) -> some View {
+        arcadeTextField("Profile name", text: $newProfileName)
+        Button("Create") {
+            store.createProfile(for: game.id, name: newProfileName)
+            newProfileName = ""
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
+    @ViewBuilder
+    private func profileHeaderControls(_ profile: RoachArcadeModProfile, game: RoachArcadeGame) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(profile.name)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(RoachPalette.text)
+            Text("\(profile.mods.count) mod\(profile.mods.count == 1 ? "" : "s")")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RoachPalette.muted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        Button("Add Folder") {
+            if let url = chooseFolder(title: "Choose a mod folder") {
+                store.importModFolder(url, for: profile.id)
+            }
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+        Button("Deploy") {
+            store.deployProfile(profile, for: game)
+        }
+        .buttonStyle(RoachPrimaryButtonStyle())
+        Button("Delete") {
+            store.deleteProfile(profile.id)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
+    @ViewBuilder
+    private func modRowControls(_ mod: RoachArcadeModEntry, profileID: UUID) -> some View {
+        Button {
+            store.setModEnabled(!mod.enabled, modID: mod.id, profileID: profileID)
+        } label: {
+            Image(systemName: mod.enabled ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(mod.enabled ? RoachPalette.green : RoachPalette.muted)
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(mod.loadOrder). \(mod.name)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(RoachPalette.text)
+            Text(URL(fileURLWithPath: mod.sourcePath).lastPathComponent)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RoachPalette.muted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        Button("Up") {
+            store.moveMod(mod.id, profileID: profileID, direction: -1)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+        Button("Down") {
+            store.moveMod(mod.id, profileID: profileID, direction: 1)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+        Button("Remove") {
+            store.removeMod(mod.id, profileID: profileID)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
     private func vortexPanel(_ game: RoachArcadeGame) -> some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
-                RoachSectionHeader("Vortex Bridge", title: "Collection imports for macOS games.", detail: "Track a Nexus/Vortex collection and map a local extracted folder into a deployable profile.")
-                HStack(spacing: 10) {
-                    TextField("Collection title", text: $vortexCollectionTitle)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("Vortex or Nexus collection URL", text: $vortexCollectionURL)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Import Folder") {
-                        let folder = chooseFolder(title: "Choose an extracted Vortex collection folder")
-                        store.importVortexCollection(
-                            gameID: game.id,
-                            title: vortexCollectionTitle,
-                            sourceURL: vortexCollectionURL,
-                            localFolderURL: folder
-                        )
-                        vortexCollectionTitle = ""
-                        vortexCollectionURL = ""
+                RoachSectionHeader("Vortex Bridge", title: "Collection imports", detail: "Map an extracted collection into a profile.")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        vortexEntryFields(game)
                     }
-                    .buttonStyle(RoachSecondaryButtonStyle())
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        vortexEntryFields(game)
+                    }
                 }
 
                 ForEach(store.collectionsForSelectedGame) { collection in
@@ -408,11 +925,81 @@ struct RoachArcadeView: View {
         }
     }
 
+    @ViewBuilder
+    private func vortexEntryFields(_ game: RoachArcadeGame) -> some View {
+        arcadeTextField("Collection title", text: $vortexCollectionTitle)
+        arcadeTextField("Vortex or Nexus collection URL", text: $vortexCollectionURL, monospaced: true)
+        Button("Import Folder") {
+            let folder = chooseFolder(title: "Choose an extracted Vortex collection folder")
+            store.importVortexCollection(
+                gameID: game.id,
+                title: vortexCollectionTitle,
+                sourceURL: vortexCollectionURL,
+                localFolderURL: folder
+            )
+            vortexCollectionTitle = ""
+            vortexCollectionURL = ""
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
+    private func syncMetadataDraft(for game: RoachArcadeGame) {
+        guard metadataGameID != game.id else { return }
+        metadataGameID = game.id
+        metadataNotes = game.notes
+        metadataTags = game.tags.joined(separator: ", ")
+        metadataArtworkPath = game.artworkPath ?? ""
+        metadataStoreURL = game.storeURL ?? ""
+        metadataRunnerPath = game.runnerPath ?? ""
+        metadataBottlePath = game.bottlePath ?? ""
+    }
+
+    private func arcadeTextField(
+        _ placeholder: String,
+        text: Binding<String>,
+        monospaced: Bool = false
+    ) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .medium, design: monospaced ? .monospaced : .rounded))
+            .foregroundStyle(RoachPalette.text)
+            .lineLimit(1)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                RoachPalette.panelRaised.opacity(0.74),
+                                Color.black.opacity(0.20),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(RoachPalette.border, lineWidth: 1)
+            )
+    }
+
     private func chooseFolder(title: String) -> URL? {
         let panel = NSOpenPanel()
         panel.title = title
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func chooseArtwork() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "Choose game artwork"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .image]
         panel.allowsMultipleSelection = false
         return panel.runModal() == .OK ? panel.url : nil
     }

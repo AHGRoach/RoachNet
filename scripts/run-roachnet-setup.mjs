@@ -3,14 +3,12 @@
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { chmod, copyFile, cp, mkdtemp, readFile, readdir, rename, rm, stat, statfs, symlink } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { pipeline } from 'node:stream/promises'
-import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import {
   composeUpRoachNetServices,
@@ -19,6 +17,14 @@ import {
   getRoachNetComposeProjectName,
   startRoachNetContainerRuntime,
 } from './lib/roachnet_container_runtime.mjs'
+import { downloadHttpToFile, requestHttp } from './lib/roachnet_http.mjs'
+import { applyAppleSiliconLocalAIDefaults } from './lib/roachnet_local_ai_runtime.mjs'
+import {
+  commandForLog,
+  normalizeProcessLaunch,
+  normalizeRelativePathForCopyFilter,
+  redactSensitiveText,
+} from './lib/roachnet_process_security.mjs'
 import { getRoachNetLocalHostname } from './lib/roachtail_hostname.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -35,6 +41,8 @@ const PORT_WAIT_INTERVAL_MS = 1_500
 const PORT_WAIT_TIMEOUT_MS = 180_000
 const INSTALLER_DIAGNOSTICS_CACHE_TTL_MS = 30_000
 const INSTALLER_DIAGNOSTIC_COMMAND_TIMEOUT_MS = 1_500
+const SETUP_MAX_REQUEST_BODY_BYTES = positiveIntegerEnv('ROACHNET_SETUP_MAX_BODY_BYTES', 1024 * 1024)
+const SETUP_MAX_DOWNLOAD_BYTES = positiveIntegerEnv('ROACHNET_SETUP_MAX_DOWNLOAD_BYTES', 8 * 1024 ** 3)
 const GITHUB_API_ROOT = 'https://api.github.com'
 const DEFAULT_ROACHCLAW_MODEL = 'qwen2.5-coder:1.5b'
 const OLLAMA_RELEASE_API_URL = 'https://api.github.com/repos/ollama/ollama/releases/latest'
@@ -42,6 +50,12 @@ const OLLAMA_DIRECT_DOWNLOAD_URL =
   process.env.ROACHNET_BUNDLED_OLLAMA_URL?.trim() || 'https://ollama.com/download/ollama-darwin.tgz'
 const OLLAMA_FALLBACK_VERSION =
   process.env.ROACHNET_BUNDLED_OLLAMA_VERSION?.trim() || 'contained'
+const LEGACY_MANAGED_RUNTIME_DB_PASSWORD = legacyManagedRuntimeSecret([
+  '7154', 'b9bb', 'b511', 'df8d', '89c1', 'e141', '7d84', '27e3',
+])
+const LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD = legacyManagedRuntimeSecret([
+  '00e1', '7487', 'a023', '1b35', 'b603', '0087', 'ecb9', 'aaf5',
+])
 const GIB = 1024 ** 3
 const MIN_FREE_BYTES_BASE_INSTALL = 2 * GIB
 const MIN_FREE_BYTES_WITH_ROACHCLAW = 5 * GIB
@@ -55,6 +69,15 @@ const runtimeState = {
     expiresAt: 0,
     refreshPromise: null,
   },
+}
+
+function positiveIntegerEnv(name, fallback) {
+  const value = Number(process.env[name])
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback
+}
+
+function legacyManagedRuntimeSecret(parts) {
+  return parts.join('')
 }
 
 function getSharedAppDataDir() {
@@ -233,6 +256,16 @@ function stripUndefinedEntries(input) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined))
 }
 
+function spawnDetachedProcess(binary, args = [], options = {}) {
+  const launch = normalizeProcessLaunch(binary, args, { shell: false })
+  spawn(launch.binary, launch.args, {
+    detached: true,
+    stdio: 'ignore',
+    ...options,
+    shell: false,
+  }).unref()
+}
+
 function shouldPreserveTransientInstallerPaths() {
   const explicitConfigPath = process.env.ROACHNET_INSTALLER_CONFIG_PATH?.trim()
   return explicitConfigPath?.length > 0 || process.env.ROACHNET_ALLOW_TRANSIENT_INSTALL_PATHS === '1'
@@ -364,11 +397,7 @@ function getDefaultInstalledAppPath(baseInstallPath = getDefaultInstallPath()) {
     return path.join(baseInstallPath, 'app', 'RoachNet.app')
   }
 
-  if (process.platform === 'win32') {
-    return path.join(baseInstallPath, 'app', 'RoachNet', 'RoachNet.exe')
-  }
-
-  return path.join(baseInstallPath, 'app', 'RoachNet.AppImage')
+  throw new Error('The native RoachNet setup lane currently targets Apple Silicon macOS.')
 }
 
 function getCurrentAppVersion() {
@@ -489,11 +518,9 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
       bundleName: 'RoachNet.app',
       archiveNames: [`RoachNet-${version}-mac-${arch}.zip`],
       localCandidates: [
-        path.join(repoRoot, 'desktop-dist', `mac-${arch}`, 'RoachNet.app'),
         path.join(repoRoot, 'native', 'macos', 'dist', 'RoachNet.app'),
         setupBundleDir ? path.join(setupBundleDir, 'RoachNet.app') : null,
         setupResourcesDir ? path.join(setupResourcesDir, 'InstallerAssets', 'RoachNet.app') : null,
-        path.join(repoRoot, 'desktop-dist', `RoachNet-${version}-mac-${arch}.zip`),
         path.join(repoRoot, 'native', 'macos', 'dist', `RoachNet-${version}-mac-${arch}.zip`),
         setupBundleDir ? path.join(setupBundleDir, `RoachNet-${version}-mac-${arch}.zip`) : null,
         setupResourcesDir ? path.join(setupResourcesDir, 'InstallerAssets', `RoachNet-${version}-mac-${arch}.zip`) : null,
@@ -510,46 +537,12 @@ function getLocalArtifactDescriptor(version = getCurrentAppVersion()) {
     }
   }
 
-  if (process.platform === 'win32') {
-    return {
-      targetPath: canonicalTargetPath,
-      kind: 'binary',
-      bundleName: 'RoachNet.exe',
-      archiveNames: [`RoachNet-${version}-win-${arch}.exe`],
-      localCandidates: [
-        path.join(repoRoot, 'desktop-dist', `RoachNet-${version}-win-${arch}.exe`),
-        setupBundleDir ? path.join(setupBundleDir, `RoachNet-${version}-win-${arch}.exe`) : null,
-      ].filter(Boolean),
-      assetMatcher(name) {
-        if (typeof name !== 'string') {
-          return false
-        }
-        return name.includes(`win-${arch}`) && name.endsWith('.exe')
-      },
-    }
-  }
-
-  return {
-    targetPath: canonicalTargetPath,
-    kind: 'binary',
-    bundleName: 'RoachNet.AppImage',
-    archiveNames: [`RoachNet-${version}-linux-${arch}.AppImage`],
-    localCandidates: [
-      path.join(repoRoot, 'desktop-dist', `RoachNet-${version}-linux-${arch}.AppImage`),
-      setupBundleDir ? path.join(setupBundleDir, `RoachNet-${version}-linux-${arch}.AppImage`) : null,
-    ].filter(Boolean),
-    assetMatcher(name) {
-      if (typeof name !== 'string') {
-        return false
-      }
-      return name.includes(`linux-${arch}`) && name.endsWith('.AppImage')
-    },
-  }
+  throw new Error('The native RoachNet app artifact resolver currently supports Apple Silicon macOS only.')
 }
 
 async function fetchJson(url, options = {}) {
   const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || ''
-  const response = await fetch(url, {
+  const response = await requestHttp(url, {
     headers: {
       Accept: 'application/vnd.github+json, application/json',
       'User-Agent': 'RoachNet-Setup',
@@ -558,6 +551,7 @@ async function fetchJson(url, options = {}) {
         : {}),
       ...(options.headers || {}),
     },
+    timeoutMs: options.timeoutMs || 30_000,
   })
 
   if (!response.ok) {
@@ -568,20 +562,15 @@ async function fetchJson(url, options = {}) {
 }
 
 async function downloadFile(url, destinationPath) {
-  const response = await fetch(url, {
+  await ensureDirectory(path.dirname(destinationPath))
+  await downloadHttpToFile(url, destinationPath, {
     headers: {
       Accept: 'application/octet-stream, application/zip, application/json',
       'User-Agent': 'RoachNet-Setup',
     },
-    redirect: 'follow',
+    timeoutMs: 120_000,
+    maxDownloadBytes: SETUP_MAX_DOWNLOAD_BYTES,
   })
-
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed for ${url}: ${response.status} ${response.statusText}`)
-  }
-
-  await ensureDirectory(path.dirname(destinationPath))
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(destinationPath))
   return destinationPath
 }
 
@@ -626,7 +615,9 @@ async function extractArchive(archivePath, destinationPath) {
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${destinationPath.replace(/'/g, "''")}' -Force`,
+        'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
+        archivePath,
+        destinationPath,
       ],
       {
         env: getShellEnv(),
@@ -689,23 +680,75 @@ function installedAppCandidates(targetPath) {
   ])]
 }
 
-async function terminateRunningRoachNetApps(task) {
+function escapeProcessPattern(value) {
+  return String(value || '').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+}
+
+function roachNetProcessPatternsForTarget(target = {}) {
+  const installPath = target.installPath ? normalizeInputPath(target.installPath) : ''
+  const installedAppPath = target.installedAppPath
+    ? normalizeInputPath(target.installedAppPath)
+    : installPath
+      ? getDefaultInstalledAppPath(installPath)
+      : ''
+  const patterns = new Set(['/RoachNet.app/Contents/MacOS/RoachNetApp'])
+
+  if (installedAppPath) {
+    patterns.add(`${escapeProcessPattern(installedAppPath)}/Contents/MacOS/RoachNetApp`)
+  }
+
+  if (installPath) {
+    for (const scriptName of [
+      'run-roachnet-native-api.mjs',
+      'roachnet-companion-server.mjs',
+      'run-roachnet.mjs',
+    ]) {
+      patterns.add(`${escapeProcessPattern(path.join(installPath, 'scripts', scriptName))}`)
+    }
+  }
+
+  return [...patterns]
+}
+
+async function terminateProcessPattern(pattern, label, task) {
+  try {
+    await runProcess('pkill', ['-f', pattern], {
+      env: getShellEnv(),
+      timeoutMs: 5_000,
+    })
+    return true
+  } catch (error) {
+    if (!isNoMatchingProcessFailure(error)) {
+      const detail = String(error?.message || error)
+      appendTaskLog(task, `Could not close ${label} cleanly: ${detail}`)
+    }
+    return false
+  }
+}
+
+async function terminateRunningRoachNetApps(task, target = {}) {
   if (process.platform !== 'darwin') {
     return
   }
 
-  try {
-    await runProcess('pkill', ['-f', '/RoachNet.app/Contents/MacOS/RoachNetApp'], {
-      env: getShellEnv(),
-      timeoutMs: 5_000,
-    })
-    appendTaskLog(task, 'Closed running RoachNet app instances before replacing the installed copy.')
-  } catch (error) {
-    const detail = String(error?.message || error)
-    if (!detail.includes('exit code 1')) {
-      appendTaskLog(task, `Could not close all running RoachNet instances cleanly: ${detail}`)
+  let closedCount = 0
+  for (const pattern of roachNetProcessPatternsForTarget(target)) {
+    if (await terminateProcessPattern(pattern, 'running RoachNet process', task)) {
+      closedCount += 1
     }
   }
+
+  if (closedCount > 0) {
+    appendTaskLog(
+      task,
+      'Closed running RoachNet app and helper processes before replacing the installed copy.'
+    )
+  }
+}
+
+function isNoMatchingProcessFailure(error) {
+  const detail = String(error?.message || error)
+  return /exit(?:ed)? with code 1/i.test(detail) && !/(?:stderr|stdout):\s*\S/i.test(detail)
 }
 
 async function removeStaleInstalledAppCopies(targetPath, task) {
@@ -864,7 +907,7 @@ async function installNativeDesktopApp(config, task) {
     (await resolveLocalNativeAppSource({ ...config, installedAppPath: targetPath }, task)) ||
     (await resolveReleaseNativeAppSource({ ...config, installedAppPath: targetPath }, task))
 
-  await terminateRunningRoachNetApps(task)
+  await terminateRunningRoachNetApps(task, config)
   await removeStaleInstalledAppCopies(targetPath, task)
   appendTaskLog(task, `Installing the native RoachNet desktop app at ${targetPath}...`)
 
@@ -908,16 +951,16 @@ async function launchNativeDesktopApp(appPath) {
   }
 
   if (process.platform === 'darwin') {
-    spawn('open', [appPath], { detached: true, stdio: 'ignore' }).unref()
+    spawnDetachedProcess('open', [appPath])
     return
   }
 
   if (process.platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', appPath], { detached: true, stdio: 'ignore' }).unref()
+    spawnDetachedProcess('cmd', ['/c', 'start', '', appPath])
     return
   }
 
-  spawn(appPath, [], { detached: true, stdio: 'ignore' }).unref()
+  spawnDetachedProcess(appPath)
 }
 
 async function requestSetupAppQuit() {
@@ -940,8 +983,7 @@ end tell
 function hasCurrentWorkspaceSource() {
   return (
     existsSync(path.join(repoRoot, 'package.json')) &&
-    existsSync(path.join(repoRoot, 'admin')) &&
-    existsSync(path.join(repoRoot, 'scripts', 'run-roachnet.mjs'))
+    existsSync(path.join(repoRoot, 'scripts', 'run-roachnet-native-api.mjs'))
   )
 }
 
@@ -950,11 +992,73 @@ function normalizeInputPath(inputPath) {
     return getDefaultInstallPath()
   }
 
-  if (inputPath.startsWith('~/')) {
-    return path.join(os.homedir(), inputPath.slice(2))
+  const rawPath = String(inputPath).trim()
+  if (!rawPath) {
+    return getDefaultInstallPath()
   }
 
-  return path.resolve(inputPath)
+  if (rawPath.startsWith('~/')) {
+    return path.join(os.homedir(), rawPath.slice(2))
+  }
+
+  return path.resolve(rawPath)
+}
+
+function resolvePathInside(rootPath, requestedPath) {
+  const root = path.resolve(rootPath)
+  const resolvedPath = path.resolve(root, requestedPath)
+  const relativePath = path.relative(root, resolvedPath)
+
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Requested path is outside the RoachNet setup root.')
+  }
+
+  return resolvedPath
+}
+
+function normalizeSourceRepoUrl(sourceRepoUrl) {
+  const rawValue = String(sourceRepoUrl || DEFAULT_SOURCE_REPO_URL).trim()
+  let parsed
+
+  try {
+    parsed = new URL(rawValue)
+  } catch {
+    throw new Error('RoachNet source repository must be a GitHub HTTPS URL.')
+  }
+
+  if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') {
+    throw new Error('RoachNet source repository must use https://github.com/.')
+  }
+
+  const repositoryPath = parsed.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repositoryPath)) {
+    throw new Error('RoachNet source repository must be a plain GitHub owner/repo URL.')
+  }
+
+  return `https://github.com/${repositoryPath}.git`
+}
+
+function normalizeSourceRef(sourceRef) {
+  const trimmed = String(sourceRef || DEFAULT_SOURCE_REF).trim()
+
+  if (
+    !trimmed ||
+    trimmed.startsWith('-') ||
+    trimmed.includes('..') ||
+    trimmed.endsWith('.') ||
+    trimmed.includes('@{') ||
+    trimmed.includes('\\') ||
+    !/^[A-Za-z0-9._/-]{1,128}$/.test(trimmed)
+  ) {
+    throw new Error('RoachNet source ref must be a branch, tag, or commit-like ref name.')
+  }
+
+  return trimmed
+}
+
+function resolveSetupStaticFilePath(requestPath) {
+  const requestedPath = requestPath === '/' ? 'index.html' : String(requestPath).replace(/^\/+/, '')
+  return resolvePathInside(uiRoot, requestedPath)
 }
 
 function getSetupWorkspaceRoot(config = {}) {
@@ -1021,7 +1125,36 @@ async function pathExists(targetPath) {
   }
 }
 
-async function finalizeInstallRoot(stagingInstallPath, finalInstallPath, task) {
+function isPathInsideRoot(candidatePath, rootPath) {
+  const normalizedCandidate = normalizeInputPath(candidatePath)
+  const normalizedRoot = normalizeInputPath(rootPath)
+  const relativePath = path.relative(normalizedRoot, normalizedCandidate)
+  return Boolean(relativePath) && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
+}
+
+async function preserveExistingStorageFromBackup({
+  backupInstallPath,
+  finalInstallPath,
+  storagePath,
+  task,
+}) {
+  if (!backupInstallPath || !storagePath || !isPathInsideRoot(storagePath, finalInstallPath)) {
+    return { preserved: false, backupStoragePath: null }
+  }
+
+  const backupStoragePath = remapPathWithinInstallRoot(storagePath, finalInstallPath, backupInstallPath)
+  if (!(await pathExists(backupStoragePath))) {
+    return { preserved: false, backupStoragePath }
+  }
+
+  appendTaskLog(task, `Preserving existing RoachNet storage from ${storagePath}...`)
+  await rm(storagePath, { recursive: true, force: true }).catch(() => {})
+  await movePath(backupStoragePath, storagePath)
+  appendTaskLog(task, `Existing RoachNet storage preserved at ${storagePath}.`)
+  return { preserved: true, backupStoragePath }
+}
+
+async function finalizeInstallRoot(stagingInstallPath, finalInstallPath, task, options = {}) {
   const existingInstallPresent = await pathExists(finalInstallPath)
   const backupInstallPath = existingInstallPresent
     ? path.join(
@@ -1039,11 +1172,42 @@ async function finalizeInstallRoot(stagingInstallPath, finalInstallPath, task) {
     appendTaskLog(task, `Moving the staged install into ${finalInstallPath}...`)
     await movePath(stagingInstallPath, finalInstallPath)
 
+    let preservedStorage = { preserved: false, backupStoragePath: null }
+    try {
+      preservedStorage = await preserveExistingStorageFromBackup({
+        backupInstallPath,
+        finalInstallPath,
+        storagePath: options.storagePath,
+        task,
+      })
+    } catch (error) {
+      appendTaskLog(
+        task,
+        `Could not automatically preserve storage from the previous install: ${error?.message || error}`
+      )
+    }
+
     if (backupInstallPath) {
-      await rm(backupInstallPath, { recursive: true, force: true })
+      const previousStorageStillNeedsManualRecovery =
+        !preservedStorage.preserved &&
+        preservedStorage.backupStoragePath &&
+        (await pathExists(preservedStorage.backupStoragePath))
+
+      if (previousStorageStillNeedsManualRecovery) {
+        appendTaskLog(
+          task,
+          `Previous install backup retained at ${backupInstallPath} so storage can be recovered manually.`
+        )
+      } else {
+        await rm(backupInstallPath, { recursive: true, force: true })
+      }
     }
   } catch (error) {
-    if (!(await pathExists(finalInstallPath)) && backupInstallPath && (await pathExists(backupInstallPath))) {
+    if ((await pathExists(finalInstallPath)) && backupInstallPath && (await pathExists(backupInstallPath))) {
+      await rm(finalInstallPath, { recursive: true, force: true }).catch(() => {})
+    }
+
+    if (backupInstallPath && (await pathExists(backupInstallPath))) {
       await movePath(backupInstallPath, finalInstallPath)
     }
 
@@ -1053,6 +1217,10 @@ async function finalizeInstallRoot(stagingInstallPath, finalInstallPath, task) {
 
 function toComposePath(value) {
   return value.replace(/\\/g, '/')
+}
+
+function quoteComposeString(value) {
+  return JSON.stringify(String(value ?? ''))
 }
 
 function randomSecret(size = 24) {
@@ -1096,18 +1264,63 @@ function sendText(response, payload, statusCode = 200) {
   response.end(payload)
 }
 
+class RequestPayloadTooLargeError extends Error {
+  constructor(limit) {
+    super(`Request body is larger than ${limit} bytes.`)
+    this.statusCode = 413
+  }
+}
+
+function sendError(response, error, fallbackStatusCode = 500) {
+  const statusCode = Number(error?.statusCode || fallbackStatusCode)
+  sendJson(response, {
+    error: error instanceof Error ? error.message : String(error),
+  }, statusCode)
+}
+
 async function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     let buffer = ''
+    let bytes = 0
+    let settled = false
+
+    const fail = (error) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      reject(error)
+      request.destroy()
+    }
+
+    const contentLength = Number(request.headers['content-length'] || 0)
+    if (contentLength > SETUP_MAX_REQUEST_BODY_BYTES) {
+      fail(new RequestPayloadTooLargeError(SETUP_MAX_REQUEST_BODY_BYTES))
+      return
+    }
 
     request.setEncoding('utf8')
     request.on('data', (chunk) => {
+      bytes += Buffer.byteLength(chunk, 'utf8')
+      if (bytes > SETUP_MAX_REQUEST_BODY_BYTES) {
+        fail(new RequestPayloadTooLargeError(SETUP_MAX_REQUEST_BODY_BYTES))
+        return
+      }
       buffer += chunk
     })
     request.on('end', () => {
+      if (settled) {
+        return
+      }
+      settled = true
       resolve(buffer)
     })
-    request.on('error', reject)
+    request.on('error', (error) => {
+      if (!settled) {
+        settled = true
+        reject(error)
+      }
+    })
   })
 }
 
@@ -1128,12 +1341,25 @@ async function serveStaticFile(response, filePath) {
   }
 
   const fileStats = await stat(filePath)
+  if (!fileStats.isFile()) {
+    sendText(response, 'Not found', 404)
+    return
+  }
+
+  const stream = createReadStream(filePath)
+  stream.once('error', () => {
+    if (!response.headersSent) {
+      sendText(response, 'Failed to read static asset.', 500)
+      return
+    }
+    response.destroy()
+  })
   response.writeHead(200, {
     'Content-Type': mimeTypeFor(filePath),
     'Content-Length': String(fileStats.size),
     'Cache-Control': 'no-store',
   })
-  createReadStream(filePath).pipe(response)
+  stream.pipe(response)
 }
 
 async function runProcess(binary, args = [], options = {}) {
@@ -1147,10 +1373,12 @@ async function runProcess(binary, args = [], options = {}) {
   } = options
 
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, {
+    const launch = normalizeProcessLaunch(binary, args, { shell })
+    const commandLabel = commandForLog(launch.binary, launch.args, env)
+    const child = spawn(launch.binary, launch.args, {
       cwd,
       env,
-      shell,
+      shell: false,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -1192,9 +1420,7 @@ async function runProcess(binary, args = [], options = {}) {
       if (timedOut) {
         reject(
           new Error(
-            `${binary}${args.length ? ` ${args.join(' ')}` : ''} timed out after ${timeoutMs}ms\n${
-              stderr.trim() || stdout.trim()
-            }`
+            `${commandLabel} timed out after ${timeoutMs}ms\n${redactSensitiveText(stderr.trim() || stdout.trim(), env)}`
           )
         )
         return
@@ -1205,22 +1431,48 @@ async function runProcess(binary, args = [], options = {}) {
         return
       }
 
-      reject(
-        new Error(
-          `${binary}${args.length ? ` ${args.join(' ')}` : ''} exited with code ${code}\n${
-            stderr.trim() || stdout.trim()
-          }`
-        )
-      )
+      reject(new Error(formatProcessFailure(commandLabel, code, stdout, stderr, env)))
     })
   })
 }
 
-async function runShell(command, options = {}) {
-  return runProcess(command, [], {
-    ...options,
-    shell: true,
-  })
+function formatProcessFailure(commandLabel, code, stdout, stderr, env) {
+  const details = processOutputFailureSummary(stdout, stderr, env)
+  return [
+    `${commandLabel} exited with code ${code}`,
+    details,
+  ].filter(Boolean).join('\n')
+}
+
+function processOutputFailureSummary(stdout, stderr, env) {
+  const redactedStderr = redactSensitiveText(String(stderr || '').trim(), env)
+  const redactedStdout = redactSensitiveText(String(stdout || '').trim(), env)
+  const stderrTail = outputTail(redactedStderr)
+  const stdoutTail = outputTail(redactedStdout)
+
+  if (stderrTail && stdoutTail) {
+    return `stderr:\n${stderrTail}\nstdout:\n${stdoutTail}`
+  }
+
+  if (stderrTail) {
+    return `stderr:\n${stderrTail}`
+  }
+
+  if (stdoutTail) {
+    return `stdout:\n${stdoutTail}`
+  }
+
+  return ''
+}
+
+function outputTail(text, maxLines = 18, maxChars = 4_000) {
+  if (!text) {
+    return ''
+  }
+
+  const lines = text.split(/\r?\n/).filter(Boolean)
+  const tail = lines.slice(-maxLines).join('\n')
+  return tail.length > maxChars ? tail.slice(-maxChars) : tail
 }
 
 async function provisionRoachTailLocalHostname(task) {
@@ -1334,8 +1586,8 @@ function getDependencyPackageTargets(packageManagerId) {
   const targets = {
     brew: {
       git: ['git'],
-      node: ['node@24'],
-      npm: ['node@24'],
+      node: ['node'],
+      npm: ['node'],
       docker: ['docker'],
       dockerCompose: ['docker'],
       ollama: ['ollama'],
@@ -1534,12 +1786,12 @@ function buildPendingDependencySnapshot(config = {}) {
     },
     node: {
       id: 'node',
-      label: 'Node.js 24+',
+      label: 'Node.js 26',
       required: requiredIds.has('node'),
       available: Boolean(getPreferredNodeBinary()),
       path: getPreferredNodeBinary(),
       version: null,
-      minimumVersion: '24.0.0',
+      minimumVersion: '26.0.0',
       needsUpdate: false,
       bundled: true,
       detectionPending: true,
@@ -1729,7 +1981,7 @@ async function detectDependencies({ containerRuntime, includeUpdateChecks = fals
       ? detectLatestNpmPackageVersion('openclaw', npmPath)
       : Promise.resolve(null),
   ])
-  const minimumNodeVersion = '24.0.0'
+  const minimumNodeVersion = '26.0.0'
   const nodeNeedsUpdate =
     Boolean(nodeVersion) && compareVersions(nodeVersion, minimumNodeVersion) < 0
   const packageTargets = getDependencyPackageTargets(packageManager.id)
@@ -1765,7 +2017,7 @@ async function detectDependencies({ containerRuntime, includeUpdateChecks = fals
     },
     node: {
       id: 'node',
-      label: 'Node.js 24+',
+      label: 'Node.js 26',
       required: true,
       available: Boolean(nodePath),
       path: nodePath,
@@ -1862,7 +2114,7 @@ function getDependencyInstallCommand(packageManagerId, dependencyId) {
   const commands = {
     brew: {
       git: 'brew upgrade git || brew install git',
-      node: 'brew upgrade node@24 || brew install node@24',
+      node: 'brew upgrade node || brew install node',
       docker: 'brew upgrade --cask docker || brew install --cask docker',
       dockerCompose: 'brew upgrade --cask docker || brew install --cask docker',
       ollama: 'brew upgrade ollama || brew install ollama',
@@ -1871,7 +2123,7 @@ function getDependencyInstallCommand(packageManagerId, dependencyId) {
     apt: {
       git: 'sudo apt-get update && sudo apt-get install -y git curl ca-certificates',
       node:
-        'curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs',
+        'curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash - && sudo apt-get install -y nodejs',
       docker: 'curl -fsSL https://get.docker.com | sudo sh',
       dockerCompose: 'sudo apt-get update && sudo apt-get install -y docker-compose-plugin',
       ollama: 'curl -fsSL https://ollama.com/install.sh | sh',
@@ -1879,7 +2131,7 @@ function getDependencyInstallCommand(packageManagerId, dependencyId) {
     },
     dnf: {
       git: 'sudo dnf install -y git curl ca-certificates',
-      node: 'curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash - && sudo dnf install -y nodejs',
+      node: 'curl -fsSL https://rpm.nodesource.com/setup_26.x | sudo bash - && sudo dnf install -y nodejs',
       docker: 'curl -fsSL https://get.docker.com | sudo sh',
       dockerCompose: 'sudo dnf install -y docker-compose-plugin || sudo dnf install -y docker-compose',
       ollama: 'curl -fsSL https://ollama.com/install.sh | sh',
@@ -1887,7 +2139,7 @@ function getDependencyInstallCommand(packageManagerId, dependencyId) {
     },
     yum: {
       git: 'sudo yum install -y git curl ca-certificates',
-      node: 'curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash - && sudo yum install -y nodejs',
+      node: 'curl -fsSL https://rpm.nodesource.com/setup_26.x | sudo bash - && sudo yum install -y nodejs',
       docker: 'curl -fsSL https://get.docker.com | sudo sh',
       dockerCompose: 'sudo yum install -y docker-compose-plugin || sudo yum install -y docker-compose',
       ollama: 'curl -fsSL https://ollama.com/install.sh | sh',
@@ -1903,7 +2155,7 @@ function getDependencyInstallCommand(packageManagerId, dependencyId) {
     },
     zypper: {
       git: 'sudo zypper install -y git curl ca-certificates',
-      node: 'sudo zypper install -y nodejs24 npm24',
+      node: 'sudo zypper install -y nodejs26 npm26',
       docker: 'sudo zypper install -y docker docker-compose',
       dockerCompose: 'sudo zypper install -y docker-compose',
       ollama: null,
@@ -1998,10 +2250,9 @@ function getDefaultConfig(overrides = {}) {
         ? persistedConfig.storagePath || path.join(installPath, 'storage')
         : path.join(installPath, 'storage')
   )
-  const installLooksPresent =
-    existsSync(path.join(installPath, 'scripts', 'run-roachnet.mjs')) &&
-    existsSync(path.join(installPath, 'admin', 'package.json')) &&
-    existsSync(installedAppPath)
+  const hasNativeLauncher = existsSync(path.join(installPath, 'scripts', 'run-roachnet-native-api.mjs'))
+  const hasLegacyLauncher = existsSync(path.join(installPath, 'scripts', 'run-roachnet.mjs'))
+  const installLooksPresent = (hasNativeLauncher || hasLegacyLauncher) && existsSync(installedAppPath)
   const sanitizedOverrides = stripUndefinedEntries({
     ...overrides,
     installPath,
@@ -2016,8 +2267,10 @@ function getDefaultConfig(overrides = {}) {
     appInstallPath: installedAppPath,
     installProfile: overrides.installProfile || persistedConfig.installProfile || 'standard',
     sourceMode: overrides.sourceMode || persistedConfig.sourceMode || defaultSourceMode,
-    sourceRepoUrl: overrides.sourceRepoUrl || persistedConfig.sourceRepoUrl || DEFAULT_SOURCE_REPO_URL,
-    sourceRef: overrides.sourceRef || persistedConfig.sourceRef || DEFAULT_SOURCE_REF,
+    sourceRepoUrl: normalizeSourceRepoUrl(
+      overrides.sourceRepoUrl || persistedConfig.sourceRepoUrl || DEFAULT_SOURCE_REPO_URL
+    ),
+    sourceRef: normalizeSourceRef(overrides.sourceRef || persistedConfig.sourceRef || DEFAULT_SOURCE_REF),
     autoInstallDependencies:
       overrides.autoInstallDependencies === undefined
         ? persistedConfig.autoInstallDependencies === undefined
@@ -2041,7 +2294,7 @@ function getDefaultConfig(overrides = {}) {
         ? persistedConfig.companionEnabled !== false
         : Boolean(overrides.companionEnabled),
     companionHost:
-      overrides.companionHost || persistedConfig.companionHost || '0.0.0.0',
+      overrides.companionHost || persistedConfig.companionHost || '127.0.0.1',
     companionPort:
       overrides.companionPort === undefined
         ? Number(persistedConfig.companionPort || 38111)
@@ -2184,25 +2437,19 @@ async function waitForHttpOk(url, timeoutMs, options = {}) {
       throw new Error(exitMessage?.() || `Stopped waiting for ${url} because the launch process exited.`)
     }
 
-    const controller = new AbortController()
-    const timeoutHandle = setTimeout(() => controller.abort(), 3_000)
-
     try {
-      const response = await fetch(url, {
+      const response = await requestHttp(url, {
         headers: { Accept: 'application/json' },
-        signal: controller.signal,
+        timeoutMs: 3_000,
       })
 
       if (response.ok) {
-        clearTimeout(timeoutHandle)
         return true
       }
 
       lastError = `${response.status} ${response.statusText}`
     } catch (error) {
       lastError = error?.message || 'request failed'
-    } finally {
-      clearTimeout(timeoutHandle)
     }
 
     if (exitWhen?.()) {
@@ -2254,8 +2501,10 @@ function getPreferredNodeBinary() {
   const candidates = [
     process.env.ROACHNET_NODE_BINARY,
     process.execPath,
-    '/opt/homebrew/opt/node@24/bin/node',
-    '/usr/local/opt/node@24/bin/node',
+    '/opt/homebrew/opt/node/bin/node',
+    '/opt/homebrew/opt/node@26/bin/node',
+    '/usr/local/opt/node/bin/node',
+    '/usr/local/opt/node@26/bin/node',
     'node',
   ]
 
@@ -2278,8 +2527,10 @@ function getPreferredNpmBinary(nodeBinary = getPreferredNodeBinary()) {
   const candidatePaths = [
     localNodeNpm,
     process.env.ROACHNET_NPM_BINARY,
-    '/opt/homebrew/opt/node@24/bin/npm',
-    '/usr/local/opt/node@24/bin/npm',
+    '/opt/homebrew/opt/node/bin/npm',
+    '/opt/homebrew/opt/node@26/bin/npm',
+    '/usr/local/opt/node/bin/npm',
+    '/usr/local/opt/node@26/bin/npm',
     process.platform === 'win32' ? 'npm.cmd' : 'npm',
   ]
 
@@ -2339,8 +2590,10 @@ function getShellEnv() {
       preferredNodeBin,
       '/opt/homebrew/bin',
       '/usr/local/bin',
-      '/opt/homebrew/opt/node@24/bin',
-      '/usr/local/opt/node@24/bin',
+      '/opt/homebrew/opt/node/bin',
+      '/opt/homebrew/opt/node@26/bin',
+      '/usr/local/opt/node/bin',
+      '/usr/local/opt/node@26/bin',
       process.env.PATH || '',
     ]
       .filter(Boolean)
@@ -2788,7 +3041,10 @@ function createTask(config) {
     id: hashString(`${Date.now()}-${config.installPath}-${Math.random()}`).slice(0, 10),
     status: 'running',
     phase: 'Preparing',
+    currentStep: 'Checking the install lane.',
+    progress: 0,
     startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     finishedAt: null,
     error: null,
     result: null,
@@ -2798,10 +3054,78 @@ function createTask(config) {
 }
 
 function appendTaskLog(task, message) {
-  task.logs.push(`[${new Date().toISOString()}] ${message}`)
+  task.updatedAt = new Date().toISOString()
+  task.logs.push(`[${new Date().toISOString()}] ${redactSensitiveText(message, process.env)}`)
 
   if (task.logs.length > TASK_LOG_LIMIT) {
     task.logs.splice(0, task.logs.length - TASK_LOG_LIMIT)
+  }
+}
+
+function setTaskStep(task, message, options = {}) {
+  if (!task) {
+    return
+  }
+
+  const nextProgress = Number(options.progress)
+  if (Number.isSafeInteger(nextProgress)) {
+    task.progress = Math.max(0, Math.min(100, nextProgress))
+  }
+  task.currentStep = message
+  task.updatedAt = new Date().toISOString()
+}
+
+async function withTaskActivity(task, message, action, options = {}) {
+  const intervalMs = options.intervalMs || 5_000
+  const ceiling = Number.isSafeInteger(options.ceiling)
+    ? Math.max(0, Math.min(99, options.ceiling))
+    : Math.min(99, (task.progress || 0) + 8)
+  let heartbeatCount = 0
+
+  setTaskStep(task, message)
+  const timer = setInterval(() => {
+    if (task.status !== 'running') {
+      return
+    }
+
+    heartbeatCount += 1
+    if (Number.isSafeInteger(task.progress) && task.progress < ceiling) {
+      task.progress = Math.min(ceiling, task.progress + 1)
+    }
+    setTaskStep(task, message)
+
+    if (heartbeatCount === 1 || heartbeatCount % 3 === 0) {
+      appendTaskLog(task, message)
+    }
+  }, intervalMs)
+  timer.unref?.()
+
+  try {
+    return await action()
+  } finally {
+    clearInterval(timer)
+  }
+}
+
+async function cleanupSetupWorkspace(installPath, task) {
+  const workspaceRoot = getSetupWorkspaceRoot({ installPath })
+  const cleanupTargets = [
+    path.join(workspaceRoot, 'tmp'),
+    path.join(workspaceRoot, 'npm-cache'),
+  ]
+  const removedTargets = []
+
+  for (const targetPath of cleanupTargets) {
+    if (!(await pathExists(targetPath))) {
+      continue
+    }
+
+    await rm(targetPath, { recursive: true, force: true })
+    removedTargets.push(path.basename(targetPath))
+  }
+
+  if (removedTargets.length > 0) {
+    appendTaskLog(task, `Cleaned setup scratch data: ${removedTargets.join(', ')}.`)
   }
 }
 
@@ -2849,7 +3173,6 @@ async function ensureDockerReady(task) {
     commandExists,
     detectRuntime: () => detectContainerRuntime(),
     runProcess,
-    runShell,
     env: getShellEnv(),
     timeoutMs: DOCKER_BOOT_TIMEOUT_MS,
     log(message) {
@@ -2859,11 +3182,14 @@ async function ensureDockerReady(task) {
 }
 
 function shouldIncludeBundledSourcePath(relativePath) {
-  if (!relativePath || relativePath === '') {
+  const normalizedPath = normalizeRelativePathForCopyFilter(relativePath)
+  if (normalizedPath === null) {
+    return false
+  }
+  if (!normalizedPath) {
     return true
   }
 
-  const normalizedPath = relativePath.split(path.sep).join('/')
   const segments = normalizedPath.split('/')
   const topLevel = segments[0]
 
@@ -2875,6 +3201,8 @@ function shouldIncludeBundledSourcePath(relativePath) {
       'release',
       'dist',
       'desktop-dist',
+      'desktop',
+      'installer',
       'setup-dist',
     ].includes(topLevel)
   ) {
@@ -2894,10 +3222,11 @@ function shouldIncludeBundledSourcePath(relativePath) {
 
   if (
     normalizedPath === 'admin/node_modules' ||
+    normalizedPath === 'admin/build/node_modules' ||
     normalizedPath === 'admin/storage' ||
     normalizedPath.startsWith('admin/node_modules/') ||
+    normalizedPath.startsWith('admin/build/node_modules/') ||
     normalizedPath.startsWith('admin/storage/') ||
-    normalizedPath.startsWith('installer/node_modules/') ||
     normalizedPath.includes('/node_modules_node') ||
     normalizedPath.includes('/storage/logs/') ||
     normalizedPath.includes('/storage/tmp/')
@@ -2981,7 +3310,9 @@ async function ensureRepository(config, repoPath, task) {
 
 async function smokeTestInstalledRuntime(config, envValues, task) {
   const nodeBinary = resolveInstalledAppNodeBinary(config)
-  const launcherPath = path.join(config.installPath, 'scripts', 'run-roachnet.mjs')
+  const nativeLauncherPath = path.join(config.installPath, 'scripts', 'run-roachnet-native-api.mjs')
+  const legacyLauncherPath = path.join(config.installPath, 'scripts', 'run-roachnet.mjs')
+  const launcherPath = existsSync(nativeLauncherPath) ? nativeLauncherPath : legacyLauncherPath
   const healthUrl = new URL('/api/health', envValues.URL).toString()
   const storagePath = normalizeInputPath(config.storagePath || envValues.ROACHNET_STORAGE_PATH || path.join(config.installPath, 'storage'))
   const runtimeStateRoot = normalizeInputPath(path.join(storagePath, 'state', 'runtime-state'))
@@ -2992,9 +3323,14 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
   const ollamaModelsPath = normalizeInputPath(
     envValues.OLLAMA_MODELS || path.join(storagePath, 'ollama')
   )
+  const dbPassword = envValues.DB_PASSWORD || LEGACY_MANAGED_RUNTIME_DB_PASSWORD
+  const dbRootPassword =
+    envValues.ROACHNET_DB_ROOT_PASSWORD ||
+    envValues.MYSQL_ROOT_PASSWORD ||
+    LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD
   const installProfile = config.installProfile?.trim() || 'setup-app'
   const containerlessMode = config.useDockerContainerization ? '0' : '1'
-  const launchEnv = {
+  const launchEnv = applyAppleSiliconLocalAIDefaults({
     ...getShellEnv(),
     ROACHNET_STORAGE_PATH: storagePath,
     OPENCLAW_WORKSPACE_PATH: openClawWorkspacePath,
@@ -3011,9 +3347,15 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
     ROACHNET_DISABLE_QUEUE: containerlessMode === '1' ? '1' : '0',
     ROACHNET_ROACHCLAW_DEFAULT_MODEL:
       config.roachClawDefaultModel?.trim() || DEFAULT_ROACHCLAW_MODEL,
+    DB_PASSWORD: dbPassword,
+    ROACHNET_DB_ROOT_PASSWORD: dbRootPassword,
+    MYSQL_ROOT_PASSWORD: dbRootPassword,
     ROACHNET_INSTALLER_CONFIG_PATH: getInstallerConfigPath(),
     ROACHNET_NO_BROWSER: '1',
-  }
+    HOST: envValues.HOST || '127.0.0.1',
+    PORT: envValues.PORT || '8080',
+    URL: envValues.URL || `http://${envValues.HOST || '127.0.0.1'}:${envValues.PORT || '8080'}`,
+  })
 
   if (!existsSync(launcherPath)) {
     throw new Error(`Missing RoachNet launcher at ${launcherPath}.`)
@@ -3089,6 +3431,7 @@ async function smokeTestInstalledRuntime(config, envValues, task) {
       env: launchEnv,
       timeoutMs: 30_000,
     }).catch(() => {})
+    await terminateRunningRoachNetApps(task, config)
 
     const exitCode = await waitForChildExit(launcherChild, 10_000)
     if (exitCode === null && launcherChild) {
@@ -3115,14 +3458,19 @@ function buildManagementCompose({
   const storageRoot = toComposePath(storagePath)
   const openClawWorkspaceRoot = toComposePath(openClawWorkspacePath)
   const appBindPort = Number(appPort)
-  const publicBaseUrl = publicUrl.replace(/"/g, '\\"')
-  const resolvedOllamaBaseUrl = ollamaBaseUrl.replace(/"/g, '\\"')
-  const resolvedOpenClawBaseUrl = openClawBaseUrl.replace(/"/g, '\\"')
-  const resolvedLogLevel = logLevel.replace(/"/g, '\\"')
-  const resolvedDbUser = dbUser.replace(/"/g, '\\"')
-  const resolvedDbPassword = dbPassword.replace(/"/g, '\\"')
-  const resolvedDbRootPassword = dbRootPassword.replace(/"/g, '\\"')
-  const resolvedAppKey = appKey.replace(/"/g, '\\"')
+  const publicBaseUrl = quoteComposeString(publicUrl)
+  const resolvedOpenClawBaseUrl = quoteComposeString(openClawBaseUrl)
+  const resolvedLogLevel = quoteComposeString(logLevel)
+  const resolvedDbUser = quoteComposeString(dbUser)
+  const resolvedDbPassword = quoteComposeString(dbPassword)
+  const resolvedDbRootPassword = quoteComposeString(dbRootPassword)
+  const resolvedAppKey = quoteComposeString(appKey)
+  const storageVolume = quoteComposeString(`${storageRoot}:/app/storage`)
+  const mysqlVolume = quoteComposeString(`${runtimeRoot}/mysql:/var/lib/mysql`)
+  const redisVolume = quoteComposeString(`${runtimeRoot}/redis:/data`)
+  const qdrantVolume = quoteComposeString(`${runtimeRoot}/qdrant:/qdrant/storage`)
+  const ollamaVolume = quoteComposeString(`${storageRoot}/ollama:/root/.ollama`)
+  const openClawWorkspaceValue = quoteComposeString(openClawWorkspaceRoot)
 
   return `services:
   admin:
@@ -3137,28 +3485,29 @@ function buildManagementCompose({
     ports:
       - "127.0.0.1:${appBindPort}:8080"
     volumes:
-      - "${storageRoot}:/app/storage"
+      - ${storageVolume}
       - "/var/run/docker.sock:/var/run/docker.sock"
     environment:
       NODE_ENV: production
       PORT: "8080"
       HOST: "0.0.0.0"
-      URL: "${publicBaseUrl}"
-      LOG_LEVEL: "${resolvedLogLevel}"
-      APP_KEY: "${resolvedAppKey}"
+      URL: ${publicBaseUrl}
+      LOG_LEVEL: ${resolvedLogLevel}
+      APP_KEY: ${resolvedAppKey}
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_DATABASE: roachnet
-      DB_USER: "${resolvedDbUser}"
-      DB_PASSWORD: "${resolvedDbPassword}"
+      DB_USER: ${resolvedDbUser}
+      DB_PASSWORD: ${resolvedDbPassword}
       DB_SSL: "false"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       ROACHNET_STORAGE_PATH: /app/storage
-      OPENCLAW_WORKSPACE_PATH: "${openClawWorkspaceRoot}"
+      OPENCLAW_WORKSPACE_PATH: ${openClawWorkspaceValue}
       OLLAMA_BASE_URL: "http://ollama:11434"
-      OPENCLAW_BASE_URL: "${resolvedOpenClawBaseUrl}"
-      ROACHNET_DB_ROOT_PASSWORD: "${resolvedDbRootPassword}"
+      OPENCLAW_BASE_URL: ${resolvedOpenClawBaseUrl}
+      ROACHNET_DB_ROOT_PASSWORD: ${resolvedDbRootPassword}
+      MYSQL_ROOT_PASSWORD: ${resolvedDbRootPassword}
     depends_on:
       mysql:
         condition: service_healthy
@@ -3181,16 +3530,17 @@ function buildManagementCompose({
       - -c
       - rm -f /var/run/mysqld/mysqld.sock.lock /var/run/mysqld/mysqlx.sock.lock /var/run/mysqld/mysqld.sock /var/run/mysqld/mysqlx.sock && exec docker-entrypoint.sh mysqld
     environment:
-      MYSQL_ROOT_PASSWORD: "${resolvedDbRootPassword}"
+      MYSQL_ROOT_PASSWORD: ${resolvedDbRootPassword}
+      ROACHNET_DB_ROOT_PASSWORD: ${resolvedDbRootPassword}
       MYSQL_DATABASE: roachnet
-      MYSQL_USER: "${resolvedDbUser}"
-      MYSQL_PASSWORD: "${resolvedDbPassword}"
+      MYSQL_USER: ${resolvedDbUser}
+      MYSQL_PASSWORD: ${resolvedDbPassword}
     tmpfs:
       - /var/run/mysqld
     volumes:
-      - "${runtimeRoot}/mysql:/var/lib/mysql"
+      - ${mysqlVolume}
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p${resolvedDbRootPassword}"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p\\"$\${MYSQL_ROOT_PASSWORD}\\""]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -3202,7 +3552,7 @@ function buildManagementCompose({
     ports:
       - "127.0.0.1:36379:6379"
     volumes:
-      - "${runtimeRoot}/redis:/data"
+      - ${redisVolume}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s
@@ -3216,7 +3566,7 @@ function buildManagementCompose({
     ports:
       - "127.0.0.1:36333:6333"
     volumes:
-      - "${runtimeRoot}/qdrant:/qdrant/storage"
+      - ${qdrantVolume}
 
   ollama:
     image: ollama/ollama:0.20.2
@@ -3225,7 +3575,7 @@ function buildManagementCompose({
     ports:
       - "127.0.0.1:36434:11434"
     volumes:
-      - "${storageRoot}/ollama:/root/.ollama"
+      - ${ollamaVolume}
 `
 }
 
@@ -3246,9 +3596,8 @@ async function resolveInstallPort(preferredValue, startPort, label, task, host =
 }
 
 async function prepareEnvironmentFiles(config, repoPath, task) {
-  const adminPath = path.join(repoPath, 'admin')
-  const envExamplePath = path.join(adminPath, '.env.example')
-  const envPath = path.join(adminPath, '.env')
+  const envExamplePath = path.join(repoPath, 'runtime', 'roachnet.env.example')
+  const envPath = path.join(repoPath, 'runtime', 'roachnet.env')
   const managementComposePath = path.join(repoPath, 'ops', 'roachnet-management.compose.yml')
 
   const exampleValues = existsSync(envExamplePath)
@@ -3259,13 +3608,18 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
   await ensureDirectory(path.join(repoPath, 'ops'))
   await ensureDirectory(path.join(repoPath, 'runtime', 'mysql'))
   await ensureDirectory(path.join(repoPath, 'runtime', 'redis'))
+  await ensureDirectory(path.dirname(envPath))
   await ensureDirectory(path.join(repoPath, 'app'))
   await ensureDirectory(path.join(repoPath, 'bin'))
 
   const port = await resolveInstallPort(existingValues.PORT, 8080, 'Application', task)
   const containerlessMode = config.useDockerContainerization ? '0' : '1'
-  const dbPassword = existingValues.DB_PASSWORD || randomSecret(16)
-  const dbRootPassword = existingValues.ROACHNET_DB_ROOT_PASSWORD || randomSecret(16)
+  const dbPassword =
+    existingValues.DB_PASSWORD || LEGACY_MANAGED_RUNTIME_DB_PASSWORD
+  const dbRootPassword =
+    existingValues.ROACHNET_DB_ROOT_PASSWORD ||
+    existingValues.MYSQL_ROOT_PASSWORD ||
+    LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD
   const appKey = existingValues.APP_KEY || randomSecret(24)
   const host = existingValues.HOST || '127.0.0.1'
   const storagePath = normalizeInputPath(config.storagePath || existingValues.ROACHNET_STORAGE_PATH || path.join(repoPath, 'storage'))
@@ -3292,7 +3646,7 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
   await ensureDirectory(ollamaModelsPath)
   await ensureDirectory(path.dirname(sqliteDbPath))
 
-  const envValues = {
+  const envValues = applyAppleSiliconLocalAIDefaults({
     ...exampleValues,
     ...existingValues,
     PORT: port,
@@ -3323,7 +3677,8 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
     ROACHNET_DISABLE_QUEUE: containerlessMode === '1' ? '1' : '0',
     ROACHNET_DISABLE_TRANSMIT: existingValues.ROACHNET_DISABLE_TRANSMIT || '1',
     ROACHNET_DB_ROOT_PASSWORD: dbRootPassword,
-  }
+    MYSQL_ROOT_PASSWORD: dbRootPassword,
+  })
 
   writeFileSync(envPath, serializeEnvFile(envValues), 'utf8')
   writeFileSync(
@@ -3345,7 +3700,7 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
     'utf8'
   )
 
-  appendTaskLog(task, `Prepared RoachNet env file at ${envPath}.`)
+  appendTaskLog(task, `Prepared RoachNet runtime env file at ${envPath}.`)
   appendTaskLog(task, `Prepared Docker management file at ${managementComposePath}.`)
   appendTaskLog(task, `RoachNet storage will live inside ${storagePath}.`)
   appendTaskLog(
@@ -3357,7 +3712,6 @@ async function prepareEnvironmentFiles(config, repoPath, task) {
 
   return {
     envValues,
-    adminPath,
     envPath,
     managementComposePath,
   }
@@ -3414,22 +3768,22 @@ function openBrowser(url) {
   }
 
   if (process.platform === 'darwin') {
-    spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
+    spawnDetachedProcess('open', [url])
     return
   }
 
   if (process.platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref()
+    spawnDetachedProcess('cmd', ['/c', 'start', '', url])
     return
   }
 
-  spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
+  spawnDetachedProcess('xdg-open', [url])
 }
 
 async function launchInstalledRoachNet(repoPath, openPath, installedAppPath) {
   const nodeBinary = resolveInstalledAppNodeBinary(repoPath, installedAppPath)
   const persistedConfig = getDefaultConfig(loadPersistedInstallerConfig())
-  const envPath = path.join(repoPath, 'admin', '.env')
+  const envPath = path.join(repoPath, 'runtime', 'roachnet.env')
   const envValues = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, 'utf8')) : {}
   const storagePath = normalizeInputPath(
     persistedConfig.storagePath || envValues.ROACHNET_STORAGE_PATH || path.join(repoPath, 'storage')
@@ -3447,11 +3801,13 @@ async function launchInstalledRoachNet(repoPath, openPath, installedAppPath) {
     path.join(installedAppPath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'npm')
   )
   const containerlessMode = persistedConfig.useDockerContainerization === false ? '1' : '0'
-  spawn(nodeBinary, [path.join(repoPath, 'scripts', 'run-roachnet.mjs')], {
+  const nativeLauncherPath = path.join(repoPath, 'scripts', 'run-roachnet-native-api.mjs')
+  const legacyLauncherPath = path.join(repoPath, 'scripts', 'run-roachnet.mjs')
+  const launcherPath = existsSync(nativeLauncherPath) ? nativeLauncherPath : legacyLauncherPath
+
+  spawnDetachedProcess(nodeBinary, [launcherPath], {
     cwd: repoPath,
-    detached: true,
-    stdio: 'ignore',
-    env: {
+    env: applyAppleSiliconLocalAIDefaults({
       ...getShellEnv(),
       ROACHNET_STORAGE_PATH: storagePath,
       OPENCLAW_WORKSPACE_PATH: openClawWorkspacePath,
@@ -3471,8 +3827,8 @@ async function launchInstalledRoachNet(repoPath, openPath, installedAppPath) {
       ROACHNET_INSTALLER_CONFIG_PATH: getInstallerConfigPath(),
       ROACHNET_OPEN_PATH: openPath,
       ROACHNET_NO_BROWSER: process.env.ROACHNET_NO_BROWSER || '0',
-    },
-  }).unref()
+    }),
+  })
 }
 
 async function runInstallWorkflow(config) {
@@ -3486,8 +3842,8 @@ async function runInstallWorkflow(config) {
     installPath: finalInstallPath,
     installedAppPath: finalInstalledAppPath,
     storagePath: finalStoragePath,
-    sourceRepoUrl: config.sourceRepoUrl?.trim() || DEFAULT_SOURCE_REPO_URL,
-    sourceRef: config.sourceRef?.trim() || DEFAULT_SOURCE_REF,
+    sourceRepoUrl: normalizeSourceRepoUrl(config.sourceRepoUrl || DEFAULT_SOURCE_REPO_URL),
+    sourceRef: normalizeSourceRef(config.sourceRef || DEFAULT_SOURCE_REF),
     installRoachClaw: config.installRoachClaw !== false,
     roachClawDefaultModel: config.roachClawDefaultModel?.trim() || DEFAULT_ROACHCLAW_MODEL,
     installOptionalOllama: config.installRoachClaw !== false,
@@ -3501,31 +3857,51 @@ async function runInstallWorkflow(config) {
   }
   const task = createTask(normalizedConfig)
   runtimeState.task = task
-  const stagingInstallPath = await mkdtemp(
-    path.join(path.dirname(finalInstallPath), `${path.basename(finalInstallPath)}.staging-`)
-  )
-  const stagedConfig = {
-    ...normalizedConfig,
-    installPath: stagingInstallPath,
-    installedAppPath: remapPathWithinInstallRoot(
-      normalizedConfig.installedAppPath,
-      finalInstallPath,
-      stagingInstallPath
-    ),
-    storagePath: remapPathWithinInstallRoot(
-      normalizedConfig.storagePath,
-      finalInstallPath,
-      stagingInstallPath
-    ),
+  let stagingInstallPath = null
+  let stagedConfig = null
+
+  const phaseProgress = {
+    'Inspecting system': 5,
+    'Validating contained install lane': 12,
+    'Staging RoachNet': 24,
+    'Installing contained AI tooling': 38,
+    'Preparing contained runtime': 52,
+    'Installing native desktop app': 64,
+    'Verifying contained runtime': 76,
+    'Finalizing install': 88,
+    'Arming RoachTail local alias': 94,
+    'Launching RoachNet': 98,
   }
 
   const setPhase = (phase) => {
     task.phase = phase
+    task.progress = phaseProgress[phase] ?? task.progress
+    setTaskStep(task, `${phase} started.`)
     appendTaskLog(task, `Phase: ${phase}`)
   }
 
   try {
+    await ensureDirectory(path.dirname(finalInstallPath))
+    stagingInstallPath = await mkdtemp(
+      path.join(path.dirname(finalInstallPath), `${path.basename(finalInstallPath)}.staging-`)
+    )
+    stagedConfig = {
+      ...normalizedConfig,
+      installPath: stagingInstallPath,
+      installedAppPath: remapPathWithinInstallRoot(
+        normalizedConfig.installedAppPath,
+        finalInstallPath,
+        stagingInstallPath
+      ),
+      storagePath: remapPathWithinInstallRoot(
+        normalizedConfig.storagePath,
+        finalInstallPath,
+        stagingInstallPath
+      ),
+    }
     saveInstallerConfig(normalizedConfig)
+    appendTaskLog(task, `Using staging root ${stagingInstallPath} on the selected install volume.`)
+    await terminateRunningRoachNetApps(task, normalizedConfig)
 
     setPhase('Inspecting system')
     const containerRuntime = await detectContainerRuntime()
@@ -3539,30 +3915,83 @@ async function runInstallWorkflow(config) {
     appendTaskLog(task, `Detected package manager: ${packageManager.label}.`)
 
     setPhase('Validating contained install lane')
-    await ensureRequiredDependencies(normalizedConfig, task, packageManager, dependencies)
-    await ensureInstallVolumeHeadroom(normalizedConfig, task)
+    await withTaskActivity(
+      task,
+      'Checking required local tools and selected disk space.',
+      async () => {
+        await ensureRequiredDependencies(normalizedConfig, task, packageManager, dependencies)
+        await ensureInstallVolumeHeadroom(normalizedConfig, task)
+      },
+      { ceiling: 20 }
+    )
 
     setPhase('Staging RoachNet')
-    await ensureRepository(stagedConfig, stagedConfig.installPath, task)
+    await withTaskActivity(
+      task,
+      'Copying the contained RoachNet payload into a staged install root.',
+      () => ensureRepository(stagedConfig, stagedConfig.installPath, task),
+      { ceiling: 34 }
+    )
 
     setPhase('Installing contained AI tooling')
-    await ensureContainedAITooling(stagedConfig, stagedConfig.installPath, task)
+    await withTaskActivity(
+      task,
+      'Checking contained Ollama/OpenClaw launchers without touching global installs.',
+      () => ensureContainedAITooling(stagedConfig, stagedConfig.installPath, task),
+      { ceiling: 48 }
+    )
 
     setPhase('Preparing contained runtime')
-    const prepared = await prepareEnvironmentFiles(stagedConfig, stagedConfig.installPath, task)
+    const prepared = await withTaskActivity(
+      task,
+      'Writing runtime env, storage roots, and local service metadata.',
+      () => prepareEnvironmentFiles(stagedConfig, stagedConfig.installPath, task),
+      { ceiling: 60 }
+    )
 
     setPhase('Installing native desktop app')
-    await installNativeDesktopApp(stagedConfig, task)
+    await withTaskActivity(
+      task,
+      'Replacing the native desktop app bundle from the verified local artifact.',
+      () => installNativeDesktopApp(stagedConfig, task),
+      { ceiling: 73 }
+    )
 
     setPhase('Verifying contained runtime')
-    await smokeTestInstalledRuntime(stagedConfig, prepared.envValues, task)
+    await withTaskActivity(
+      task,
+      'Booting the contained native API long enough to prove the install opens.',
+      () => smokeTestInstalledRuntime(stagedConfig, prepared.envValues, task),
+      { ceiling: 84 }
+    )
 
     setPhase('Finalizing install')
-    await finalizeInstallRoot(stagedConfig.installPath, normalizedConfig.installPath, task)
-    const finalized = await prepareEnvironmentFiles(normalizedConfig, normalizedConfig.installPath, task)
+    await withTaskActivity(
+      task,
+      'Cleaning scratch data and swapping the staged install into place.',
+      async () => {
+        await cleanupSetupWorkspace(stagedConfig.installPath, task)
+        await finalizeInstallRoot(stagedConfig.installPath, normalizedConfig.installPath, task, {
+          storagePath: normalizedConfig.storagePath,
+        })
+        await cleanupSetupWorkspace(normalizedConfig.installPath, task)
+      },
+      { ceiling: 92 }
+    )
+    const finalized = await withTaskActivity(
+      task,
+      'Rewriting final runtime paths after the staged install lands.',
+      () => prepareEnvironmentFiles(normalizedConfig, normalizedConfig.installPath, task),
+      { ceiling: 93 }
+    )
 
     setPhase('Arming RoachTail local alias')
-    await provisionRoachTailLocalHostname(task)
+    await withTaskActivity(
+      task,
+      'Preparing the local RoachTail alias when this Mac allows it.',
+      () => provisionRoachTailLocalHostname(task),
+      { ceiling: 96 }
+    )
 
     if (normalizedConfig.autoLaunch) {
       setPhase('Launching RoachNet')
@@ -3572,6 +4001,9 @@ async function runInstallWorkflow(config) {
     }
 
     task.status = 'completed'
+    task.progress = 100
+    task.currentStep = 'RoachNet is installed and ready.'
+    task.updatedAt = new Date().toISOString()
     task.finishedAt = new Date().toISOString()
     task.result = {
       installPath: normalizedConfig.installPath,
@@ -3595,14 +4027,26 @@ async function runInstallWorkflow(config) {
     appendTaskLog(task, 'RoachNet setup completed successfully.')
   } catch (error) {
     task.status = 'failed'
+    task.progress = task.progress || 0
+    task.currentStep = 'Setup failed. Fix the issue and run install again.'
+    task.updatedAt = new Date().toISOString()
     task.finishedAt = new Date().toISOString()
     task.error = sanitizeInstallerErrorMessage(error, normalizedConfig)
     appendTaskLog(task, `Setup failed: ${task.error}`)
     if (process.env.ROACHNET_SMOKE_KEEP_TEMP === '1' || process.env.ROACHNET_SETUP_KEEP_STAGED_FAILURE === '1') {
-      appendTaskLog(task, `Preserving staged install at ${stagingInstallPath} for debugging.`)
+      if (stagingInstallPath) {
+        appendTaskLog(task, `Preserving staged install at ${stagingInstallPath} for debugging.`)
+      }
     } else {
-      await rm(stagingInstallPath, { recursive: true, force: true })
-      appendTaskLog(task, 'Removed the staged install so this Mac can retry setup cleanly.')
+      if (stagingInstallPath) {
+        await rm(stagingInstallPath, { recursive: true, force: true }).catch((cleanupError) => {
+          appendTaskLog(
+            task,
+            `Could not remove staged install after failure: ${cleanupError?.message || cleanupError}`
+          )
+        })
+        appendTaskLog(task, 'Removed the staged install so this Mac can retry setup cleanly.')
+      }
     }
   } finally {
     invalidateInstallerDiagnosticsCache()
@@ -3684,7 +4128,7 @@ async function getInstallerState(searchParams = new URLSearchParams()) {
     mergedConfig.installedAppPath || getDefaultInstalledAppPath(installPath)
   )
   const installLooksReady =
-    existsSync(path.join(installPath, 'admin', 'package.json')) &&
+    existsSync(path.join(installPath, 'scripts', 'run-roachnet-native-api.mjs')) ||
     existsSync(path.join(installPath, 'scripts', 'run-roachnet.mjs'))
 
   const dependencyList = Object.values(dependencies).map((dependency) => ({
@@ -3769,7 +4213,6 @@ async function handleContainerRuntimeStartRequest(_request, response) {
           runProcess,
         }),
       runProcess,
-      runShell,
       env: getShellEnv(),
     })
 
@@ -3779,7 +4222,7 @@ async function handleContainerRuntimeStartRequest(_request, response) {
     })
     invalidateInstallerDiagnosticsCache()
   } catch (error) {
-    sendJson(response, { error: error.message }, 400)
+    sendError(response, error, 400)
   }
 }
 
@@ -3816,10 +4259,12 @@ async function handleInstallRequest(request, response) {
       return
     }
 
+    runtimeState.lastCompletedTask = null
+    invalidateInstallerDiagnosticsCache()
     runInstallWorkflow(config)
     sendJson(response, { ok: true })
   } catch (error) {
-    sendJson(response, { error: error.message }, 400)
+    sendError(response, error, 400)
   }
 }
 
@@ -3831,7 +4276,7 @@ async function handleConfigRequest(request, response) {
     invalidateInstallerDiagnosticsCache()
     sendJson(response, { ok: true, config })
   } catch (error) {
-    sendJson(response, { error: error.message }, 400)
+    sendError(response, error, 400)
   }
 }
 
@@ -3859,7 +4304,10 @@ async function handleLaunchRequest(request, response) {
       return
     }
 
-    if (!existsSync(path.join(installPath, 'scripts', 'run-roachnet.mjs'))) {
+    if (
+      !existsSync(path.join(installPath, 'scripts', 'run-roachnet-native-api.mjs')) &&
+      !existsSync(path.join(installPath, 'scripts', 'run-roachnet.mjs'))
+    ) {
       sendJson(
         response,
         {
@@ -3880,7 +4328,7 @@ async function handleLaunchRequest(request, response) {
     await launchInstalledRoachNet(installPath, '/easy-setup', installedAppPath)
     sendJson(response, { ok: true })
   } catch (error) {
-    sendJson(response, { error: error.message }, 400)
+    sendError(response, error, 400)
   }
 }
 
@@ -3918,9 +4366,7 @@ async function requestHandler(request, response) {
       return
     }
 
-    const requestedPath =
-      requestUrl.pathname === '/' ? 'index.html' : requestUrl.pathname.replace(/^\/+/, '')
-    await serveStaticFile(response, path.join(uiRoot, requestedPath))
+    await serveStaticFile(response, resolveSetupStaticFilePath(requestUrl.pathname))
     return
   }
 
@@ -3934,7 +4380,7 @@ async function main() {
 
   const server = http.createServer((request, response) => {
     requestHandler(request, response).catch((error) => {
-      sendJson(response, { error: error.message }, 500)
+      sendError(response, error, 500)
     })
   })
 

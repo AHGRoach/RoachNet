@@ -34,7 +34,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable, Equatable {
         useDockerContainerization: Bool = false,
         installRoachClaw: Bool = true,
         companionEnabled: Bool = true,
-        companionHost: String = "0.0.0.0",
+        companionHost: String = "127.0.0.1",
         companionPort: Int = 38111,
         companionToken: String = RoachNetInstallerConfig.generateCompanionToken(),
         companionAdvertisedURL: String = "",
@@ -131,7 +131,7 @@ public struct RoachNetInstallerConfig: Codable, Sendable, Equatable {
             useDockerContainerization: try container.decodeIfPresent(Bool.self, forKey: .useDockerContainerization) ?? false,
             installRoachClaw: try container.decodeIfPresent(Bool.self, forKey: .installRoachClaw) ?? true,
             companionEnabled: try container.decodeIfPresent(Bool.self, forKey: .companionEnabled) ?? true,
-            companionHost: try container.decodeIfPresent(String.self, forKey: .companionHost) ?? "0.0.0.0",
+            companionHost: try container.decodeIfPresent(String.self, forKey: .companionHost) ?? "127.0.0.1",
             companionPort: try container.decodeIfPresent(Int.self, forKey: .companionPort) ?? 38111,
             companionToken: try container.decodeIfPresent(String.self, forKey: .companionToken) ?? RoachNetInstallerConfig.generateCompanionToken(),
             companionAdvertisedURL: try container.decodeIfPresent(String.self, forKey: .companionAdvertisedURL) ?? "",
@@ -263,7 +263,10 @@ public struct RoachNetSetupState: Decodable {
         public let id: String
         public let status: String
         public let phase: String?
+        public let currentStep: String?
+        public let progress: Int?
         public let startedAt: String?
+        public let updatedAt: String?
         public let finishedAt: String?
         public let logs: [String]?
         public let error: String?
@@ -691,7 +694,8 @@ public enum RoachNetRepositoryLocator {
             ProcessInfo.processInfo.environment["ROACHNET_LOCAL_BIN_PATH"],
             defaultLocalBinPath(installPath: configuredInstallPath),
             embeddedNodeBinDirectory(),
-            "/opt/homebrew/opt/node@24/bin",
+            "/opt/homebrew/opt/node/bin",
+            "/opt/homebrew/opt/node@26/bin",
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/Applications/Docker.app/Contents/Resources/bin",

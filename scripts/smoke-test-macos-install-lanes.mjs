@@ -9,6 +9,9 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
+import { requestHttp } from './lib/roachnet_http.mjs'
+import { applyAppleSiliconLocalAIDefaults } from './lib/roachnet_local_ai_runtime.mjs'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const repoRoot = path.resolve(__dirname, '..')
@@ -94,6 +97,15 @@ function parseEnvFile(content) {
   return values
 }
 
+function serializeEnvFile(values) {
+  return (
+    Object.entries(values)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join('\n') + '\n'
+  )
+}
+
 function readPlistStringValue(bundlePath, key) {
   const infoPlistPath = path.join(bundlePath, 'Contents', 'Info.plist')
   assert(existsSync(infoPlistPath), `Missing Info.plist at ${infoPlistPath}`)
@@ -111,6 +123,10 @@ function getBundledSourceArchivePath(bundlePath) {
   return path.join(bundlePath, 'Contents', 'Resources', 'RoachNetSource.tar.gz')
 }
 
+function getBundledSourceDirectoryPath(bundlePath) {
+  return path.join(bundlePath, 'Contents', 'Resources', 'RoachNetSource')
+}
+
 function getPackagedSetupRuntimePaths(bundlePath = setupBundlePath, bundledSourceRoot = null) {
   const sourceRoot =
     bundledSourceRoot || path.join(bundlePath, 'Contents', 'Resources', 'RoachNetSource')
@@ -123,11 +139,12 @@ function getPackagedSetupRuntimePaths(bundlePath = setupBundlePath, bundledSourc
 function getPackagedAppRuntimePaths(appBundlePath, installRoot = null) {
   const sourceRoot =
     installRoot || path.join(appBundlePath, 'Contents', 'Resources', 'RoachNetSource')
+  const nativeLauncherPath = path.join(sourceRoot, 'scripts', 'run-roachnet-native-api.mjs')
+  assert(existsSync(nativeLauncherPath), `Missing dependency-free native API launcher at ${nativeLauncherPath}`)
   return {
     nodeBinary: path.join(appBundlePath, 'Contents', 'Resources', 'EmbeddedRuntime', 'node', 'bin', 'node'),
-    launcherPath: path.join(sourceRoot, 'scripts', 'run-roachnet.mjs'),
+    launcherPath: nativeLauncherPath,
     aliasInstallerPath: path.join(sourceRoot, 'scripts', 'install-roachtail-hostname.mjs'),
-    envPath: path.join(sourceRoot, 'admin', '.env'),
   }
 }
 
@@ -146,7 +163,7 @@ function buildContainedRuntimeEnv({ homePath, installRoot, storagePath, config, 
   const installProfile = config.installProfile || 'standard'
   const containerlessMode = config.useDockerContainerization === false ? '1' : '0'
 
-  return {
+  return applyAppleSiliconLocalAIDefaults({
     ...baseShellEnv(homePath),
     ROACHNET_STORAGE_PATH: storagePath,
     OPENCLAW_WORKSPACE_PATH: path.join(storagePath, 'openclaw'),
@@ -164,7 +181,7 @@ function buildContainedRuntimeEnv({ homePath, installRoot, storagePath, config, 
     ROACHNET_ROACHCLAW_DEFAULT_MODEL: config.roachClawDefaultModel || 'qwen2.5-coder:1.5b',
     ROACHNET_INSTALLER_CONFIG_PATH: extra.ROACHNET_INSTALLER_CONFIG_PATH,
     ...extra,
-  }
+  })
 }
 
 function sleep(ms) {
@@ -200,7 +217,7 @@ async function waitForHttpOk(url, timeoutMs) {
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(url, {
+      const response = await requestHttp(url, {
         headers: { Accept: 'application/json' },
       })
 
@@ -217,13 +234,39 @@ async function waitForHttpOk(url, timeoutMs) {
   throw new Error(`Timed out waiting for ${url}`)
 }
 
+async function waitForRuntimeHealthUrl(processInfoPath, timeoutMs) {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const payload = JSON.parse(readFileSync(processInfoPath, 'utf8'))
+      const nativeProcess = Array.isArray(payload?.processes)
+        ? payload.processes.find((entry) => entry?.name === 'native-api')
+        : null
+      const healthUrl = nativeProcess?.healthUrl || payload?.healthUrl
+
+      if (typeof healthUrl === 'string' && healthUrl.trim()) {
+        await waitForHttpOk(healthUrl, Math.min(30_000, timeoutMs))
+        return healthUrl
+      }
+    } catch {
+      // The GUI may still be starting or rewriting the process-state file.
+    }
+
+    await sleep(pollIntervalMs)
+  }
+
+  throw new Error(`Timed out waiting for a native runtime health URL in ${processInfoPath}`)
+}
+
 async function waitForHttpUnavailable(url, timeoutMs) {
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(url, {
+      const response = await requestHttp(url, {
         headers: { Accept: 'application/json' },
+        timeoutMs: 3_000,
       })
 
       if (!response.ok) {
@@ -435,7 +478,7 @@ async function waitForRoachWindow(ownerName, timeoutMs, titleName = ownerName, p
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await requestHttp(url, {
     headers: {
       Accept: 'application/json',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -467,6 +510,7 @@ async function verifyGuiLaunch({
   extraEnv = {},
   homePath,
   healthUrl = null,
+  processInfoPath = null,
   ownerName,
   titleName = ownerName,
   windowTimeoutMs = 300_000,
@@ -488,6 +532,10 @@ async function verifyGuiLaunch({
     timeoutMs: 5_000,
   }).catch(() => {})
 
+  if (processInfoPath) {
+    await rm(processInfoPath, { force: true }).catch(() => {})
+  }
+
   await runCommand('open', ['-na', appBundlePath], {
     env,
     timeoutMs: 30_000,
@@ -495,19 +543,26 @@ async function verifyGuiLaunch({
 
   logStep(`Waiting for ${ownerName} window`)
   await waitForRoachWindow(ownerName, windowTimeoutMs, titleName, appProcessName)
-  if (healthUrl) {
-    logStep(`Waiting for ${ownerName} runtime health at ${healthUrl}`)
-    await waitForHttpOk(healthUrl, startupTimeoutMs)
+  let resolvedHealthUrl = healthUrl
+  if (!resolvedHealthUrl && processInfoPath) {
+    logStep(`Waiting for ${ownerName} to advertise its native runtime health URL`)
+    resolvedHealthUrl = await waitForRuntimeHealthUrl(processInfoPath, startupTimeoutMs)
+  }
+  if (resolvedHealthUrl) {
+    logStep(`Waiting for ${ownerName} runtime health at ${resolvedHealthUrl}`)
+    await waitForHttpOk(resolvedHealthUrl, startupTimeoutMs)
     await sleep(2_000)
   }
 
   const windowStillVisible = await hasRoachWindow(ownerName, titleName, appProcessName)
   assert(
     windowStillVisible,
-    healthUrl
+    resolvedHealthUrl
       ? `${ownerName} window closed after the runtime became healthy.`
       : `${ownerName} window closed before the interface settled.`
   )
+
+  return resolvedHealthUrl
 }
 
 function spawnProcess(command, args, options = {}) {
@@ -588,6 +643,7 @@ async function runCommand(command, args, options = {}) {
 async function terminateLingeringSmokeProcesses() {
   const cleanupPatterns = [
     '/native/macos/dist/.smoke-work/.*/run-roachnet-setup.mjs',
+    '/native/macos/dist/.smoke-work/.*/run-roachnet-native-api.mjs',
     '/native/macos/dist/.smoke-work/.*/run-roachnet.mjs',
     '/native/macos/dist/.smoke-work/.*/roachnet-companion-server.mjs',
     '/native/macos/dist/.smoke-work/.*/runtime-cache/.*/bin/server.js',
@@ -750,6 +806,16 @@ async function assertBundledSourceTreeIsReleaseSafe(rootPath) {
 }
 
 async function materializeBundledSourceTree(bundlePath, destinationRoot) {
+  const sourceDirectoryPath = getBundledSourceDirectoryPath(bundlePath)
+  if (existsSync(sourceDirectoryPath)) {
+    await assertBundledSourceTreeIsReleaseSafe(sourceDirectoryPath)
+    await cp(sourceDirectoryPath, destinationRoot, {
+      recursive: true,
+      force: true,
+    })
+    return
+  }
+
   const archivePath = getBundledSourceArchivePath(bundlePath)
   assert(existsSync(archivePath), `Missing bundled source archive at ${archivePath}`)
 
@@ -847,6 +913,7 @@ async function stopContainedRuntime({
   }
 
   const cleanupPatterns = [
+    `${installRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*/run-roachnet-native-api\\.mjs`,
     `${installRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*/run-roachnet\\.mjs`,
     `${installRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*/roachnet-companion-server\\.mjs`,
     `${installRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*/runtime-cache/.*/bin/server\\.js`,
@@ -952,7 +1019,7 @@ async function smokeSetupLane() {
     const task = await waitForSetupTask(setupBaseUrl)
     assert(task.result?.appPath === installAppPath, 'Setup lane completed without the expected app target path.')
     assert(existsSync(installAppPath), `Setup lane did not install the native app at ${installAppPath}`)
-    assert(existsSync(path.join(installRoot, 'scripts', 'run-roachnet.mjs')), 'Setup lane did not promote the contained runtime tree.')
+    assert(existsSync(path.join(installRoot, 'scripts', 'run-roachnet-native-api.mjs')), 'Setup lane did not promote the dependency-free native API runtime tree.')
     assert(
       readFileSync(mockHostsPath, 'utf8').includes('127.0.0.1 RoachNet'),
       withTaskLogs(
@@ -962,7 +1029,12 @@ async function smokeSetupLane() {
     )
 
     const installedRuntime = getPackagedAppRuntimePaths(installAppPath, installRoot)
-    const installedEnvValues = parseEnvFile(readFileSync(installedRuntime.envPath, 'utf8'))
+    const installedRuntimePort = await resolveAvailablePort()
+    const installedEnvValues = {
+      HOST: '127.0.0.1',
+      PORT: String(installedRuntimePort),
+      URL: `http://127.0.0.1:${installedRuntimePort}`,
+    }
     const runtimeStateRoot = path.join(storagePath, 'state', 'runtime-state')
     const launcher = spawnProcess(installedRuntime.nodeBinary, [installedRuntime.launcherPath], {
       cwd: path.dirname(installedRuntime.launcherPath),
@@ -978,6 +1050,7 @@ async function smokeSetupLane() {
           roachClawDefaultModel: 'qwen2.5-coder:1.5b',
         },
         extra: {
+          ...installedEnvValues,
           ROACHNET_NO_BROWSER: '1',
           ROACHNET_INSTALLER_CONFIG_PATH: configPath,
           ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
@@ -1013,6 +1086,7 @@ async function smokeSetupLane() {
               roachClawDefaultModel: 'qwen2.5-coder:1.5b',
             },
             extra: {
+              ...installedEnvValues,
               ROACHNET_INSTALLER_CONFIG_PATH: configPath,
               ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
             },
@@ -1027,12 +1101,13 @@ async function smokeSetupLane() {
       await stopChild(launcher.child)
     }
 
-    await verifyGuiLaunch({
+    const guiProcessInfoPath = path.join(storagePath, 'logs', 'roachnet-runtime-processes.json')
+    const guiHealthUrl = await verifyGuiLaunch({
       appBundlePath: installAppPath,
       appProcessName: 'RoachNetApp',
       configPath,
       homePath,
-      healthUrl: new URL('/api/health', installedEnvValues.URL || 'http://127.0.0.1:8080').toString(),
+      processInfoPath: guiProcessInfoPath,
       ownerName: 'RoachNet',
     })
     logStep('Installed native app stayed open after runtime became healthy')
@@ -1056,7 +1131,7 @@ async function smokeSetupLane() {
       },
       configPath,
       runtimeStateRoot,
-      healthUrl: new URL('/api/health', installedEnvValues.URL || 'http://127.0.0.1:8080').toString(),
+      healthUrl: guiHealthUrl,
     })
   } catch (error) {
     const processLogs = formatProcessLogs('setup backend', setupProcess.getLogs())
@@ -1148,7 +1223,12 @@ async function smokeHomebrewLane() {
     'Homebrew lane did not provision the RoachTail local alias in the mock hosts file.'
   )
 
-  const envValues = parseEnvFile(readFileSync(runtime.envPath, 'utf8'))
+  const adminPort = await resolveAvailablePort()
+  const envValues = {
+    HOST: '127.0.0.1',
+    PORT: String(adminPort),
+    URL: `http://127.0.0.1:${adminPort}`,
+  }
   const healthUrl = new URL('/api/health', envValues.URL || 'http://127.0.0.1:8080').toString()
   const runtimeStateRoot = path.join(storagePath, 'state', 'runtime-state')
 
@@ -1161,6 +1241,7 @@ async function smokeHomebrewLane() {
       runtime,
       config,
       extra: {
+        ...envValues,
         ROACHNET_NO_BROWSER: '1',
         ROACHNET_INSTALLER_CONFIG_PATH: configPath,
         ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
@@ -1194,13 +1275,14 @@ async function smokeHomebrewLane() {
     await stopChild(launcher.child)
   }
 
+  let guiHealthUrl = null
   try {
-    await verifyGuiLaunch({
+    guiHealthUrl = await verifyGuiLaunch({
       appBundlePath: appPath,
       appProcessName: 'RoachNetApp',
       configPath,
       homePath,
-      healthUrl,
+      processInfoPath: path.join(logsPath, 'roachnet-runtime-processes.json'),
       ownerName: 'RoachNet',
     })
     logStep('Homebrew-installed app stayed open after runtime became healthy')
@@ -1218,7 +1300,7 @@ async function smokeHomebrewLane() {
       config,
       configPath,
       runtimeStateRoot,
-      healthUrl,
+      healthUrl: guiHealthUrl || healthUrl,
     }).catch(() => {})
     await safeRemoveTree(homeRoot)
     await safeRemoveTree(tempRoot)

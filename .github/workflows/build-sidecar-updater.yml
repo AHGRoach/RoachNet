@@ -13,6 +13,8 @@ on:
         type: boolean
         default: false
 
+permissions: {}
+
 jobs:
   check_authorization:
     name: Check authorization to publish new Docker image
@@ -22,7 +24,9 @@ jobs:
     steps:
       - name: check-auth
         id: check-auth
-        run: echo "is_authorized=${{ contains(secrets.DEPLOYMENT_AUTHORIZED_USERS, github.triggering_actor) }}" >> $GITHUB_OUTPUT
+        env:
+          IS_AUTHORIZED: ${{ contains(secrets.DEPLOYMENT_AUTHORIZED_USERS, github.triggering_actor) }}
+        run: echo "is_authorized=${IS_AUTHORIZED}" >> "$GITHUB_OUTPUT"
   build:
     name: Build sidecar-updater image
     needs: check_authorization

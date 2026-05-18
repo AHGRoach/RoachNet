@@ -16,13 +16,144 @@ import {
 } from '../utils/fs.js'
 import { OllamaService } from './ollama_service.js'
 import { SERVICE_NAMES } from '../../constants/service_names.js'
-import { removeStopwords } from 'stopword'
 import { randomUUID } from 'node:crypto'
 import { join, resolve, sep } from 'node:path'
 import KVStore from '#models/kv_store'
 import { ZIMExtractionService } from './zim_extraction_service.js'
 import { ZIM_BATCH_SIZE } from '../../constants/zim_extraction.js'
-import { ProcessAndEmbedFileResponse, ProcessZIMFileResponse, RAGResult, RerankedRAGResult } from '../../types/rag.js'
+import {
+  ProcessAndEmbedFileResponse,
+  ProcessZIMFileResponse,
+  RAGResult,
+  RerankedRAGResult,
+} from '../../types/rag.js'
+
+const ROACHNET_STOP_WORDS = new Set([
+  'a',
+  'about',
+  'above',
+  'after',
+  'again',
+  'against',
+  'all',
+  'am',
+  'an',
+  'and',
+  'any',
+  'are',
+  'as',
+  'at',
+  'be',
+  'because',
+  'been',
+  'before',
+  'being',
+  'below',
+  'between',
+  'both',
+  'but',
+  'by',
+  'can',
+  'did',
+  'do',
+  'does',
+  'doing',
+  'down',
+  'during',
+  'each',
+  'few',
+  'for',
+  'from',
+  'further',
+  'had',
+  'has',
+  'have',
+  'having',
+  'he',
+  'her',
+  'here',
+  'hers',
+  'herself',
+  'him',
+  'himself',
+  'his',
+  'how',
+  'i',
+  'if',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'itself',
+  'just',
+  'me',
+  'more',
+  'most',
+  'my',
+  'myself',
+  'no',
+  'nor',
+  'not',
+  'now',
+  'of',
+  'off',
+  'on',
+  'once',
+  'only',
+  'or',
+  'other',
+  'our',
+  'ours',
+  'ourselves',
+  'out',
+  'over',
+  'own',
+  'same',
+  'she',
+  'should',
+  'so',
+  'some',
+  'such',
+  'than',
+  'that',
+  'the',
+  'their',
+  'theirs',
+  'them',
+  'themselves',
+  'then',
+  'there',
+  'these',
+  'they',
+  'this',
+  'those',
+  'through',
+  'to',
+  'too',
+  'under',
+  'until',
+  'up',
+  'very',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'while',
+  'who',
+  'whom',
+  'why',
+  'will',
+  'with',
+  'you',
+  'your',
+  'yours',
+  'yourself',
+  'yourselves',
+])
 
 @inject()
 export class RagService {
@@ -47,7 +178,7 @@ export class RagService {
   constructor(
     private dockerService: DockerService,
     private ollamaService: OllamaService
-  ) { }
+  ) {}
 
   private async _initializeQdrantClient() {
     if (!this.qdrantInitPromise) {
@@ -132,14 +263,16 @@ export class RagService {
    * - Control characters (except newlines, tabs, and carriage returns)
    */
   private sanitizeText(text: string): string {
-    return text
-      // Null bytes
-      .replace(/\x00/g, '')
-      // Problematic control characters (keep \n, \r, \t)
-      .replace(/[\x01-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '')
-      // Invalid Unicode surrogates
-      .replace(/[\uD800-\uDFFF]/g, '')
-      // Trim extra whitespace
+    return Array.from(text)
+      .filter((character) => {
+        const codePoint = character.charCodeAt(0)
+        const isAllowedWhitespace = codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d
+        const isInvalidSurrogate = codePoint >= 0xd800 && codePoint <= 0xdfff
+        const isControlCharacter = codePoint < 0x20 || codePoint === 0x7f
+
+        return !isInvalidSurrogate && (!isControlCharacter || isAllowedWhitespace)
+      })
+      .join('')
       .trim()
   }
 
@@ -194,33 +327,33 @@ export class RagService {
    * TODO: We could probably move this to a separate QueryPreprocessor class if it grows more complex, but for now it's manageable here.
    */
   private static QUERY_EXPANSION_DICTIONARY: Record<string, string> = {
-    'bob': 'bug out bag',
-    'bov': 'bug out vehicle',
-    'bol': 'bug out location',
-    'edc': 'every day carry',
-    'mre': 'meal ready to eat',
-    'shtf': 'shit hits the fan',
-    'teotwawki': 'the end of the world as we know it',
-    'opsec': 'operational security',
-    'ifak': 'individual first aid kit',
-    'ghb': 'get home bag',
-    'ghi': 'get home in',
-    'wrol': 'without rule of law',
-    'emp': 'electromagnetic pulse',
-    'ham': 'ham amateur radio',
-    'nbr': 'nuclear biological radiological',
-    'cbrn': 'chemical biological radiological nuclear',
-    'sar': 'search and rescue',
-    'comms': 'communications radio',
-    'fifo': 'first in first out',
-    'mylar': 'mylar bag food storage',
-    'paracord': 'paracord 550 cord',
-    'ferro': 'ferro rod fire starter',
-    'bivvy': 'bivvy bivy emergency shelter',
-    'bdu': 'battle dress uniform',
-    'gmrs': 'general mobile radio service',
-    'frs': 'family radio service',
-    'nbc': 'nuclear biological chemical',
+    bob: 'bug out bag',
+    bov: 'bug out vehicle',
+    bol: 'bug out location',
+    edc: 'every day carry',
+    mre: 'meal ready to eat',
+    shtf: 'shit hits the fan',
+    teotwawki: 'the end of the world as we know it',
+    opsec: 'operational security',
+    ifak: 'individual first aid kit',
+    ghb: 'get home bag',
+    ghi: 'get home in',
+    wrol: 'without rule of law',
+    emp: 'electromagnetic pulse',
+    ham: 'ham amateur radio',
+    nbr: 'nuclear biological radiological',
+    cbrn: 'chemical biological radiological nuclear',
+    sar: 'search and rescue',
+    comms: 'communications radio',
+    fifo: 'first in first out',
+    mylar: 'mylar bag food storage',
+    paracord: 'paracord 550 cord',
+    ferro: 'ferro rod fire starter',
+    bivvy: 'bivvy bivy emergency shelter',
+    bdu: 'battle dress uniform',
+    gmrs: 'general mobile radio service',
+    frs: 'family radio service',
+    nbc: 'nuclear biological chemical',
   }
 
   private preprocessQuery(query: string): string {
@@ -252,7 +385,7 @@ export class RagService {
    */
   private extractKeywords(query: string): string[] {
     const split = query.split(' ')
-    const noStopWords = removeStopwords(split)
+    const noStopWords = split.filter((word) => !ROACHNET_STOP_WORDS.has(word.toLowerCase()))
 
     // Future: This is basic normalization, could be improved with stemming/lemmatization later
     const keywords = noStopWords
@@ -279,7 +412,9 @@ export class RagService {
 
         if (!embeddingModel) {
           try {
-            const downloadResult = await this.ollamaService.downloadModel(RagService.EMBEDDING_MODEL)
+            const downloadResult = await this.ollamaService.downloadModel(
+              RagService.EMBEDDING_MODEL
+            )
             if (!downloadResult.success) {
               throw new Error(downloadResult.message || 'Unknown error during model download')
             }
@@ -298,7 +433,9 @@ export class RagService {
       // TokenChunker uses character-based tokenization (1 char = 1 token)
       // We need to convert our embedding model's token counts to character counts
       // since nomic-embed-text tokenizer uses ~3 chars per token
-      const targetCharsPerChunk = Math.floor(RagService.TARGET_TOKENS_PER_CHUNK * RagService.CHAR_TO_TOKEN_RATIO)
+      const targetCharsPerChunk = Math.floor(
+        RagService.TARGET_TOKENS_PER_CHUNK * RagService.CHAR_TO_TOKEN_RATIO
+      )
       const overlapChars = Math.floor(150 * RagService.CHAR_TO_TOKEN_RATIO)
 
       const chunker = await TokenChunker.create({
@@ -319,9 +456,7 @@ export class RagService {
 
       // Prepare all chunk texts with prefix and truncation
       const prefixedChunks: string[] = []
-      for (let i = 0; i < chunks.length; i++) {
-        let chunkText = chunks[i]
-
+      for (let [i, chunkText] of chunks.entries()) {
         // Final safety check: ensure chunk + prefix fits
         const prefixText = RagService.SEARCH_DOCUMENT_PREFIX
         const withPrefix = prefixText + chunkText
@@ -348,7 +483,9 @@ export class RagService {
         const batchStart = batchIdx * batchSize
         const batch = prefixedChunks.slice(batchStart, batchStart + batchSize)
 
-        logger.debug(`[RAG] Embedding batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`)
+        logger.debug(
+          `[RAG] Embedding batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`
+        )
 
         const response = await ollamaClient.embed({
           model: RagService.EMBEDDING_MODEL,
@@ -384,13 +521,14 @@ export class RagService {
 
         logger.debug(`[RAG] Extracted keywords for chunk ${index}: [${allKeywords.join(', ')}]`)
         if (structuralKeywords.length > 0) {
-          logger.debug(`[RAG]   - Structural: [${structuralKeywords.join(', ')}], Content: [${contentKeywords.join(', ')}]`)
+          logger.debug(
+            `[RAG]   - Structural: [${structuralKeywords.join(', ')}], Content: [${contentKeywords.join(', ')}]`
+          )
         }
 
         // Sanitize source metadata as well
-        const sanitizedSource = typeof metadata.source === 'string'
-          ? this.sanitizeText(metadata.source)
-          : 'unknown'
+        const sanitizedSource =
+          typeof metadata.source === 'string' ? this.sanitizeText(metadata.source) : 'unknown'
 
         return {
           id: randomUUID(), // qdrant requires either uuid or unsigned int
@@ -403,7 +541,7 @@ export class RagService {
             keywords: allKeywords.join(' '), // store as space-separated string for text search
             char_count: sanitizedText.length,
             created_at: timestamp,
-            source: sanitizedSource
+            source: sanitizedSource,
           },
         }
       })
@@ -530,9 +668,7 @@ export class RagService {
       batchSize: ZIM_BATCH_SIZE,
     })
 
-    logger.info(
-      `[RAG] Extracted ${zimChunks.length} chunks from ZIM file with enhanced metadata`
-    )
+    logger.info(`[RAG] Extracted ${zimChunks.length} chunks from ZIM file with enhanced metadata`)
 
     // Process each chunk individually with its metadata
     let totalChunks = 0
@@ -618,12 +754,19 @@ export class RagService {
     onProgress?: (percent: number) => Promise<void>
   ): Promise<{ success: boolean; message: string; chunks?: number }> {
     if (!extractedText || extractedText.trim().length === 0) {
-      return { success: false, message: 'Process completed succesfully, but no text was found to embed.' }
+      return {
+        success: false,
+        message: 'Process completed succesfully, but no text was found to embed.',
+      }
     }
 
-    const embedResult = await this.embedAndStoreText(extractedText, {
-      source: filepath
-    }, onProgress)
+    const embedResult = await this.embedAndStoreText(
+      extractedText,
+      {
+        source: filepath,
+      },
+      onProgress
+    )
 
     if (!embedResult) {
       return { success: false, message: 'Failed to embed and store the extracted text.' }
@@ -644,7 +787,7 @@ export class RagService {
   /**
    * Main pipeline to process and embed an uploaded file into the RAG knowledge base.
    * This includes text extraction, chunking, embedding, and storing in Qdrant.
-   * 
+   *
    * Orchestrates file type detection and delegates to specialized processors.
    * For ZIM files, supports batch processing via batchOffset parameter.
    */
@@ -693,12 +836,15 @@ export class RagService {
 
       // Extraction done — scale remaining embedding progress from 15% to 100%
       if (onProgress) await onProgress(15)
-      const scaledProgress = onProgress
-        ? (p: number) => onProgress(15 + p * 0.85)
-        : undefined
+      const scaledProgress = onProgress ? (p: number) => onProgress(15 + p * 0.85) : undefined
 
       // Embed extracted text and cleanup
-      return await this.embedTextAndCleanup(extractedText, filepath, deleteAfterEmbedding, scaledProgress)
+      return await this.embedTextAndCleanup(
+        extractedText,
+        filepath,
+        deleteAfterEmbedding,
+        scaledProgress
+      )
     } catch (error) {
       logger.error('[RAG] Error processing and embedding file:', error)
       return { success: false, message: 'Error processing and embedding file.' }
@@ -950,9 +1096,7 @@ export class RagService {
    * Uses greedy selection: for each result, apply 0.85^n penalty where n is the
    * number of results already selected from the same source.
    */
-  private applySourceDiversity(
-    results: Array<RerankedRAGResult>
-  ) {
+  private applySourceDiversity(results: Array<RerankedRAGResult>) {
     const sourceCounts = new Map<string, number>()
     const DIVERSITY_PENALTY = 0.85
 
@@ -1043,17 +1187,19 @@ export class RagService {
       logger.info(`[RAG] Deleted all points for source: ${source}`)
 
       /** Delete the physical file only if it lives inside the uploads directory.
-      * resolve() normalises path traversal sequences (e.g. "/../..") before the
-      * check to prevent path traversal vulns
-      * The trailing sep is to ensure a prefix like "kb_uploads_{something_incorrect}" can't slip through.
-      */
+       * resolve() normalises path traversal sequences (e.g. "/../..") before the
+       * check to prevent path traversal vulns
+       * The trailing sep is to ensure a prefix like "kb_uploads_{something_incorrect}" can't slip through.
+       */
       const uploadsAbsPath = resolveStoragePath(RagService.UPLOADS_STORAGE_PATH)
       const resolvedSource = resolve(source)
       if (resolvedSource.startsWith(uploadsAbsPath + sep)) {
         await deleteFileIfExists(resolvedSource)
         logger.info(`[RAG] Deleted uploaded file from disk: ${resolvedSource}`)
       } else {
-        logger.warn(`[RAG] File was removed from knowledge base but doesn't live in RoachNet's uploads directory, so it can't be safely removed. Skipping deletion of physical file...`)
+        logger.warn(
+          `[RAG] File was removed from knowledge base but doesn't live in RoachNet's uploads directory, so it can't be safely removed. Skipping deletion of physical file...`
+        )
       }
 
       return { success: true, message: 'File removed from knowledge base.' }
@@ -1063,7 +1209,9 @@ export class RagService {
     }
   }
 
-  public async discoverRoachNetDocs(force?: boolean): Promise<{ success: boolean; message: string }> {
+  public async discoverRoachNetDocs(
+    force?: boolean
+  ): Promise<{ success: boolean; message: string }> {
     try {
       const README_PATH = join(process.cwd(), 'README.md')
       const DOCS_DIR = join(process.cwd(), 'docs')
@@ -1071,7 +1219,10 @@ export class RagService {
       const alreadyEmbeddedRaw = await KVStore.getValue('rag.docsEmbedded')
       if (alreadyEmbeddedRaw && !force) {
         logger.info('[RAG] RoachNet docs have already been discovered and queued. Skipping.')
-        return { success: true, message: 'RoachNet docs have already been discovered and queued. Skipping.' }
+        return {
+          success: true,
+          message: 'RoachNet docs have already been discovered and queued. Skipping.',
+        }
       }
 
       const filesToEmbed: Array<{ path: string; source: string }> = []
@@ -1103,17 +1254,17 @@ export class RagService {
           })
           logger.info(`[RAG] Successfully dispatched job for ${fileInfo.source}`)
         } catch (fileError) {
-          logger.error(
-            `[RAG] Error dispatching job for file ${fileInfo.source}:`,
-            fileError
-          )
+          logger.error(`[RAG] Error dispatching job for file ${fileInfo.source}:`, fileError)
         }
       }
 
       // Update KV store to mark docs as discovered so we don't redo this unnecessarily
       await KVStore.setValue('rag.docsEmbedded', true)
 
-      return { success: true, message: `RoachNet docs discovery completed. Dispatched ${filesToEmbed.length} embedding jobs.` }
+      return {
+        success: true,
+        message: `RoachNet docs discovery completed. Dispatched ${filesToEmbed.length} embedding jobs.`,
+      }
     } catch (error) {
       logger.error('Error discovering RoachNet docs:', error)
       return { success: false, message: 'Error discovering RoachNet docs.' }
@@ -1157,7 +1308,9 @@ export class RagService {
         logger.debug(`[RAG] Found ${kbContents.length} files in ${RagService.UPLOADS_STORAGE_PATH}`)
       } catch (error) {
         if (error.code === 'ENOENT') {
-          logger.debug(`[RAG] ${RagService.UPLOADS_STORAGE_PATH} directory does not exist, skipping`)
+          logger.debug(
+            `[RAG] ${RagService.UPLOADS_STORAGE_PATH} directory does not exist, skipping`
+          )
         } else {
           throw error
         }

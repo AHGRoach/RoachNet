@@ -4,11 +4,12 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import net from 'node:net'
-import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { requestHttp } from './lib/roachnet_http.mjs'
+import { redactSensitiveText } from './lib/roachnet_process_security.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -40,7 +41,10 @@ const siteRepoRoot = process.env.ROACHNET_SITE_REPO
   : path.resolve(repoRoot, '..', 'roachnet-org')
 const siteCatalogPath = path.join(siteRepoRoot, 'app-store-catalog.json')
 const siteMapsPath = path.join(siteRepoRoot, 'collections', 'maps.json')
-const keepTempArtifacts = process.env.ROACHNET_SMOKE_KEEP_TEMP === '1'
+const keepTempArtifacts = process.env.ROACHNET_SMOKE_KEEP_TEMP === '1' || process.env.ROACHNET_KEEP_SMOKE_ARTIFACTS === '1'
+const smokeWorkRoot = process.env.ROACHNET_SMOKE_TMPDIR
+  ? path.resolve(process.env.ROACHNET_SMOKE_TMPDIR)
+  : path.join(repoRoot, 'native', 'macos', 'dist', '.smoke-work')
 const pollIntervalMs = 1_500
 const startupTimeoutMs = 300_000
 const supportedInstallActions = new Set([
@@ -50,6 +54,8 @@ const supportedInstallActions = new Set([
   'education-resource',
   'wikipedia-option',
   'roachclaw-model',
+  'roachspeech-pack',
+  'roachvoice-pack',
   'direct-download',
 ])
 
@@ -119,11 +125,11 @@ function formatLogs(label, logs) {
   const sections = []
 
   if (logs?.stdout?.trim()) {
-    sections.push(`${label} stdout:\n${logs.stdout.trim()}`)
+    sections.push(`${label} stdout:\n${redactSensitiveText(logs.stdout.trim(), process.env)}`)
   }
 
   if (logs?.stderr?.trim()) {
-    sections.push(`${label} stderr:\n${logs.stderr.trim()}`)
+    sections.push(`${label} stderr:\n${redactSensitiveText(logs.stderr.trim(), process.env)}`)
   }
 
   return sections.join('\n\n')
@@ -155,8 +161,9 @@ async function waitForHttpOk(url, timeoutMs) {
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(url, {
+      const response = await requestHttp(url, {
         headers: { Accept: 'application/json' },
+        timeoutMs: 5_000,
       })
 
       if (response.ok) {
@@ -220,10 +227,11 @@ async function fetchJson(url, token, options = {}) {
     ...(options.headers || {}),
   }
 
-  const response = await fetch(url, {
+  const response = await requestHttp(url, {
     method: options.method || 'GET',
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    timeoutMs: options.timeoutMs || 15_000,
   })
 
   const text = await response.text()
@@ -281,21 +289,40 @@ function buildRuntimeEnv({ homePath, storagePath, runtimePort, companionPort, co
   }
 }
 
+function resolveRuntimeLauncherPath() {
+  const nativeLauncherPath = path.join(repoRoot, 'scripts', 'run-roachnet-native-api.mjs')
+  assert(existsSync(nativeLauncherPath), 'Dependency-free native API launcher is missing.')
+  return nativeLauncherPath
+}
+
 function writeFixture(directory, filename, payload) {
   const targetPath = path.join(directory, filename)
   writeFileSync(targetPath, `${JSON.stringify(payload, null, 2)}\n`)
   return targetPath
 }
 
-function parseServerBaseUrl(adminLogPath, launcherLogs = '') {
-  const launcherMatch = launcherLogs.match(/Web UI:\s+(https?:\/\/[^\s/]+(?::\d+)?)\/home/)
-  if (launcherMatch?.[1]) {
-    return launcherMatch[1]
+function parseServerBaseUrl(adminLogPath) {
+  const content = existsSync(adminLogPath) ? readFileSync(adminLogPath, 'utf8') : ''
+  const nativeMatches = [...content.matchAll(/native api listening on (https?:\/\/[^\s"]+)/g)]
+  if (nativeMatches.length > 0) {
+    return nativeMatches.at(-1)?.[1] || null
   }
 
-  const content = existsSync(adminLogPath) ? readFileSync(adminLogPath, 'utf8') : ''
-  const matches = [...content.matchAll(/started HTTP server on (https?:\/\/[^\s"]+)/g)]
-  return matches.at(-1)?.[1] || null
+  return null
+}
+
+function readRuntimeBaseUrl(processInfoPath) {
+  try {
+    const content = JSON.parse(readFileSync(processInfoPath, 'utf8'))
+    const healthUrl = content?.processes?.find((entry) => entry?.name === 'native-api')?.healthUrl
+    if (healthUrl) {
+      return new URL('/', healthUrl).origin
+    }
+  } catch {
+    return null
+  }
+
+  return null
 }
 
 function readCompanionBaseUrl(processInfoPath) {
@@ -304,6 +331,15 @@ function readCompanionBaseUrl(processInfoPath) {
     return content?.companionUrl || null
   } catch {
     return null
+  }
+}
+
+function isExpectedAppsCatalogUrl(value) {
+  try {
+    const parsed = new URL(String(value))
+    return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && parsed.origin === 'https://apps.roachnet.org'
+  } catch {
+    return false
   }
 }
 
@@ -316,10 +352,7 @@ async function waitForRuntimeEndpoints({
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
-    const runtimeBaseUrl = parseServerBaseUrl(
-      adminLogPath,
-      typeof launcherLogsProvider === 'function' ? launcherLogsProvider() : ''
-    )
+    const runtimeBaseUrl = parseServerBaseUrl(adminLogPath) || readRuntimeBaseUrl(processInfoPath)
     const companionBaseUrl = readCompanionBaseUrl(processInfoPath)
 
     if (runtimeBaseUrl && companionBaseUrl) {
@@ -352,11 +385,13 @@ async function verifyIOSFixtures(fixturesDir) {
   const projectPath = path.join(iosRepoRoot, 'RoachNetCompanion.xcodeproj')
   const modelPath = path.join(iosRepoRoot, 'RoachNetCompanion', 'Core', 'CompanionModels.swift')
   const derivedDataPath = path.join(fixturesDir, 'DerivedData')
+  const xcodeTmpPath = path.join(fixturesDir, 'tmp')
   const checkerPath = path.join(fixturesDir, 'companion-fixture-check')
   const checkerSourcePath = path.join(fixturesDir, 'companion-fixture-check.swift')
 
   assert(existsSync(projectPath), `Missing iOS project at ${projectPath}`)
   assert(existsSync(modelPath), `Missing iOS companion model file at ${modelPath}`)
+  mkdirSync(xcodeTmpPath, { recursive: true })
 
   writeFileSync(
     checkerSourcePath,
@@ -407,6 +442,9 @@ struct CompanionFixtureCheck {
       'CODE_SIGNING_ALLOWED=NO',
       'CODE_SIGNING_REQUIRED=NO',
       'CODE_SIGN_IDENTITY=',
+      'COMPILER_INDEX_STORE_ENABLE=NO',
+      'ONLY_ACTIVE_ARCH=YES',
+      'ARCHS=arm64',
       '-derivedDataPath',
       derivedDataPath,
       'build',
@@ -416,6 +454,10 @@ struct CompanionFixtureCheck {
       env: {
         ...process.env,
         DEVELOPER_DIR: process.env.DEVELOPER_DIR || '/Applications/Xcode.app/Contents/Developer',
+        COMPILER_INDEX_STORE_ENABLE: 'NO',
+        ONLY_ACTIVE_ARCH: 'YES',
+        ARCHS: 'arm64',
+        TMPDIR: xcodeTmpPath,
       },
     }
   )
@@ -500,6 +542,12 @@ function validateAppsCatalogContract() {
         assert(typeof intent.model === 'string' && intent.model.length > 0, `Model pack ${item.id} is missing a model id.`)
         modelPackCount += 1
         break
+      case 'roachspeech-pack':
+      case 'roachvoice-pack':
+        assert(typeof intent.pack === 'string' && intent.pack.length > 0, `RoachSpeech pack ${item.id} is missing a pack id.`)
+        assert(typeof intent.url === 'string' && intent.url.startsWith('http'), `RoachSpeech pack ${item.id} is missing a valid URL.`)
+        modelPackCount += 1
+        break
       default:
         break
     }
@@ -516,7 +564,8 @@ function validateAppsCatalogContract() {
 }
 
 async function main() {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-ios-companion-smoke-'))
+  mkdirSync(smokeWorkRoot, { recursive: true })
+  const tempRoot = await mkdtemp(path.join(smokeWorkRoot, 'roachnet-ios-companion-smoke-'))
   const homePath = path.join(tempRoot, 'home')
   const storagePath = path.join(homePath, 'RoachNet', 'storage')
   const tmpPath = path.join(homePath, 'tmp')
@@ -534,14 +583,15 @@ async function main() {
     companionToken,
   })
   const runtimeNodeBinary = runtimeEnv.ROACHNET_NODE_BINARY || process.execPath
+  const runtimeLauncherPath = resolveRuntimeLauncherPath()
 
-  const runtimeHandle = spawnProcess(runtimeNodeBinary, [path.join(repoRoot, 'scripts', 'run-roachnet.mjs')], {
+  const runtimeHandle = spawnProcess(runtimeNodeBinary, [runtimeLauncherPath], {
     cwd: repoRoot,
     env: runtimeEnv,
   })
 
   const logsRoot = path.join(storagePath, 'logs')
-  const adminLogPath = path.join(logsRoot, 'admin.log')
+  const adminLogPath = path.join(logsRoot, 'roachnet-native-api.log')
   const processInfoPath = path.join(logsRoot, 'roachnet-runtime-processes.json')
 
   try {
@@ -561,7 +611,7 @@ async function main() {
       launcherLogsProvider: () => runtimeHandle.getLogs().stdout,
       timeoutMs: startupTimeoutMs,
     })
-    assert(runtimeBaseUrl, 'Unable to resolve the contained desktop runtime URL from admin.log.')
+    assert(runtimeBaseUrl, 'Unable to resolve the contained desktop runtime URL from native runtime info.')
     assert(companionBaseUrl, 'Unable to resolve the contained companion URL from runtime process info.')
 
     await waitForHttpOk(`${runtimeBaseUrl}/api/health`, startupTimeoutMs)
@@ -578,7 +628,7 @@ async function main() {
 
     assert(typeof bootstrap.appName === 'string' && bootstrap.appName.length > 0, 'Companion bootstrap did not return an app name.')
     assert(typeof bootstrap.machineName === 'string' && bootstrap.machineName.length > 0, 'Companion bootstrap did not return a friendly machine name.')
-    assert(typeof bootstrap.appsCatalogUrl === 'string' && bootstrap.appsCatalogUrl.includes('apps.roachnet.org'), 'Companion bootstrap did not return the Apps catalog URL.')
+    assert(isExpectedAppsCatalogUrl(bootstrap.appsCatalogUrl), 'Companion bootstrap did not return the Apps catalog URL.')
     assert(Array.isArray(bootstrap.sessions), 'Companion bootstrap did not return chat sessions.')
     assert(runtime?.providers && runtime?.roachClaw, 'Companion runtime payload is missing provider or RoachClaw state.')
     assert(Array.isArray(runtime?.services), 'Companion runtime payload is missing service state.')
@@ -613,7 +663,7 @@ async function main() {
     throw error
   } finally {
     try {
-      await runCommand(runtimeNodeBinary, [path.join(repoRoot, 'scripts', 'run-roachnet.mjs'), '--stop'], {
+      await runCommand(runtimeNodeBinary, [runtimeLauncherPath, '--stop'], {
         cwd: repoRoot,
         env: runtimeEnv,
       })
@@ -630,6 +680,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
+  console.error('RoachNet desktop/iOS companion compatibility smoke failed. Re-run with ROACHNET_SMOKE_KEEP_TEMP=1 for local diagnostic artifacts.')
+  console.error(error?.stack || error?.message || String(error))
   process.exitCode = 1
 })

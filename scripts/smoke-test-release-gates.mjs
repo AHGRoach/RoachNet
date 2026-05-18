@@ -27,6 +27,11 @@ async function runScript(scriptName) {
 
 async function main() {
   await runScript('audit-public-release-surface.mjs')
+  await runScript('audit-native-release-scope.mjs')
+  await runScript('smoke-test-roachspeech-coreml-packs.mjs')
+  await runScript('audit-native-parity.mjs')
+  await runScript('audit-runtime-freshness.mjs')
+  await runScript('audit-upstream-projects.mjs')
   await runScript('smoke-test-macos-install-lanes.mjs')
   await runScript('smoke-test-command-bar-lane.mjs')
   await runScript('smoke-test-ios-companion-compat.mjs')

@@ -5,6 +5,10 @@
   "type": "module",
   "license": "ISC",
   "author": "RoachWares LLC",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=10"
+  },
   "scripts": {
     "start": "node bin/server.js",
     "build": "node ace build",
@@ -40,10 +44,10 @@
   "devDependencies": {
     "@adonisjs/assembler": "^8.4.0",
     "@adonisjs/eslint-config": "^3.0.0",
-    "@adonisjs/prettier-config": "1.4.0",
+    "@adonisjs/prettier-config": "^1.4.5",
     "@adonisjs/tsconfig": "^2.0.0",
-    "@japa/assert": "^4.0.1",
     "@japa/api-client": "^3.2.1",
+    "@japa/assert": "^4.0.1",
     "@japa/browser-client": "^2.3.0",
     "@japa/plugin-adonisjs": "^5.2.0",
     "@japa/runner": "^4.2.0",
@@ -54,7 +58,6 @@
     "@types/node": "^22.15.18",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@types/stopword": "^2.0.3",
     "eslint": "^9.26.0",
     "hot-hook": "^0.4.0",
     "prettier": "^3.5.3",
@@ -84,16 +87,14 @@
     "@tabler/icons-react": "^3.34.0",
     "@tailwindcss/vite": "^4.1.10",
     "@tanstack/react-query": "^5.81.5",
-    "@tanstack/react-query-devtools": "^5.83.0",
     "@tanstack/react-virtual": "^3.13.12",
     "@uppy/core": "^5.2.0",
     "@uppy/dashboard": "^5.1.0",
     "@uppy/react": "^5.1.1",
     "@vinejs/vine": "^4.4.0",
     "@vitejs/plugin-react": "^5.1.1",
-    "autoprefixer": "^10.4.21",
     "axios": "^1.15.0",
-    "better-sqlite3": "^12.1.1",
+    "better-sqlite3": "^12.10.0",
     "bullmq": "^5.76.5",
     "cheerio": "^1.2.0",
     "dockerode": "^5.0.0",
@@ -108,7 +109,6 @@
     "pdf2pic": "^3.2.0",
     "pino-pretty": "^13.0.0",
     "pmtiles": "^4.3.0",
-    "postcss": "^8.5.10",
     "react": "^19.2.3",
     "react-adonis-transmit": "^1.0.1",
     "react-dom": "^19.2.3",
@@ -117,12 +117,9 @@
     "reflect-metadata": "^0.2.2",
     "remark-gfm": "^4.0.1",
     "sharp": "^0.34.5",
-    "stopword": "^3.1.5",
-    "systeminformation": "^5.31.0",
+    "systeminformation": "^5.31.6",
     "tailwindcss": "^4.1.10",
-    "tar": "^7.5.11",
     "tesseract.js": "^7.0.0",
-    "url-join": "^5.0.0",
     "website-scraper": "^6.0.0",
     "yaml": "^2.8.3"
   },
@@ -133,6 +130,7 @@
     ]
   },
   "overrides": {
+    "ip-address": "^10.1.1",
     "lodash-es": "^4.18.1"
   },
   "prettier": "@adonisjs/prettier-config"

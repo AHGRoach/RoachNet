@@ -35,6 +35,7 @@ services:
       OLLAMA_BASE_URL: "http://host.docker.internal:11434"
       OPENCLAW_BASE_URL: "http://host.docker.internal:3001"
       ROACHNET_DB_ROOT_PASSWORD: "${ROACHNET_DB_ROOT_PASSWORD}"
+      MYSQL_ROOT_PASSWORD: "${ROACHNET_DB_ROOT_PASSWORD}"
     depends_on:
       mysql:
         condition: service_healthy
@@ -57,6 +58,7 @@ services:
       - rm -f /var/run/mysqld/mysqld.sock.lock /var/run/mysqld/mysqlx.sock.lock /var/run/mysqld/mysqld.sock /var/run/mysqld/mysqlx.sock && exec docker-entrypoint.sh mysqld
     environment:
       MYSQL_ROOT_PASSWORD: "${ROACHNET_DB_ROOT_PASSWORD}"
+      ROACHNET_DB_ROOT_PASSWORD: "${ROACHNET_DB_ROOT_PASSWORD}"
       MYSQL_DATABASE: roachnet
       MYSQL_USER: "roachnet_user"
       MYSQL_PASSWORD: "${DB_PASSWORD}"
@@ -65,7 +67,7 @@ services:
     volumes:
       - "${ROACHNET_RUNTIME_STATE_ROOT}/mysql:/var/lib/mysql"
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p\"$${ROACHNET_DB_ROOT_PASSWORD}\""]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p\"$${MYSQL_ROOT_PASSWORD}\""]
       interval: 15s
       timeout: 10s
       retries: 20

@@ -200,10 +200,10 @@ private struct VaultThumbnailView: View {
                 .blur(radius: isHovered ? 8 : 6)
                 .offset(y: 80)
         }
-        .shadow(color: accent.opacity(isHovered ? 0.34 : 0.16), radius: isHovered ? 18 : 10, y: 10)
-        .rotation3DEffect(.degrees(isHovered ? 5 : (idlePhase ? 2 : -2)), axis: (x: 1, y: 0, z: 0), perspective: 0.8)
-        .rotationEffect(.degrees(isHovered ? -1.5 : (idlePhase ? -0.7 : 0.7)))
-        .offset(y: isHovered ? -3 : (idlePhase ? -1.5 : 1.5))
+        .shadow(color: accent.opacity(isHovered ? 0.28 : 0.13), radius: isHovered ? 15 : 9, y: 8)
+        .rotation3DEffect(.degrees(isHovered ? 2.2 : (idlePhase ? 0.9 : -0.9)), axis: (x: 1, y: 0, z: 0), perspective: 0.8)
+        .rotationEffect(.degrees(isHovered ? -0.8 : (idlePhase ? -0.35 : 0.35)))
+        .offset(y: isHovered ? -2 : (idlePhase ? -0.8 : 0.8))
         .animation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true), value: idlePhase)
         .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isHovered)
     }
@@ -288,10 +288,10 @@ private struct VaultGlyphTileView: View {
                 .blur(radius: isHovered ? 8 : 6)
                 .offset(y: 80)
         }
-        .shadow(color: accent.opacity(isHovered ? 0.34 : 0.16), radius: isHovered ? 18 : 10, y: 10)
-        .rotation3DEffect(.degrees(isHovered ? 5 : (idlePhase ? 2 : -2)), axis: (x: 1, y: 0, z: 0), perspective: 0.8)
-        .rotationEffect(.degrees(isHovered ? -1.5 : (idlePhase ? -0.7 : 0.7)))
-        .offset(y: isHovered ? -3 : (idlePhase ? -1.5 : 1.5))
+        .shadow(color: accent.opacity(isHovered ? 0.28 : 0.13), radius: isHovered ? 15 : 9, y: 8)
+        .rotation3DEffect(.degrees(isHovered ? 2.2 : (idlePhase ? 0.9 : -0.9)), axis: (x: 1, y: 0, z: 0), perspective: 0.8)
+        .rotationEffect(.degrees(isHovered ? -0.8 : (idlePhase ? -0.35 : 0.35)))
+        .offset(y: isHovered ? -2 : (idlePhase ? -0.8 : 0.8))
         .animation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true), value: idlePhase)
         .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isHovered)
     }
@@ -343,6 +343,13 @@ struct VaultShelfCard: View {
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(1.0)
                         .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(accent.opacity(0.12))
+                        )
                 }
 
                 VaultThumbnailView(
@@ -352,7 +359,7 @@ struct VaultShelfCard: View {
                     idlePhase: idlePhase,
                     isHovered: isHovered
                 )
-                .frame(height: 168)
+                .frame(height: 144)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
@@ -369,13 +376,26 @@ struct VaultShelfCard: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(RoachPalette.muted)
                         .lineLimit(2)
+                        .truncationMode(.middle)
                 }
 
                 VaultMetadataStrip(tags: metadataTags, accent: accent)
             }
+            .frame(minHeight: 284, alignment: .top)
         }
-        .scaleEffect(isPressed ? 0.988 : (isHovered ? 1.024 : 1.0))
-        .rotation3DEffect(.degrees(isPressed ? 6 : (isHovered ? 2.5 : 0)), axis: (x: 1, y: 0, z: 0), perspective: 0.9)
+        .scaleEffect(isPressed ? 0.992 : (isHovered ? 1.012 : 1.0))
+        .rotation3DEffect(.degrees(isPressed ? 2.4 : (isHovered ? 1.2 : 0)), axis: (x: 1, y: 0, z: 0), perspective: 0.9)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contextMenu {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+
+            Button("Open Externally") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        .help(title)
         .onHover { hovered in
             withAnimation(.spring(response: 0.24, dampingFraction: 0.84)) {
                 isHovered = hovered
@@ -416,6 +436,13 @@ struct VaultVirtualShelfCard: View {
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(1.0)
                         .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(accent.opacity(0.12))
+                        )
                 }
 
                 VaultGlyphTileView(
@@ -424,7 +451,7 @@ struct VaultVirtualShelfCard: View {
                     idlePhase: idlePhase,
                     isHovered: isHovered
                 )
-                .frame(height: 168)
+                .frame(height: 144)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
@@ -441,13 +468,17 @@ struct VaultVirtualShelfCard: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(RoachPalette.muted)
                         .lineLimit(2)
+                        .truncationMode(.middle)
                 }
 
                 VaultMetadataStrip(tags: extraTags, accent: accent)
             }
+            .frame(minHeight: 284, alignment: .top)
         }
-        .scaleEffect(isPressed ? 0.988 : (isHovered ? 1.024 : 1.0))
-        .rotation3DEffect(.degrees(isPressed ? 6 : (isHovered ? 2.5 : 0)), axis: (x: 1, y: 0, z: 0), perspective: 0.9)
+        .scaleEffect(isPressed ? 0.992 : (isHovered ? 1.012 : 1.0))
+        .rotation3DEffect(.degrees(isPressed ? 2.4 : (isHovered ? 1.2 : 0)), axis: (x: 1, y: 0, z: 0), perspective: 0.9)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .help(title)
         .onHover { hovered in
             withAnimation(.spring(response: 0.24, dampingFraction: 0.84)) {
                 isHovered = hovered

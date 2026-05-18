@@ -296,6 +296,46 @@ public struct SiteArchivesResponse: Decodable, Sendable {
     public let archives: [SiteArchive]
 }
 
+public struct RoachNetLatestVersionResponse: Decodable, Sendable {
+    public let success: Bool
+    public let updateAvailable: Bool
+    public let currentVersion: String
+    public let latestVersion: String
+    public let message: String?
+}
+
+public struct RoachNetSystemUpdateStatusResponse: Decodable, Sendable {
+    public let stage: String
+    public let progress: Int
+    public let message: String
+    public let timestamp: String
+}
+
+public struct RoachNetSystemUpdateRequestResponse: Decodable, Sendable {
+    public let success: Bool
+    public let message: String?
+    public let note: String?
+    public let error: String?
+}
+
+public struct RoachNetBenchmarkStatusResponse: Decodable, Sendable {
+    public let status: String
+    public let benchmarkId: String?
+
+    public init(status: String, benchmarkId: String?) {
+        self.status = status
+        self.benchmarkId = benchmarkId
+    }
+}
+
+public struct RoachNetBenchmarkRunResponse: Decodable, Sendable {
+    public let success: Bool
+    public let job_id: String?
+    public let benchmark_id: String?
+    public let message: String?
+    public let error: String?
+}
+
 public struct RagFilesResponse: Decodable, Sendable {
     public let files: [String]
 }
@@ -370,19 +410,126 @@ public struct ManagedAppSnapshot: Sendable {
 
 public actor ManagedAppRuntimeBridge {
     public static let shared = ManagedAppRuntimeBridge()
+    public static let appleSiliconLocalAIProfile = "apple-silicon-efficient"
+    public static let appleSiliconLocalAIEnvironmentDefaults: [String: String] = [
+        "OLLAMA_FLASH_ATTENTION": "1",
+        "OLLAMA_KEEP_ALIVE": "15m",
+        "OLLAMA_MAX_LOADED_MODELS": "1",
+        "OLLAMA_MAX_QUEUE": "32",
+        "OLLAMA_NUM_PARALLEL": "1",
+        "ROACHNET_APPLE_SILICON_NATIVE": "1",
+        "ROACHNET_LOCAL_AI_PROFILE": appleSiliconLocalAIProfile
+    ]
 
     private var process: Process?
     private var serverInfoURL: URL?
     private var cachedServerInfo: ManagedAppServerInfo?
+    private var startupTask: Task<ManagedAppServerInfo, Error>?
     private let nativeStartupTimeoutSeconds: TimeInterval = 300
 
     public init() {}
 
-    public func ensureRunning(using config: RoachNetInstallerConfig) async throws -> ManagedAppServerInfo {
-        try await ensureRunning(using: config, allowBootstrapRepair: true)
+    public static var isAppleSiliconNativeRuntime: Bool {
+        #if os(macOS) && arch(arm64)
+        return true
+        #else
+        return false
+        #endif
     }
 
-    private func ensureRunning(
+    public static func applyAppleSiliconLocalAIEnvironmentDefaults(
+        to environment: inout [String: String],
+        isAppleSiliconNative: Bool = ManagedAppRuntimeBridge.isAppleSiliconNativeRuntime
+    ) {
+        guard isAppleSiliconNative,
+              environment["ROACHNET_DISABLE_APPLE_SILICON_AI_DEFAULTS"] != "1"
+        else {
+            return
+        }
+
+        for (key, value) in appleSiliconLocalAIEnvironmentDefaults where environment[key].isBlankEnvironmentValue {
+            environment[key] = value
+        }
+    }
+
+    public static func localRuntimeRouteURL(baseURLString: String, path rawPath: String) throws -> URL {
+        guard let baseURL = URL(string: baseURLString),
+              let scheme = baseURL.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              baseURL.host?.isEmpty == false
+        else {
+            throw NSError(domain: "RoachNetRuntime", code: 25, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid RoachNet web URL."
+            ])
+        }
+
+        let trimmedPath = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty,
+              !trimmedPath.hasPrefix("//"),
+              !trimmedPath.contains("\\"),
+              trimmedPath.rangeOfCharacter(from: .controlCharacters) == nil
+        else {
+            throw NSError(domain: "RoachNetRuntime", code: 26, userInfo: [
+                NSLocalizedDescriptionKey: "RoachNet route must be a local app path."
+            ])
+        }
+
+        guard let parsedRoute = URLComponents(string: trimmedPath),
+              parsedRoute.scheme == nil,
+              parsedRoute.host == nil
+        else {
+            throw NSError(domain: "RoachNetRuntime", code: 26, userInfo: [
+                NSLocalizedDescriptionKey: "RoachNet route must be a local app path."
+            ])
+        }
+
+        let rootURL = URL(string: "/", relativeTo: baseURL)?.absoluteURL ?? baseURL
+        guard var components = URLComponents(url: rootURL, resolvingAgainstBaseURL: false) else {
+            throw NSError(domain: "RoachNetRuntime", code: 26, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to resolve RoachNet route."
+            ])
+        }
+
+        let routePath = parsedRoute.path.hasPrefix("/") ? parsedRoute.path : "/\(parsedRoute.path)"
+        components.path = routePath.isEmpty ? "/" : routePath
+        components.percentEncodedQuery = parsedRoute.percentEncodedQuery
+        components.percentEncodedFragment = parsedRoute.percentEncodedFragment
+
+        guard let resolved = components.url else {
+            throw NSError(domain: "RoachNetRuntime", code: 26, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to resolve RoachNet route."
+            ])
+        }
+
+        return resolved
+    }
+
+    public func ensureRunning(using config: RoachNetInstallerConfig) async throws -> ManagedAppServerInfo {
+        if let cachedServerInfo, try await isHealthy(cachedServerInfo.healthUrl) {
+            persistHealthyBootstrapStateIfNeeded(using: config)
+            return cachedServerInfo
+        }
+
+        if let startupTask {
+            return try await startupTask.value
+        }
+
+        let task = Task { [self] in
+            try await startRuntime(using: config, allowBootstrapRepair: true)
+        }
+        startupTask = task
+
+        do {
+            let serverInfo = try await task.value
+            startupTask = nil
+            return serverInfo
+        } catch {
+            startupTask = nil
+            throw error
+        }
+    }
+
+    private func startRuntime(
         using config: RoachNetInstallerConfig,
         allowBootstrapRepair: Bool
     ) async throws -> ManagedAppServerInfo {
@@ -392,7 +539,7 @@ public actor ManagedAppRuntimeBridge {
         }
 
         let repoRoot = resolveRuntimeRoot(from: config)
-        let scriptURL = repoRoot.appendingPathComponent("scripts/run-roachnet.mjs")
+        let scriptURL = runtimeLauncherURL(in: repoRoot)
 
         guard FileManager.default.fileExists(atPath: scriptURL.path) else {
             throw NSError(domain: "RoachNetRuntime", code: 20, userInfo: [
@@ -468,7 +615,7 @@ public actor ManagedAppRuntimeBridge {
 
                 if shouldAttemptBootstrapRepair(using: config, allowBootstrapRepair: allowBootstrapRepair) {
                     let repairedConfig = try await repairContainedBootstrap(using: config)
-                    return try await ensureRunning(using: repairedConfig, allowBootstrapRepair: false)
+                    return try await startRuntime(using: repairedConfig, allowBootstrapRepair: false)
                 }
 
                 throw NSError(domain: "RoachNetRuntime", code: 24, userInfo: [
@@ -481,7 +628,7 @@ public actor ManagedAppRuntimeBridge {
 
         if shouldAttemptBootstrapRepair(using: config, allowBootstrapRepair: allowBootstrapRepair) {
             let repairedConfig = try await repairContainedBootstrap(using: config)
-            return try await ensureRunning(using: repairedConfig, allowBootstrapRepair: false)
+            return try await startRuntime(using: repairedConfig, allowBootstrapRepair: false)
         }
 
         throw NSError(domain: "RoachNetRuntime", code: 21, userInfo: [
@@ -860,6 +1007,29 @@ public actor ManagedAppRuntimeBridge {
         return response.message ?? "Map pack queued."
     }
 
+    public func downloadRoachSpeechPack(
+        using config: RoachNetInstallerConfig,
+        url: String,
+        packID: String,
+        kind: String
+    ) async throws -> String {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let url: String
+            let packID: String
+            let kind: String
+        }
+
+        let response: ActionResponse = try await post(
+            "/api/roachspeech/model-packs/download",
+            baseURL: baseURL,
+            body: Payload(url: url, packID: packID, kind: kind)
+        )
+        return response.message ?? "RoachSpeech pack queued."
+    }
+
     public func selectWikipedia(
         using config: RoachNetInstallerConfig,
         optionId: String
@@ -888,25 +1058,78 @@ public actor ManagedAppRuntimeBridge {
         let _: EmptyOKResponse = try await delete("/api/downloads/jobs/\(jobId)", baseURL: baseURL)
     }
 
+    public func checkLatestVersion(
+        using config: RoachNetInstallerConfig,
+        force: Bool
+    ) async throws -> RoachNetLatestVersionResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+        var components = URLComponents(url: baseURL.appending(path: "/api/system/latest-version"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "force", value: force ? "true" : "false")]
+
+        guard let url = components?.url else {
+            throw NSError(domain: "RoachNetRuntime", code: 30, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to create RoachNet update check URL."
+            ])
+        }
+
+        return try await get(url: url)
+    }
+
+    public func getSystemUpdateStatus(
+        using config: RoachNetInstallerConfig
+    ) async throws -> RoachNetSystemUpdateStatusResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+        return try await get("/api/system/update/status", baseURL: baseURL)
+    }
+
+    public func requestSystemUpdate(
+        using config: RoachNetInstallerConfig
+    ) async throws -> RoachNetSystemUpdateRequestResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+        return try await post(
+            "/api/system/update",
+            baseURL: baseURL,
+            body: EmptyRequest()
+        )
+    }
+
+    public func getBenchmarkStatus(
+        using config: RoachNetInstallerConfig
+    ) async throws -> RoachNetBenchmarkStatusResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+        return try await get("/api/benchmark/status", baseURL: baseURL)
+    }
+
+    public func runBenchmark(
+        using config: RoachNetInstallerConfig,
+        type: String,
+        synchronous: Bool = false
+    ) async throws -> RoachNetBenchmarkRunResponse {
+        let serverInfo = try await ensureRunning(using: config)
+        let baseURL = try runtimeBaseURL(from: serverInfo)
+
+        struct Payload: Encodable {
+            let benchmark_type: String
+        }
+
+        let suffix = synchronous ? "?sync=true" : ""
+        return try await post(
+            "/api/benchmark/run\(suffix)",
+            baseURL: baseURL,
+            body: Payload(benchmark_type: type),
+            timeoutInterval: synchronous ? 600 : 120
+        )
+    }
+
     public func resolveRouteURL(using config: RoachNetInstallerConfig, path: String) async throws -> URL {
         let serverInfo = try await ensureRunning(using: config)
         let baseURLString = serverInfo.webUrl ?? serverInfo.healthUrl
 
-        guard let baseURL = URL(string: baseURLString) else {
-            throw NSError(domain: "RoachNetRuntime", code: 25, userInfo: [
-                NSLocalizedDescriptionKey: "Invalid RoachNet web URL."
-            ])
-        }
-
-        let root = URL(string: "/", relativeTo: baseURL)?.absoluteURL ?? baseURL
-        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
-        guard let resolved = URL(string: normalizedPath, relativeTo: root)?.absoluteURL else {
-            throw NSError(domain: "RoachNetRuntime", code: 26, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to resolve RoachNet route \(path)."
-            ])
-        }
-
-        return resolved
+        return try Self.localRuntimeRouteURL(baseURLString: baseURLString, path: path)
     }
 
     public func sendChat(
@@ -948,7 +1171,7 @@ public actor ManagedAppRuntimeBridge {
 
     public func stopRuntime(using config: RoachNetInstallerConfig) async {
         let repoRoot = resolveRuntimeRoot(from: config)
-        let scriptURL = repoRoot.appendingPathComponent("scripts/run-roachnet.mjs")
+        let scriptURL = runtimeLauncherURL(in: repoRoot)
 
         guard FileManager.default.fileExists(atPath: scriptURL.path) else {
             cachedServerInfo = nil
@@ -1027,6 +1250,7 @@ public actor ManagedAppRuntimeBridge {
         environment["ROACHNET_COMPANION_HOST"] = config.companionHost
         environment["ROACHNET_COMPANION_PORT"] = String(config.companionPort)
         environment["ROACHNET_COMPANION_TOKEN"] = config.companionToken
+        Self.applyAppleSiliconLocalAIEnvironmentDefaults(to: &environment)
         if let serverInfoURL {
             environment["ROACHNET_SERVER_INFO_FILE"] = serverInfoURL.path
         } else {
@@ -1178,7 +1402,7 @@ public actor ManagedAppRuntimeBridge {
 
     private func resolveRuntimeRoot(from config: RoachNetInstallerConfig) -> URL {
         let configuredRoot = URL(fileURLWithPath: config.installPath)
-        let configuredScript = configuredRoot.appendingPathComponent("scripts/run-roachnet.mjs")
+        let configuredScript = runtimeLauncherURL(in: configuredRoot)
 
         if FileManager.default.fileExists(atPath: configuredScript.path) {
             return configuredRoot
@@ -1190,6 +1414,15 @@ public actor ManagedAppRuntimeBridge {
 
         return RoachNetRepositoryLocator.repositoryRoot()
             ?? configuredRoot
+    }
+
+    private func runtimeLauncherURL(in repoRoot: URL) -> URL {
+        let nativeAPIURL = repoRoot.appendingPathComponent("scripts/run-roachnet-native-api.mjs")
+        if FileManager.default.fileExists(atPath: nativeAPIURL.path) {
+            return nativeAPIURL
+        }
+
+        return repoRoot.appendingPathComponent("scripts/run-roachnet.mjs")
     }
 
     private func runtimeBaseURL(from info: ManagedAppServerInfo) throws -> URL {
@@ -1436,14 +1669,18 @@ public actor ManagedAppRuntimeBridge {
     }
 
     private func get<Response: Decodable>(_ path: String, baseURL: URL) async throws -> Response {
-        var request = URLRequest(url: baseURL.appending(path: path))
+        try await get(url: baseURL.appending(path: path))
+    }
+
+    private func get<Response: Decodable>(url: URL) async throws -> Response {
+        var request = URLRequest(url: url)
         request.timeoutInterval = 20
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 500
 
         guard (200..<300).contains(status) else {
             throw NSError(domain: "RoachNetRuntime", code: status, userInfo: [
-                NSLocalizedDescriptionKey: "GET \(path) failed with status \(status)."
+                NSLocalizedDescriptionKey: "GET \(url.path) failed with status \(status)."
             ])
         }
 
@@ -1519,6 +1756,13 @@ private struct AnyEncodable: Encodable {
 
     func encode(to encoder: Encoder) throws {
         try encodeImpl(encoder)
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var isBlankEnvironmentValue: Bool {
+        guard let value = self else { return true }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

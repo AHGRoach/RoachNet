@@ -2,17 +2,17 @@
 
 ## General Questions
 
-### What is N.O.M.A.D.?
-N.O.M.A.D. (Node for Offline Media, Archives, and Data) is a personal server that gives you access to knowledge, education, and AI assistance without requiring an internet connection. It runs on your own hardware, keeping your data private and accessible anytime.
+### What is RoachNet?
+RoachNet (Node for Offline Media, Archives, and Data) is a personal server that gives you access to knowledge, education, and AI assistance without requiring an internet connection. It runs on your own hardware, keeping your data private and accessible anytime.
 
-### Do I need internet to use N.O.M.A.D.?
+### Do I need internet to use RoachNet?
 No — that's the whole point. Once your content is downloaded, everything works offline. You only need internet to:
 - Download new content
 - Update the software
 - Sync the latest versions of Wikipedia, maps, etc.
 
 ### What hardware do I need?
-N.O.M.A.D. is designed for capable hardware, especially if you want to use the AI features. Recommended:
+RoachNet is designed for capable hardware, especially if you want to use the AI features. Recommended:
 - Modern multi-core CPU (AMD Ryzen 7 with Radeon graphics is the community sweet spot)
 - 16GB+ RAM (32GB+ for best AI performance)
 - SSD storage (size depends on content — 500GB minimum, 1TB+ recommended)
@@ -54,7 +54,7 @@ Content is as current as when it was last downloaded. Wikipedia snapshots are ty
 ### Can I add my own files?
 Yes — with the Knowledge Base. Upload PDFs, text files, and other documents to the [Knowledge Base](/knowledge-base), and the AI can reference them when answering your questions. This uses semantic search to find relevant information from your uploaded files.
 
-For Kiwix content, N.O.M.A.D. uses standard ZIM files. For educational content, Kolibri uses its own channel format.
+For Kiwix content, RoachNet uses standard ZIM files. For educational content, Kolibri uses its own channel format.
 
 ### What are curated collection tiers?
 When selecting content in the Easy Setup wizard or Content Explorer, collections are organized into three tiers:

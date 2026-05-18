@@ -5,7 +5,7 @@ import { statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -32,6 +32,7 @@ const copiedRootFiles = new Set([
 ])
 const transpileDirectories = ['bin', 'app', 'config', 'constants', 'database', 'providers', 'start', 'types', 'util']
 const copyDirectories = ['docs', 'public', 'resources', 'views']
+const supportedAdminNodeMajorRange = { minimum: 24, maximumExclusive: 25 }
 
 function shouldSkip(relativePath) {
   if (!relativePath) {
@@ -87,15 +88,25 @@ async function pathExists(filePath) {
 function getPreferredNodeBinary() {
   const explicitNodeBinary = process.env.ROACHNET_ADMIN_NODE_BINARY?.trim()
   if (explicitNodeBinary) {
+    assertAdminNodeBinary(explicitNodeBinary)
     return explicitNodeBinary
   }
 
-  if (process.execPath) {
-    return process.execPath
+  for (const candidate of [
+    process.execPath,
+    '/opt/homebrew/opt/node@24/bin/node',
+    '/usr/local/opt/node@24/bin/node',
+    'node',
+  ]) {
+    if (isSupportedAdminNodeBinary(candidate)) {
+      return candidate
+    }
   }
 
-  const macHomebrewNode24 = '/opt/homebrew/opt/node@24/bin/node'
-  return process.platform === 'darwin' ? macHomebrewNode24 : process.execPath
+  throw new Error(
+    'The legacy admin/WebUI runtime build requires Node 24 because @openzim/libzim is not compatible with current Node majors. ' +
+      'Install node@24 or set ROACHNET_ADMIN_NODE_BINARY to a Node 24 binary.'
+  )
 }
 
 function getPreferredNpmBinary() {
@@ -104,8 +115,9 @@ function getPreferredNpmBinary() {
     ? path.join(path.dirname(nodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm')
     : null
   const macHomebrewNode24 = '/opt/homebrew/opt/node@24/bin/npm'
+  const usrLocalHomebrewNode24 = '/usr/local/opt/node@24/bin/npm'
 
-  return [localNodeNpm, macHomebrewNode24, 'npm']
+  return [localNodeNpm, macHomebrewNode24, usrLocalHomebrewNode24, 'npm']
     .filter(Boolean)
     .find((candidate) => candidate === 'npm' || pathExistsSync(candidate)) || 'npm'
 }
@@ -115,6 +127,44 @@ function pathExistsSync(filePath) {
     return Boolean(filePath) && statSync(filePath).isFile()
   } catch {
     return false
+  }
+}
+
+function nodeMajorVersionIsSupported(version) {
+  const major = Number.parseInt(String(version || '').trim().replace(/^v/, '').split('.')[0], 10)
+  return (
+    Number.isSafeInteger(major) &&
+    major >= supportedAdminNodeMajorRange.minimum &&
+    major < supportedAdminNodeMajorRange.maximumExclusive
+  )
+}
+
+function readNodeVersion(nodeBinary) {
+  if (!nodeBinary || (nodeBinary !== 'node' && !pathExistsSync(nodeBinary))) {
+    return null
+  }
+
+  const result = spawnSync(nodeBinary, ['--version'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  })
+  if (result.status !== 0) {
+    return null
+  }
+
+  return String(result.stdout || '').trim()
+}
+
+function isSupportedAdminNodeBinary(nodeBinary) {
+  return nodeMajorVersionIsSupported(readNodeVersion(nodeBinary))
+}
+
+function assertAdminNodeBinary(nodeBinary) {
+  const version = readNodeVersion(nodeBinary)
+  if (!nodeMajorVersionIsSupported(version)) {
+    throw new Error(
+      `ROACHNET_ADMIN_NODE_BINARY points at ${version || 'an unreadable Node binary'}; the legacy admin/WebUI lane requires Node 24.`
+    )
   }
 }
 

@@ -4,6 +4,7 @@ import AVKit
 import Carbon
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import UniformTypeIdentifiers
 import WebKit
 import RoachNetCore
 import RoachNetDesign
@@ -47,14 +48,14 @@ enum WorkspacePane: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .suite: return "Installed surfaces"
-        case .home: return "Your stack"
-        case .dev: return "Code and ship"
-        case .roachClaw: return "Private AI"
-        case .arcade: return "Native games"
-        case .maps: return "Offline atlas"
+        case .home: return "Command deck"
+        case .dev: return "IDE workspace"
+        case .roachClaw: return "AI workbench"
+        case .arcade: return "Game library"
+        case .maps: return "Native atlas"
         case .education: return "Course packs"
-        case .knowledge: return "Local shelf"
-        case .runtime: return "Health and logs"
+        case .knowledge: return "Vault shelf"
+        case .runtime: return "Console"
         }
     }
 
@@ -83,7 +84,7 @@ enum RuntimeSurfacePathLabel {
             case .installRoot:
                 return "Contained app"
             case .storageRoot:
-                return "storage"
+                return "RoachNet storage"
             case .vaultFolder:
                 return "Contained vault"
             case .logFile:
@@ -91,18 +92,63 @@ enum RuntimeSurfacePathLabel {
             }
         }
 
-        let lastPathComponent = URL(fileURLWithPath: trimmed).lastPathComponent
+        let url = URL(fileURLWithPath: trimmed).standardizedFileURL
+        let lastPathComponent = url.lastPathComponent
+        let parentPathComponent = url.deletingLastPathComponent().lastPathComponent
 
         switch kind {
         case .installRoot:
             return "Contained app"
         case .storageRoot:
-            return lastPathComponent.isEmpty ? "storage" : lastPathComponent
+            return storageRootLabel(lastPathComponent: lastPathComponent, parentPathComponent: parentPathComponent)
         case .vaultFolder:
             return "Contained vault"
         case .logFile:
             return lastPathComponent.isEmpty ? "Runtime log" : lastPathComponent
         }
+    }
+
+    static func displayDetail(_ path: String?, kind: RuntimeSurfacePathKind) -> String {
+        let trimmed = path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else {
+            switch kind {
+            case .installRoot:
+                return "Install root not set"
+            case .storageRoot:
+                return "Content root not set"
+            case .vaultFolder:
+                return "Vault folder not set"
+            case .logFile:
+                return "Runtime log not set"
+            }
+        }
+
+        let home = NSHomeDirectory()
+        if trimmed == home {
+            return "~"
+        }
+        if trimmed.hasPrefix(home + "/") {
+            return "~/" + trimmed.dropFirst(home.count + 1)
+        }
+        return trimmed
+    }
+
+    private static func storageRootLabel(lastPathComponent: String, parentPathComponent: String) -> String {
+        guard !lastPathComponent.isEmpty else { return "RoachNet storage" }
+
+        let normalizedLeaf = lastPathComponent.lowercased()
+        let normalizedParent = parentPathComponent.lowercased()
+        if normalizedLeaf == "storage" {
+            if normalizedParent.contains("roachnet") {
+                return "RoachNet storage"
+            }
+            if !parentPathComponent.isEmpty {
+                return "\(parentPathComponent)/storage"
+            }
+            return "storage"
+        }
+
+        return lastPathComponent
     }
 }
 
@@ -153,6 +199,29 @@ private struct GuideFeature: Identifiable {
     let title: String
     let detail: String
     let systemImage: String
+    let section: String
+    let primaryAction: String
+    let quickHint: String
+    let commandHint: String
+    let accent: Color
+    let tags: [String]
+}
+
+private struct LaunchGuideStep: Identifiable {
+    let id: String
+    let number: String
+    let title: String
+    let detail: String
+    let systemImage: String
+    let accent: Color
+}
+
+private struct LaunchGuideQuickAction: Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let systemImage: String
+    let accent: Color
 }
 
 private struct ReadinessStep: Identifiable {
@@ -164,6 +233,25 @@ private struct ReadinessStep: Identifiable {
     let accent: Color
     let routePath: String?
     let isReady: Bool
+}
+
+private enum HomeNextMoveTarget: Hashable {
+    case pane(WorkspacePane)
+    case route(title: String, path: String)
+    case prompt(String)
+    case commandBar
+    case refreshRuntime
+    case importVault
+}
+
+private struct HomeNextMove: Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let badge: String
+    let systemImage: String
+    let accent: Color
+    let target: HomeNextMoveTarget
 }
 
 enum RoachClawContextScope: String, CaseIterable, Identifiable, Hashable {
@@ -193,15 +281,15 @@ enum RoachClawContextScope: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .vault:
-            return "Let RoachClaw read the contained library, imported Obsidian vaults, and currently opened vault asset."
+            return "Vault files and notes."
         case .arcade:
-            return "Let RoachClaw see the active game, controller state, cheats, mods, and compatibility runner."
+            return "Active game context."
         case .archives:
-            return "Let RoachClaw see mirrored site titles and the captured web lane summary."
+            return "Captured web shelf."
         case .projects:
-            return "Let RoachClaw see the local project shelf so coding help can start from the real workspace."
+            return "Project shelf."
         case .roachnet:
-            return "Let RoachClaw read the active pane, installed packs, current model route, and the rest of the live RoachNet surface."
+            return "Live app state."
         }
     }
 
@@ -308,7 +396,7 @@ struct RoachClawContextPermissions: Codable, Hashable {
     }
 }
 
-private enum CommandPaletteTarget: Hashable {
+enum CommandPaletteTarget: Hashable {
     case pane(WorkspacePane)
     case route(title: String, path: String)
     case service(serviceName: String)
@@ -317,6 +405,11 @@ private enum CommandPaletteTarget: Hashable {
     case revealPath(String)
     case previewVaultFile(String)
     case importObsidianVault
+    case openNativeSettings
+    case openAbout
+    case checkForUpdates
+    case requestSystemUpdate
+    case copyDiagnostics
     case openGlobalRoachClaw
     case stagePrompt(String)
     case stagePromptFromClipboard(String)
@@ -332,14 +425,14 @@ private enum CommandPaletteTarget: Hashable {
 }
 
 private enum HomeMenuSection: String, CaseIterable, Identifiable {
-    case commandDeck = "Command Deck"
-    case installedModules = "Installed Modules"
-    case availableModules = "Available Modules"
+    case commandDeck = "Deck"
+    case installedModules = "Installed"
+    case availableModules = "Staged"
 
     var id: String { rawValue }
 }
 
-private struct CommandPaletteEntry: Identifiable, Hashable {
+struct CommandPaletteEntry: Identifiable, Hashable {
     let id: String
     let section: String
     let title: String
@@ -349,6 +442,8 @@ private struct CommandPaletteEntry: Identifiable, Hashable {
     let badge: String?
     let shortcut: String?
     let keywords: [String]
+    let aliases: [String]
+    let previewNote: String?
 
     init(
         id: String,
@@ -359,7 +454,9 @@ private struct CommandPaletteEntry: Identifiable, Hashable {
         target: CommandPaletteTarget,
         badge: String? = nil,
         shortcut: String? = nil,
-        keywords: [String] = []
+        keywords: [String] = [],
+        aliases: [String] = [],
+        previewNote: String? = nil
     ) {
         self.id = id
         self.section = section
@@ -370,12 +467,15 @@ private struct CommandPaletteEntry: Identifiable, Hashable {
         self.badge = badge
         self.shortcut = shortcut
         self.keywords = keywords
+        self.aliases = aliases
+        self.previewNote = previewNote
     }
 }
 
 private extension Notification.Name {
     static let roachNetOpenCommandPalette = Notification.Name("roachnet.open-command-palette")
     static let roachNetOpenDetachedCommandPalette = Notification.Name("roachnet.open-detached-command-palette")
+    static let roachNetOpenGlobalRoachClaw = Notification.Name("roachnet.open-global-roachclaw")
 }
 
 private func roachWindowDebug(_ message: String) {
@@ -389,11 +489,11 @@ private func roachWindowDebug(_ message: String) {
     }
 }
 
-private enum RoachNetGlobalHotKey {
+enum RoachNetGlobalHotKey {
     static let commandPaletteID: UInt32 = 1
     static let keyCode: UInt32 = UInt32(kVK_ANSI_R)
-    static let modifiers: UInt32 = UInt32(cmdKey) | UInt32(shiftKey)
-    static let hint = "Shift-Command-R"
+    static let modifiers: UInt32 = UInt32(cmdKey) | UInt32(controlKey)
+    static let hint = "Ctrl-Cmd-R"
 }
 
 private func roachNetFourCharCode(_ value: String) -> OSType {
@@ -402,7 +502,7 @@ private func roachNetFourCharCode(_ value: String) -> OSType {
     }
 }
 
-private func filteredCommandPaletteEntries(
+func filteredCommandPaletteEntries(
     from entries: [CommandPaletteEntry],
     query: String
 ) -> [CommandPaletteEntry] {
@@ -411,10 +511,7 @@ private func filteredCommandPaletteEntries(
         return entries
     }
 
-    let queryTokens = trimmedQuery
-        .lowercased()
-        .split(whereSeparator: \.isWhitespace)
-        .map(String.init)
+    let queryTokens = commandPaletteTokens(from: trimmedQuery)
 
     return entries
         .compactMap { entry -> (CommandPaletteEntry, Int)? in
@@ -434,49 +531,151 @@ private func filteredCommandPaletteEntries(
         .map(\.0)
 }
 
-private func commandPaletteScore(for entry: CommandPaletteEntry, queryTokens: [String]) -> Int {
+func commandPaletteScore(for entry: CommandPaletteEntry, queryTokens: [String]) -> Int {
     let title = entry.title.lowercased()
     let detail = entry.detail.lowercased()
     let section = entry.section.lowercased()
+    let badge = entry.badge?.lowercased() ?? ""
+    let shortcut = entry.shortcut?.lowercased() ?? ""
+    let aliases = entry.aliases.map { $0.lowercased() }
     let keywords = entry.keywords.map { $0.lowercased() }
+    let searchFields = [title, detail, section, badge, shortcut] + aliases + keywords
+    let titleAcronym = commandPaletteAcronym(title)
+    let sectionAcronym = commandPaletteAcronym(section)
 
     var score = 0
     for token in queryTokens {
+        let shouldUseLooseFuzzy = token.count >= 3
         if title == token {
-            score += 420
+            score += 520
         } else if title.hasPrefix(token) {
-            score += 280
+            score += 360
         } else if title.contains(token) {
-            score += 190
+            score += 230
+        } else if titleAcronym.hasPrefix(token) {
+            score += 210
+        } else if shouldUseLooseFuzzy, commandPaletteCharacters(in: token, appearInOrderInside: title) {
+            score += 120
+        }
+
+        if aliases.contains(where: { $0 == token }) {
+            score += 340
+        } else if aliases.contains(where: { $0.hasPrefix(token) }) {
+            score += 240
+        } else if aliases.contains(where: { $0.contains(token) }) {
+            score += 150
         }
 
         if keywords.contains(where: { $0 == token }) {
-            score += 160
+            score += 180
+        } else if keywords.contains(where: { $0.hasPrefix(token) }) {
+            score += 135
         } else if keywords.contains(where: { $0.contains(token) }) {
-            score += 110
+            score += 95
         }
 
-        if section.contains(token) {
+        if section == token {
+            score += 120
+        } else if section.hasPrefix(token) || sectionAcronym.hasPrefix(token) {
             score += 80
         }
 
-        if detail.contains(token) {
+        if detail.hasPrefix(token) {
+            score += 58
+        } else if detail.contains(token) {
             score += 46
+        }
+
+        if badge == token || shortcut == token {
+            score += 90
+        }
+
+        if shouldUseLooseFuzzy,
+           searchFields.contains(where: { commandPaletteCharacters(in: token, appearInOrderInside: $0) }) {
+            score += 24
         }
     }
 
     return score
 }
 
-private func groupedCommandPaletteEntries(_ entries: [CommandPaletteEntry]) -> [(String, [CommandPaletteEntry])] {
+func commandPaletteTokens(from query: String) -> [String] {
+    query
+        .lowercased()
+        .split { character in
+            character.isWhitespace || character == "/" || character == "-" || character == "_" || character == "."
+        }
+        .map(String.init)
+        .filter { !$0.isEmpty }
+}
+
+func commandPaletteVisibleEntries(
+    entries: [CommandPaletteEntry],
+    recentEntries: [CommandPaletteEntry],
+    query: String
+) -> [CommandPaletteEntry] {
+    let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let filtered = filteredCommandPaletteEntries(from: entries, query: query)
+    guard trimmedQuery.isEmpty, !recentEntries.isEmpty else {
+        return filtered
+    }
+
+    let validRecentEntries = recentEntries.filter { recent in
+        entries.contains(where: { $0.id == recent.id })
+    }
+    let recentIDs = Set(validRecentEntries.map(\.id))
+    return validRecentEntries + filtered.filter { !recentIDs.contains($0.id) }
+}
+
+private func commandPaletteAcronym(_ value: String) -> String {
+    value
+        .split { !$0.isLetter && !$0.isNumber }
+        .compactMap(\.first)
+        .map { String($0).lowercased() }
+        .joined()
+}
+
+private func commandPaletteCharacters(in needle: String, appearInOrderInside haystack: String) -> Bool {
+    guard !needle.isEmpty else { return true }
+    var remaining = Array(needle)
+    for character in haystack {
+        guard let next = remaining.first, next == character else { continue }
+        remaining.removeFirst()
+        if remaining.isEmpty {
+            return true
+        }
+    }
+    return false
+}
+
+private func commandPaletteNumberIndex(for keyCode: UInt16) -> Int? {
+    switch Int(keyCode) {
+    case kVK_ANSI_1: return 0
+    case kVK_ANSI_2: return 1
+    case kVK_ANSI_3: return 2
+    case kVK_ANSI_4: return 3
+    case kVK_ANSI_5: return 4
+    case kVK_ANSI_6: return 5
+    case kVK_ANSI_7: return 6
+    case kVK_ANSI_8: return 7
+    case kVK_ANSI_9: return 8
+    default: return nil
+    }
+}
+
+private func groupedCommandPaletteEntries(
+    _ entries: [CommandPaletteEntry],
+    recentIDs: Set<String> = []
+) -> [(String, [CommandPaletteEntry])] {
     var orderedSections: [String] = []
     var grouped: [String: [CommandPaletteEntry]] = [:]
 
     for entry in entries {
-        if grouped[entry.section] == nil {
-            orderedSections.append(entry.section)
+        let section = recentIDs.contains(entry.id) ? "Recent" : entry.section
+        if grouped[section] == nil {
+            orderedSections.append(section)
         }
-        grouped[entry.section, default: []].append(entry)
+        grouped[section, default: []].append(entry)
     }
 
     return orderedSections.map { section in
@@ -489,9 +688,141 @@ private extension CommandPaletteTarget {
         switch self {
         case .externalURL:
             return false
-        case .pane, .route, .service, .refreshRuntime, .launchGuide, .revealPath, .previewVaultFile, .importObsidianVault, .openGlobalRoachClaw, .stagePrompt, .stagePromptFromClipboard, .togglePromptDictation, .toggleLatestReplySpeech, .copyLatestReply, .saveLatestReplyToRoachBrain, .toggleContextScope, .setAllContext, .promoteLocalModel, .promoteCloudModel:
+        case .pane, .route, .service, .refreshRuntime, .launchGuide, .revealPath, .previewVaultFile, .importObsidianVault, .openNativeSettings, .openAbout, .checkForUpdates, .requestSystemUpdate, .copyDiagnostics, .openGlobalRoachClaw, .stagePrompt, .stagePromptFromClipboard, .togglePromptDictation, .toggleLatestReplySpeech, .copyLatestReply, .saveLatestReplyToRoachBrain, .toggleContextScope, .setAllContext, .promoteLocalModel, .promoteCloudModel:
             return true
         }
+    }
+
+    var actionLabel: String {
+        switch self {
+        case .pane, .route, .openNativeSettings, .openAbout:
+            return "Open"
+        case .service:
+            return "Launch"
+        case .refreshRuntime, .checkForUpdates:
+            return "Check"
+        case .requestSystemUpdate:
+            return "Install"
+        case .launchGuide, .openGlobalRoachClaw:
+            return "Show"
+        case .revealPath:
+            return "Reveal"
+        case .previewVaultFile:
+            return "Preview"
+        case .importObsidianVault:
+            return "Import"
+        case .stagePrompt, .stagePromptFromClipboard:
+            return "Stage"
+        case .togglePromptDictation, .toggleLatestReplySpeech, .toggleContextScope, .setAllContext:
+            return "Toggle"
+        case .copyLatestReply, .copyDiagnostics:
+            return "Copy"
+        case .saveLatestReplyToRoachBrain:
+            return "Save"
+        case .promoteLocalModel, .promoteCloudModel:
+            return "Use"
+        case .externalURL:
+            return "Visit"
+        }
+    }
+}
+
+private extension CommandPaletteEntry {
+    var accent: Color {
+        switch section {
+        case "Navigate":
+            return RoachPalette.green
+        case "Open":
+            return RoachPalette.cyan
+        case "RoachClaw":
+            return RoachPalette.magenta
+        case "Runtime":
+            return RoachPalette.bronze
+        case "Vault":
+            return RoachPalette.cyan
+        case "Dev":
+            return RoachPalette.green
+        case "Workspace":
+            return RoachPalette.bronze
+        case "Services":
+            return RoachPalette.green
+        case "External":
+            return RoachPalette.magenta
+        default:
+            return RoachPalette.green
+        }
+    }
+
+    var actionLabel: String {
+        target.actionLabel
+    }
+
+    var copyTargetPayload: String {
+        switch target {
+        case let .pane(pane):
+            return pane.rawValue
+        case let .route(title, path):
+            return "\(title) \(path)"
+        case let .service(serviceName):
+            return serviceName
+        case .refreshRuntime:
+            return "Refresh Runtime"
+        case .launchGuide:
+            return "Open Guided Tour"
+        case let .revealPath(path), let .previewVaultFile(path):
+            return path
+        case .importObsidianVault:
+            return "Import Obsidian Vault"
+        case .openNativeSettings:
+            return "Open RoachNet Settings"
+        case .openAbout:
+            return "About RoachNet"
+        case .checkForUpdates:
+            return "Check for RoachNet updates"
+        case .requestSystemUpdate:
+            return "Install available RoachNet update"
+        case .copyDiagnostics:
+            return "Copy RoachNet diagnostics"
+        case .openGlobalRoachClaw:
+            return "Open RoachClaw Anywhere"
+        case let .stagePrompt(prompt), let .stagePromptFromClipboard(prompt):
+            return prompt
+        case .togglePromptDictation:
+            return "Toggle voice prompt"
+        case .toggleLatestReplySpeech:
+            return "Toggle latest reply playback"
+        case .copyLatestReply:
+            return "Copy latest RoachClaw reply"
+        case .saveLatestReplyToRoachBrain:
+            return "Save latest RoachClaw reply to RoachBrain"
+        case let .toggleContextScope(scope):
+            return "Toggle \(scope.title) context"
+        case let .setAllContext(enabled):
+            return enabled ? "Allow full RoachClaw context" : "Lock full RoachClaw context"
+        case let .promoteLocalModel(modelName), let .promoteCloudModel(modelName):
+            return modelName
+        case let .externalURL(urlString):
+            return urlString
+        }
+    }
+
+    var secondaryActionLabel: String {
+        switch target {
+        case .revealPath, .previewVaultFile:
+            return "Copy path"
+        case .externalURL:
+            return "Copy URL"
+        case .route:
+            return "Copy route"
+        case .stagePrompt, .stagePromptFromClipboard:
+            return "Copy prompt"
+        default:
+            return "Copy target"
+        }
+    }
+
+    var compactSectionLabel: String {
+        section.uppercased()
     }
 }
 
@@ -677,148 +1008,261 @@ private struct EmbeddedRouteView: View {
 private struct CommandPaletteRow: View {
     let entry: CommandPaletteEntry
     let isSelected: Bool
+    let index: Int?
+
+    init(entry: CommandPaletteEntry, isSelected: Bool, index: Int? = nil) {
+        self.entry = entry
+        self.isSelected = isSelected
+        self.index = index
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: entry.systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isSelected ? RoachPalette.text : RoachPalette.green)
-                .frame(width: 32, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(isSelected ? RoachPalette.green.opacity(0.18) : RoachPalette.panelGlass)
-                )
+        HStack(spacing: 11) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(isSelected ? entry.accent : Color.clear)
+                .frame(width: 3, height: 34)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? entry.accent.opacity(0.18) : Color.white.opacity(0.055))
+
+                Image(systemName: entry.systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isSelected ? RoachPalette.text : entry.accent)
+            }
+            .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(entry.title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(RoachPalette.text)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.84)
                     if let badge = entry.badge {
-                        RoachTag(badge, accent: isSelected ? RoachPalette.text : RoachPalette.cyan)
+                        RoachTag(badge, accent: isSelected ? entry.accent : RoachPalette.cyan)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                 }
 
                 Text(entry.detail)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(RoachPalette.muted)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 8)
 
-            if let shortcut = entry.shortcut {
-                Text(shortcut)
+            HStack(spacing: 6) {
+                if let index, index < 9 {
+                    Text("\(index + 1)")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isSelected ? RoachPalette.text : RoachPalette.muted)
+                        .frame(width: 20, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(RoachPalette.panelGlass.opacity(isSelected ? 1 : 0.72))
+                        )
+                        .accessibilityHidden(true)
+                }
+
+                Text(isSelected ? "Return" : (entry.shortcut ?? entry.actionLabel))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(isSelected ? RoachPalette.text : RoachPalette.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .background(
                         Capsule(style: .continuous)
-                            .fill((isSelected ? RoachPalette.panelSoft : RoachPalette.panelGlass).opacity(0.92))
+                            .fill((isSelected ? entry.accent.opacity(0.18) : RoachPalette.panelGlass).opacity(0.92))
                     )
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            isSelected ? RoachPalette.green.opacity(0.18) : RoachPalette.panelRaised.opacity(0.76),
-                            isSelected ? RoachPalette.panelSoft.opacity(0.88) : RoachPalette.panel.opacity(0.70),
-                            Color.black.opacity(isSelected ? 0.12 : 0.08),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.075) : Color.white.opacity(0.025))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(isSelected ? RoachPalette.green.opacity(0.42) : RoachPalette.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isSelected ? entry.accent.opacity(0.46) : Color.white.opacity(0.05), lineWidth: 1)
         )
+        .shadow(color: isSelected ? entry.accent.opacity(0.11) : .clear, radius: 16, y: 9)
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: isSelected)
     }
 }
 
 private struct CommandPalettePreview: View {
     let entry: CommandPaletteEntry?
+    let showActionPanel: Bool
+    let onSelect: (CommandPaletteEntry) -> Void
+    let onCopyTarget: (CommandPaletteEntry) -> Void
 
     var body: some View {
-        RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 14) {
-                if let entry {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: entry.systemImage)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(RoachPalette.green)
-                            .frame(width: 44, height: 44)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(RoachPalette.panelGlass)
-                            )
+        VStack(alignment: .leading, spacing: 14) {
+            if let entry {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: entry.systemImage)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(entry.accent)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(entry.accent.opacity(0.12))
+                        )
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(entry.section.uppercased())
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .tracking(1.1)
-                                .foregroundStyle(RoachPalette.green)
-                            Text(entry.title)
-                                .font(.system(size: 22, weight: .bold, design: .rounded))
-                                .foregroundStyle(RoachPalette.text)
-                            Text(entry.detail)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    if let shortcut = entry.shortcut {
-                        HStack(spacing: 8) {
-                            RoachTag("Shortcut", accent: RoachPalette.cyan)
-                            Text(shortcut)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(RoachPalette.text)
-                        }
-                    }
-
-                    if let badge = entry.badge {
-                        HStack(spacing: 8) {
-                            RoachTag("State", accent: RoachPalette.magenta)
-                            Text(badge)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                        }
-                    }
-
-                    if !entry.keywords.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Search terms")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .tracking(1.1)
-                                .foregroundStyle(RoachPalette.muted)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(entry.keywords.prefix(6), id: \.self) { keyword in
-                                        RoachTag(keyword, accent: RoachPalette.cyan)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Command Bar")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(entry.compactSectionLabel)
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1.0)
+                            .foregroundStyle(entry.accent)
+                        Text(entry.title)
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
                             .foregroundStyle(RoachPalette.text)
-                        Text("Pick a command from the left. The preview stays readable so this acts more like a launcher and control surface than a flat search sheet.")
-                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.82)
+                        Text(entry.detail)
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                HStack(spacing: 8) {
+                    Button {
+                        onSelect(entry)
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "return")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(entry.actionLabel)
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        }
+                    }
+                    .buttonStyle(RoachUtilityButtonStyle(tint: entry.accent))
+                    .help("Run selected command")
+
+                    Button {
+                        onCopyTarget(entry)
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(entry.secondaryActionLabel)
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(RoachUtilityButtonStyle(tint: RoachPalette.muted))
+                    .help("Copy the selected command target")
+                }
+
+                if let previewNote = entry.previewNote {
+                    Text(previewNote)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(RoachPalette.text.opacity(0.76))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(entry.accent.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(entry.accent.opacity(0.14), lineWidth: 1)
+                        )
+                }
+
+                Divider()
+                    .overlay(Color.white.opacity(0.08))
+
+                if let badge = entry.badge {
+                    HStack(spacing: 8) {
+                        RoachTag("State", accent: entry.accent)
+                        Text(badge)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(RoachPalette.muted)
+                            .lineLimit(1)
+                    }
+                }
+
+                if showActionPanel {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("Actions")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.1)
+                            .foregroundStyle(entry.accent)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            CommandPaletteActionLine(key: "Return", label: "\(entry.actionLabel) now")
+                            CommandPaletteActionLine(key: "⌥↵", label: entry.secondaryActionLabel)
+                            CommandPaletteActionLine(key: "⌘1-9", label: "Open by index")
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(RoachPalette.panelRaised.opacity(0.58))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(RoachPalette.border.opacity(0.75), lineWidth: 1)
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Command Bar")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(RoachPalette.text)
+                    Text("Type a lane, file, model, or task. Return runs it; Option-Return copies where it points.")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                }
             }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.24))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.075), lineWidth: 1)
+        )
+    }
+}
+
+private struct CommandPaletteActionLine: View {
+    let key: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Text(key)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(RoachPalette.text)
+                .frame(width: 48, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(RoachPalette.panelGlass)
+                )
+
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(RoachPalette.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }
@@ -829,10 +1273,18 @@ private struct CommandPaletteFeaturedRail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Suggested")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .tracking(1.1)
-                .foregroundStyle(RoachPalette.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Suggested moves")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.1)
+                    .foregroundStyle(RoachPalette.muted)
+
+                Spacer(minLength: 8)
+
+                Text("\(entries.count) ready")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(RoachPalette.green)
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -840,37 +1292,49 @@ private struct CommandPaletteFeaturedRail: View {
                         Button {
                             onSelect(entry)
                         } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: entry.systemImage)
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(RoachPalette.green)
-                                    Text(entry.section)
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            HStack(spacing: 10) {
+                                Image(systemName: entry.systemImage)
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(entry.accent)
+                                    .frame(width: 30, height: 30)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(entry.accent.opacity(0.12))
+                                    )
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(entry.compactSectionLabel)
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
                                         .tracking(0.8)
                                         .foregroundStyle(RoachPalette.muted)
+                                    Text(entry.title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(RoachPalette.text)
+                                        .lineLimit(1)
                                 }
 
-                                Text(entry.title)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(RoachPalette.text)
-                                    .multilineTextAlignment(.leading)
-                                    .frame(width: 172, alignment: .leading)
-
-                                Text(entry.detail)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(RoachPalette.muted)
-                                    .lineLimit(2)
-                                    .frame(width: 172, alignment: .leading)
+                                Spacer(minLength: 0)
                             }
-                            .padding(14)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 10)
+                            .frame(width: 218, alignment: .leading)
                             .background(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(RoachPalette.panelRaised.opacity(0.78))
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                entry.accent.opacity(0.10),
+                                                RoachPalette.panelRaised.opacity(0.76),
+                                                Color.black.opacity(0.16),
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(RoachPalette.border, lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .stroke(entry.accent.opacity(0.14), lineWidth: 1)
                             )
                         }
                         .buttonStyle(RoachCardButtonStyle())
@@ -881,22 +1345,130 @@ private struct CommandPaletteFeaturedRail: View {
     }
 }
 
+private struct CommandPaletteKeyHintStrip: View {
+    let selectedAction: String
+    let actionPanelVisible: Bool
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                hint("Return", selectedAction)
+                hint("⌘K", actionPanelVisible ? "Hide panel" : "Actions")
+                hint("⌥↵", "Copy")
+            }
+
+            HStack(spacing: 7) {
+                hint("Return", selectedAction)
+                hint("⌘K", "Actions")
+            }
+        }
+    }
+
+    private func hint(_ key: String, _ label: String) -> some View {
+        HStack(spacing: 5) {
+            Text(key)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(RoachPalette.text)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(RoachPalette.panelGlass)
+                )
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(RoachPalette.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+    }
+}
+
+private struct CommandPaletteSectionHeader: View {
+    let title: String
+    let count: Int
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(1.1)
+                .foregroundStyle(accent)
+
+            Rectangle()
+                .fill(accent.opacity(0.18))
+                .frame(height: 1)
+
+            Text("\(count)")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(RoachPalette.muted)
+        }
+    }
+}
+
+private struct CommandPaletteEmptyState: View {
+    let hasQuery: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: hasQuery ? "magnifyingglass" : "command.circle")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(RoachPalette.green)
+
+            Text(hasQuery ? "Nothing crawled out." : "Command index is empty.")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(RoachPalette.text)
+
+            Text(hasQuery ? "Try vault, dev, update, logs, model, or anything with a real file behind it." : "Refresh the runtime and try again.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RoachPalette.muted)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(RoachPalette.panelRaised.opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(RoachPalette.border, lineWidth: 1)
+        )
+    }
+}
+
 private struct CommandPaletteSheet: View {
     let entries: [CommandPaletteEntry]
     let featuredEntries: [CommandPaletteEntry]
+    let recentEntries: [CommandPaletteEntry]
+    let leadingReservedWidth: CGFloat
     let onSelect: (CommandPaletteEntry) -> Void
     let onDismiss: () -> Void
 
     @State private var query = ""
     @State private var selectedEntryID: String?
+    @State private var appeared = false
+    @State private var showActionPanel = false
+    @State private var keyMonitor: Any?
     @FocusState private var queryFocused: Bool
 
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var filteredEntries: [CommandPaletteEntry] {
-        Array(filteredCommandPaletteEntries(from: entries, query: query).prefix(24))
+        Array(commandPaletteVisibleEntries(
+            entries: entries,
+            recentEntries: recentEntries,
+            query: query
+        ).prefix(32))
     }
 
     private var groupedEntries: [(String, [CommandPaletteEntry])] {
-        groupedCommandPaletteEntries(filteredEntries)
+        groupedCommandPaletteEntries(
+            filteredEntries,
+            recentIDs: trimmedQuery.isEmpty ? Set(recentEntries.map(\.id)) : []
+        )
     }
 
     private var selectedEntry: CommandPaletteEntry? {
@@ -909,105 +1481,212 @@ private struct CommandPaletteSheet: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let isTight = proxy.size.width < 900 || proxy.size.height < 620
+            let isTight = proxy.size.width < 920 || proxy.size.height < 640
+            let reservedWidth = min(max(leadingReservedWidth, 0), proxy.size.width * 0.38)
+            let usableWidth = max(380, proxy.size.width - reservedWidth)
+            let panelWidth = min(usableWidth - 30, isTight ? 820 : 940)
+            let panelHeight = min(proxy.size.height - 34, isTight ? 570 : 620)
 
             ZStack {
-                RoachBackground()
+                Color.black.opacity(0.48)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        onDismiss()
+                    }
 
-                RoachPanel {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Command Bar")
-                                        .font(.system(size: isTight ? 24 : 30, weight: .bold, design: .rounded))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Text("Launch panes, steer RoachClaw, and jump into the next useful move without hunting through the shell.")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
-                                    Text("Cmd-K in RoachNet · \(RoachNetGlobalHotKey.hint) anywhere on your Mac")
-                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(RoachPalette.green)
-                                }
+                VStack(alignment: .leading, spacing: isTight ? 10 : 11) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "command")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(RoachPalette.green)
+                                .frame(width: 32, height: 32)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .fill(RoachPalette.green.opacity(0.12))
+                                )
 
-                                Spacer()
-
-                                Button("Close") {
-                                    onDismiss()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-                            }
-
-                            VStack(alignment: .leading, spacing: 14) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Command Bar")
-                                        .font(.system(size: isTight ? 24 : 30, weight: .bold, design: .rounded))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Text("Launch panes, steer RoachClaw, and jump into the next useful move without hunting through the shell.")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
-                                    Text("Cmd-K in RoachNet · \(RoachNetGlobalHotKey.hint) anywhere on your Mac")
-                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(RoachPalette.green)
-                                }
-
-                                Button("Close") {
-                                    onDismiss()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-                            }
-                        }
-
-                        RoachInsetPanel {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "magnifyingglass")
-                                        .foregroundStyle(RoachPalette.green)
-
-                                    TextField("Search commands, panes, installs, voice, AI routes, and settings", text: $query)
-                                        .textFieldStyle(.plain)
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundStyle(RoachPalette.text)
-                                        .focused($queryFocused)
-                                        .onSubmit {
-                                            activateSelection()
-                                        }
-                                }
-                                Text("Showing \(filteredEntries.count) of \(entries.count) commands")
-                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Command Bar")
+                                    .font(.system(size: isTight ? 18 : 20, weight: .bold, design: .rounded))
+                                    .foregroundStyle(RoachPalette.text)
+                                Text(trimmedQuery.isEmpty ? "Search the whole machine room." : "\(filteredEntries.count) matches")
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     .foregroundStyle(RoachPalette.muted)
                             }
-                            .padding(.horizontal, 4)
                         }
 
-                        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !featuredEntries.isEmpty {
-                            CommandPaletteFeaturedRail(entries: featuredEntries) { entry in
-                                onSelect(entry)
+                        Spacer()
+
+                        Button {
+                            onDismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .frame(width: 16, height: 16)
+                        }
+                        .buttonStyle(RoachUtilityButtonStyle(tint: RoachPalette.muted))
+                        .help("Close command bar")
+                    }
+
+                    HStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(selectedEntry?.accent ?? RoachPalette.green)
+                            .font(.system(size: 15, weight: .semibold))
+
+                        TextField("Search RoachNet", text: $query)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(RoachPalette.text)
+                            .focused($queryFocused)
+                            .onSubmit {
+                                activateSelection()
                             }
+
+                        Spacer(minLength: 8)
+
+                        if !trimmedQuery.isEmpty {
+                            Button {
+                                query = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(RoachPalette.muted)
+                            .help("Clear search")
                         }
 
-                        if isTight {
+                        CommandPaletteKeyHintStrip(
+                            selectedAction: selectedEntry?.actionLabel ?? "Open",
+                            actionPanelVisible: showActionPanel
+                        )
+                    }
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 17, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        RoachPalette.panelRaised.opacity(0.82),
+                                        Color.black.opacity(0.24),
+                                        (selectedEntry?.accent ?? RoachPalette.green).opacity(0.07),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 17, style: .continuous)
+                            .stroke((selectedEntry?.accent ?? RoachPalette.green).opacity(0.18), lineWidth: 1)
+                    )
+                    .shadow(color: (selectedEntry?.accent ?? RoachPalette.green).opacity(0.10), radius: 18, y: 10)
+
+                    if isTight {
+                        paletteResultsList
+                    } else {
+                        HStack(alignment: .top, spacing: 14) {
                             paletteResultsList
-                        } else {
-                            HStack(alignment: .top, spacing: 16) {
-                                paletteResultsList
-                                    .frame(width: min(proxy.size.width * 0.54, 420), alignment: .leading)
-                                CommandPalettePreview(entry: selectedEntry)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
+                                .frame(width: min(max(panelWidth * 0.52, 390), 500), alignment: .leading)
+                            CommandPalettePreview(
+                                entry: selectedEntry,
+                                showActionPanel: showActionPanel,
+                                onSelect: onSelect,
+                                onCopyTarget: copyCommandTarget
+                            )
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
-                .frame(maxWidth: min(proxy.size.width - 28, 920), maxHeight: min(proxy.size.height - 28, 620))
-                .padding(14)
+                .padding(isTight ? 14 : 16)
+                .frame(width: panelWidth, height: panelHeight, alignment: .topLeading)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.94),
+                                    RoachPalette.panel.opacity(0.98),
+                                    Color.black.opacity(0.88),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.08),
+                                    Color.clear,
+                                    RoachPalette.green.opacity(0.035),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .blendMode(.screen)
+                        .allowsHitTesting(false)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.14),
+                                    (selectedEntry?.accent ?? RoachPalette.green).opacity(0.20),
+                                    Color.white.opacity(0.04),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: RoachPalette.shadow.opacity(0.62), radius: 44, x: 0, y: 24)
+                .shadow(color: (selectedEntry?.accent ?? RoachPalette.green).opacity(0.09), radius: 54, x: 0, y: 28)
+                .padding(17)
+                .padding(.leading, reservedWidth)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: reservedWidth > 0 ? .topLeading : .center
+                )
+                .opacity(appeared ? 1 : 0)
+                .scaleEffect(appeared ? 1 : 0.965, anchor: .top)
+                .offset(y: appeared ? 0 : -10)
             }
         }
         .onAppear {
             selectedEntryID = filteredEntries.first?.id
-            queryFocused = true
+            installKeyMonitor()
+            requestQueryFocus()
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
+                appeared = true
+            }
+        }
+        .onDisappear {
+            removeKeyMonitor()
         }
         .onChange(of: query) { _, _ in
             selectedEntryID = filteredEntries.first?.id
+            showActionPanel = false
+        }
+        .onChange(of: filteredEntries) { _, entries in
+            guard !entries.isEmpty else {
+                selectedEntryID = nil
+                return
+            }
+            if let selectedEntryID, entries.contains(where: { $0.id == selectedEntryID }) {
+                return
+            }
+            selectedEntryID = entries.first?.id
         }
         .onMoveCommand { direction in
             switch direction {
@@ -1019,40 +1698,57 @@ private struct CommandPaletteSheet: View {
         .onExitCommand {
             onDismiss()
         }
+        .animation(.spring(response: 0.24, dampingFraction: 0.86), value: selectedEntryID)
+        .animation(.spring(response: 0.24, dampingFraction: 0.88), value: trimmedQuery)
+        .animation(.spring(response: 0.22, dampingFraction: 0.88), value: showActionPanel)
     }
 
     private var paletteResultsList: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(groupedEntries, id: \.0) { section, items in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(section.uppercased())
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .tracking(1.1)
-                            .foregroundStyle(RoachPalette.muted)
+        ScrollViewReader { reader in
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(groupedEntries, id: \.0) { section, items in
+                        VStack(alignment: .leading, spacing: 7) {
+                            CommandPaletteSectionHeader(
+                                title: section,
+                                count: items.count,
+                                accent: items.first?.accent ?? RoachPalette.green
+                            )
 
-                        ForEach(items) { entry in
-                            Button {
-                                onSelect(entry)
-                            } label: {
-                                CommandPaletteRow(entry: entry, isSelected: selectedEntry?.id == entry.id)
-                            }
-                            .buttonStyle(.plain)
-                            .onHover { hovering in
-                                guard hovering else { return }
-                                selectedEntryID = entry.id
+                            ForEach(items) { entry in
+                                Button {
+                                    onSelect(entry)
+                                } label: {
+                                    CommandPaletteRow(
+                                        entry: entry,
+                                        isSelected: selectedEntry?.id == entry.id,
+                                        index: filteredEntries.firstIndex(of: entry)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .id(entry.id)
+                                .onHover { hovering in
+                                    guard hovering else { return }
+                                    selectedEntryID = entry.id
+                                }
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
                             }
                         }
                     }
-                }
 
-                if filteredEntries.isEmpty {
-                    RoachInsetPanel {
-                        Text("No commands matched that search yet.")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    if filteredEntries.isEmpty {
+                        CommandPaletteEmptyState(hasQuery: !trimmedQuery.isEmpty)
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     }
+                }
+            }
+            .onChange(of: selectedEntryID) { _, id in
+                guard let id else { return }
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
+                    reader.scrollTo(id, anchor: .center)
                 }
             }
         }
@@ -1061,7 +1757,7 @@ private struct CommandPaletteSheet: View {
     private func moveSelection(delta: Int) {
         guard !filteredEntries.isEmpty else { return }
         let currentIndex = filteredEntries.firstIndex(where: { $0.id == selectedEntry?.id }) ?? 0
-        let nextIndex = min(max(currentIndex + delta, 0), filteredEntries.count - 1)
+        let nextIndex = (currentIndex + delta + filteredEntries.count) % filteredEntries.count
         selectedEntryID = filteredEntries[nextIndex].id
     }
 
@@ -1070,20 +1766,111 @@ private struct CommandPaletteSheet: View {
             onSelect(selectedEntry)
         }
     }
+
+    private func copySelectedTarget() {
+        guard let selectedEntry else { return }
+        copyCommandTarget(selectedEntry)
+    }
+
+    private func copyCommandTarget(_ entry: CommandPaletteEntry) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(entry.copyTargetPayload, forType: .string)
+    }
+
+    private func activateEntry(at index: Int) {
+        guard filteredEntries.indices.contains(index) else { return }
+        onSelect(filteredEntries[index])
+    }
+
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            if flags.contains(.command), event.keyCode == 40 {
+                showActionPanel.toggle()
+                return nil
+            }
+
+            if flags.contains(.command), let index = commandPaletteNumberIndex(for: event.keyCode) {
+                activateEntry(at: index)
+                return nil
+            }
+
+            switch event.keyCode {
+            case 125:
+                moveSelection(delta: 1)
+                return nil
+            case 126:
+                moveSelection(delta: -1)
+                return nil
+            case 36, 76:
+                if flags.contains(.option) {
+                    copySelectedTarget()
+                    return nil
+                }
+                activateSelection()
+                return nil
+            case 53:
+                onDismiss()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+    }
+
+    private func requestQueryFocus() {
+        queryFocused = false
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        DispatchQueue.main.async {
+            queryFocused = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            queryFocused = true
+        }
+    }
 }
 
 private struct DetachedCommandPaletteView: View {
     let entries: [CommandPaletteEntry]
     let featuredEntries: [CommandPaletteEntry]
+    let recentEntries: [CommandPaletteEntry]
     let onSelect: (CommandPaletteEntry) -> Void
     let onDismiss: () -> Void
 
     @State private var query = ""
     @State private var selectedEntryID: String?
+    @State private var appeared = false
+    @State private var showActionPanel = false
+    @State private var keyMonitor: Any?
     @FocusState private var queryFocused: Bool
 
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var filteredEntries: [CommandPaletteEntry] {
-        Array(filteredCommandPaletteEntries(from: entries, query: query).prefix(10))
+        Array(commandPaletteVisibleEntries(
+            entries: entries,
+            recentEntries: recentEntries,
+            query: query
+        ).prefix(32))
+    }
+
+    private var groupedEntries: [(String, [CommandPaletteEntry])] {
+        groupedCommandPaletteEntries(
+            filteredEntries,
+            recentIDs: trimmedQuery.isEmpty ? Set(recentEntries.map(\.id)) : []
+        )
     }
 
     private var selectedEntry: CommandPaletteEntry? {
@@ -1096,88 +1883,134 @@ private struct DetachedCommandPaletteView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let isWide = proxy.size.width > 760
+            let panelWidth = min(proxy.size.width - 32, isWide ? 850 : 740)
+            let panelHeight = min(proxy.size.height - 40, isWide ? 570 : 540)
+
             VStack(spacing: 0) {
-                RoachPanel {
-                    VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .center, spacing: 12) {
+                            Image(systemName: "command")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(RoachPalette.green)
+                                .frame(width: 32, height: 32)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .fill(RoachPalette.green.opacity(0.12))
+                                )
+
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("RoachNet Command Bar")
-                                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                                Text("Command Bar")
+                                    .font(.system(size: 17, weight: .bold, design: .rounded))
                                     .foregroundStyle(RoachPalette.text)
-                                Text("Quick-launch the next useful move without bringing the full shell forward.")
-                                    .font(.system(size: 12, weight: .medium))
+                                Text(trimmedQuery.isEmpty ? "Search the whole machine room." : "\(filteredEntries.count) matches")
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     .foregroundStyle(RoachPalette.muted)
                             }
 
                             Spacer()
+                        }
 
-                            Text(RoachNetGlobalHotKey.hint)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(RoachPalette.green)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(RoachPalette.panelGlass)
+                        HStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(selectedEntry?.accent ?? RoachPalette.green)
+
+                            TextField("Search RoachNet", text: $query)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(RoachPalette.text)
+                                .focused($queryFocused)
+                                .onSubmit {
+                                    activateSelection()
+                                }
+
+                            if !trimmedQuery.isEmpty {
+                                Button {
+                                    query = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 13, weight: .semibold))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(RoachPalette.muted)
+                                .help("Clear search")
+                            }
+
+                            CommandPaletteKeyHintStrip(
+                                selectedAction: selectedEntry?.actionLabel ?? "Open",
+                                actionPanelVisible: showActionPanel
+                            )
+                        }
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 11)
+                        .background(
+                            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                                .fill(RoachPalette.panelRaised.opacity(0.82))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                                .stroke((selectedEntry?.accent ?? RoachPalette.green).opacity(0.18), lineWidth: 1)
+                        )
+
+                        if isWide {
+                            HStack(alignment: .top, spacing: 16) {
+                                paletteResultsList
+                                    .frame(width: min(max(panelWidth * 0.50, 340), 430), alignment: .leading)
+                                CommandPalettePreview(
+                                    entry: selectedEntry,
+                                    showActionPanel: showActionPanel,
+                                    onSelect: onSelect,
+                                    onCopyTarget: copyCommandTarget
                                 )
-                        }
-
-                        RoachInsetPanel {
-                            HStack(spacing: 12) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(RoachPalette.green)
-
-                                TextField("Search commands, voice requests, installs, and AI controls", text: $query)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(RoachPalette.text)
-                                    .focused($queryFocused)
-                                    .onSubmit {
-                                        activateSelection()
-                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .padding(.horizontal, 4)
+                        } else {
+                            paletteResultsList
                         }
-
-                        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !featuredEntries.isEmpty {
-                            CommandPaletteFeaturedRail(entries: Array(featuredEntries.prefix(4))) { entry in
-                                onSelect(entry)
-                            }
-                        }
-
-                        ScrollView(showsIndicators: false) {
-                            VStack(spacing: 10) {
-                                ForEach(filteredEntries) { entry in
-                                    Button {
-                                        onSelect(entry)
-                                    } label: {
-                                        CommandPaletteRow(entry: entry, isSelected: selectedEntry?.id == entry.id)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .onHover { hovering in
-                                        guard hovering else { return }
-                                        selectedEntryID = entry.id
-                                    }
-                                }
-
-                                if filteredEntries.isEmpty {
-                                    RoachInsetPanel {
-                                        Text("No commands matched that search yet.")
-                                            .font(.system(size: 13, weight: .medium))
-                                            .foregroundStyle(RoachPalette.muted)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
+                .padding(14)
                 .frame(
-                    width: min(proxy.size.width - 32, 740),
-                    height: min(proxy.size.height - 40, 520)
+                    width: panelWidth,
+                    height: panelHeight
                 )
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.94),
+                                    RoachPalette.panel.opacity(0.98),
+                                    Color.black.opacity(0.88),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.14),
+                                    (selectedEntry?.accent ?? RoachPalette.green).opacity(0.20),
+                                    Color.white.opacity(0.04),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: RoachPalette.shadow.opacity(0.62), radius: 44, x: 0, y: 24)
+                .shadow(color: (selectedEntry?.accent ?? RoachPalette.green).opacity(0.09), radius: 54, x: 0, y: 28)
                 .padding(.top, 22)
+                .opacity(appeared ? 1 : 0)
+                .scaleEffect(appeared ? 1 : 0.965, anchor: .top)
+                .offset(y: appeared ? 0 : -10)
 
                 Spacer(minLength: 0)
             }
@@ -1186,10 +2019,28 @@ private struct DetachedCommandPaletteView: View {
         }
         .onAppear {
             selectedEntryID = filteredEntries.first?.id
-            queryFocused = true
+            installKeyMonitor()
+            requestQueryFocus()
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
+                appeared = true
+            }
+        }
+        .onDisappear {
+            removeKeyMonitor()
         }
         .onChange(of: query) { _, _ in
             selectedEntryID = filteredEntries.first?.id
+            showActionPanel = false
+        }
+        .onChange(of: filteredEntries) { _, entries in
+            guard !entries.isEmpty else {
+                selectedEntryID = nil
+                return
+            }
+            if let selectedEntryID, entries.contains(where: { $0.id == selectedEntryID }) {
+                return
+            }
+            selectedEntryID = entries.first?.id
         }
         .onMoveCommand { direction in
             switch direction {
@@ -1201,18 +2052,139 @@ private struct DetachedCommandPaletteView: View {
         .onExitCommand {
             onDismiss()
         }
+        .animation(.spring(response: 0.24, dampingFraction: 0.86), value: selectedEntryID)
+        .animation(.spring(response: 0.24, dampingFraction: 0.88), value: trimmedQuery)
+        .animation(.spring(response: 0.22, dampingFraction: 0.88), value: showActionPanel)
     }
 
     private func moveSelection(delta: Int) {
         guard !filteredEntries.isEmpty else { return }
         let currentIndex = filteredEntries.firstIndex(where: { $0.id == selectedEntry?.id }) ?? 0
-        let nextIndex = min(max(currentIndex + delta, 0), filteredEntries.count - 1)
+        let nextIndex = (currentIndex + delta + filteredEntries.count) % filteredEntries.count
         selectedEntryID = filteredEntries[nextIndex].id
     }
 
     private func activateSelection() {
         if let selectedEntry {
             onSelect(selectedEntry)
+        }
+    }
+
+    private func copySelectedTarget() {
+        guard let selectedEntry else { return }
+        copyCommandTarget(selectedEntry)
+    }
+
+    private func copyCommandTarget(_ entry: CommandPaletteEntry) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(entry.copyTargetPayload, forType: .string)
+    }
+
+    private func activateEntry(at index: Int) {
+        guard filteredEntries.indices.contains(index) else { return }
+        onSelect(filteredEntries[index])
+    }
+
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            if flags.contains(.command), event.keyCode == 40 {
+                showActionPanel.toggle()
+                return nil
+            }
+
+            if flags.contains(.command), let index = commandPaletteNumberIndex(for: event.keyCode) {
+                activateEntry(at: index)
+                return nil
+            }
+
+            switch event.keyCode {
+            case 125:
+                moveSelection(delta: 1)
+                return nil
+            case 126:
+                moveSelection(delta: -1)
+                return nil
+            case 36, 76:
+                if flags.contains(.option) {
+                    copySelectedTarget()
+                    return nil
+                }
+                activateSelection()
+                return nil
+            case 53:
+                onDismiss()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+    }
+
+    private func requestQueryFocus() {
+        queryFocused = false
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        DispatchQueue.main.async {
+            queryFocused = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            queryFocused = true
+        }
+    }
+
+    private var paletteResultsList: some View {
+        ScrollViewReader { reader in
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(groupedEntries, id: \.0) { section, items in
+                        VStack(alignment: .leading, spacing: 7) {
+                            CommandPaletteSectionHeader(
+                                title: section,
+                                count: items.count,
+                                accent: items.first?.accent ?? RoachPalette.green
+                            )
+
+                            ForEach(items) { entry in
+                                Button {
+                                    onSelect(entry)
+                                } label: {
+                                    CommandPaletteRow(
+                                        entry: entry,
+                                        isSelected: selectedEntry?.id == entry.id,
+                                        index: filteredEntries.firstIndex(of: entry)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .id(entry.id)
+                                .onHover { hovering in
+                                    guard hovering else { return }
+                                    selectedEntryID = entry.id
+                                }
+                            }
+                        }
+                    }
+
+                    if filteredEntries.isEmpty {
+                        CommandPaletteEmptyState(hasQuery: !trimmedQuery.isEmpty)
+                    }
+                }
+            }
+            .onChange(of: selectedEntryID) { _, id in
+                guard let id else { return }
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
+                    reader.scrollTo(id, anchor: .center)
+                }
+            }
         }
     }
 }
@@ -1229,11 +2201,16 @@ private final class DetachedCommandPaletteCoordinator: ObservableObject {
     func present(
         entries: [CommandPaletteEntry],
         featuredEntries: [CommandPaletteEntry],
+        recentEntries: [CommandPaletteEntry],
         onSelect: @escaping (CommandPaletteEntry) -> Void
     ) {
         dismiss()
 
-        let controller = DetachedCommandPaletteWindowController(entries: entries, featuredEntries: featuredEntries) { [weak self] entry in
+        let controller = DetachedCommandPaletteWindowController(
+            entries: entries,
+            featuredEntries: featuredEntries,
+            recentEntries: recentEntries
+        ) { [weak self] entry in
             self?.dismiss()
             onSelect(entry)
         } onClose: { [weak self] in
@@ -1256,6 +2233,7 @@ private final class DetachedCommandPaletteWindowController: NSWindowController, 
     init(
         entries: [CommandPaletteEntry],
         featuredEntries: [CommandPaletteEntry],
+        recentEntries: [CommandPaletteEntry],
         onSelect: @escaping (CommandPaletteEntry) -> Void,
         onClose: @escaping () -> Void
     ) {
@@ -1274,7 +2252,10 @@ private final class DetachedCommandPaletteWindowController: NSWindowController, 
         window.isFloatingPanel = true
         window.isMovableByWindowBackground = false
         window.hidesOnDeactivate = false
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace, .transient]
+        // AppKit rejects combining `.canJoinAllSpaces` with `.moveToActiveSpace`
+        // on this borderless non-activating panel. Keep the global palette stable
+        // across Spaces and position it explicitly in `showPalette()`.
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.animationBehavior = .utilityWindow
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -1285,6 +2266,7 @@ private final class DetachedCommandPaletteWindowController: NSWindowController, 
         let rootView = DetachedCommandPaletteView(
             entries: entries,
             featuredEntries: featuredEntries,
+            recentEntries: recentEntries,
             onSelect: { [weak self] entry in
                 onSelect(entry)
                 self?.close()
@@ -1331,8 +2313,24 @@ private final class DetachedCommandPaletteWindowController: NSWindowController, 
 }
 
 @MainActor
+private final class VaultDropImportBatch: @unchecked Sendable {
+    let expectedCount: Int
+    var importedURLs: [URL] = []
+    var failureMessages: [String] = []
+
+    init(expectedCount: Int) {
+        self.expectedCount = expectedCount
+    }
+
+    var isComplete: Bool {
+        importedURLs.count + failureMessages.count == expectedCount
+    }
+}
+
+@MainActor
 final class WorkspaceModel: ObservableObject {
     private static let roachClawContextPermissionsKey = "roachnet.roachclaw.context-permissions"
+    private static let roachClawContextBudgetKey = "roachnet.roachclaw.context-character-budget"
 
     @Published var selectedPane: WorkspacePane? = .home
     @Published var config: RoachNetInstallerConfig = RoachNetRepositoryLocator.readConfig()
@@ -1342,7 +2340,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var statusLine: String = "Native shell ready."
     @Published var chatLines: [ChatLine] = [
         .init(role: "System", text: "RoachNet is up."),
-        .init(role: "RoachClaw", text: "Talk to the local lane, keep the good parts close, and stay private by default."),
+        .init(role: "RoachClaw", text: "Local lane ready."),
     ]
     @Published var promptDraft: String = ""
     @Published var selectedChatModel: String = ""
@@ -1357,12 +2355,21 @@ final class WorkspaceModel: ObservableObject {
     @Published var isRelocatingStorage = false
     @Published var activeActions: Set<String> = []
     @Published var roachClawContextPermissions = WorkspaceModel.loadRoachClawContextPermissions()
+    @Published var roachClawContextCharacterBudget = WorkspaceModel.loadRoachClawContextBudget() {
+        didSet { persistRoachClawContextBudget() }
+    }
     @Published var presentedWebSurface: PresentedWebSurface?
     @Published var presentedVaultAsset: PresentedVaultAsset?
     @Published var importedObsidianVaults: [ImportedObsidianVault] = []
     @Published var selectedImportedVaultID: String?
     @Published var roachArcadeStore = RoachArcadeLibraryStore()
     @Published var roachArchiveStore = RoachArchiveStore()
+    @Published var latestVersionInfo: RoachNetLatestVersionResponse?
+    @Published var systemUpdateStatus: RoachNetSystemUpdateStatusResponse?
+    @Published var benchmarkStatus: RoachNetBenchmarkStatusResponse?
+    @Published var isCheckingForUpdates = false
+    @Published var isRequestingUpdate = false
+    @Published var isRunningBenchmark = false
     private var attemptedRoachClawBootstrap = false
     private var attemptedRoachClawServiceBootstrap = false
     private var attemptedInstalledServiceBootstrap = false
@@ -1384,8 +2391,10 @@ final class WorkspaceModel: ObservableObject {
     }
     private var installLooksPrepared: Bool {
         let fileManager = FileManager.default
-        return fileManager.fileExists(atPath: URL(fileURLWithPath: installPath).appendingPathComponent("scripts/run-roachnet.mjs").path)
-            && fileManager.fileExists(atPath: URL(fileURLWithPath: installPath).appendingPathComponent("admin/package.json").path)
+        let installURL = URL(fileURLWithPath: installPath)
+        let hasNativeLauncher = fileManager.fileExists(atPath: installURL.appendingPathComponent("scripts/run-roachnet-native-api.mjs").path)
+        let hasLegacyLauncher = fileManager.fileExists(atPath: installURL.appendingPathComponent("scripts/run-roachnet.mjs").path)
+        return (hasNativeLauncher || hasLegacyLauncher)
             && fileManager.fileExists(atPath: installedAppPath)
     }
     var chatModelOptions: [String] {
@@ -1520,11 +2529,42 @@ final class WorkspaceModel: ObservableObject {
     var latestRoachClawReply: String? {
         chatLines.last(where: { $0.role == "RoachClaw" })?.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    var speechCapabilitySnapshot: RoachSpeechCapabilitySnapshot {
+        speechController.capabilitySnapshot
+    }
     var enabledRoachClawContextCount: Int {
         RoachClawContextScope.allCases.filter { roachClawContextPermissions.isEnabled($0) }.count
     }
     var hasFullRoachClawContextAccess: Bool {
         enabledRoachClawContextCount == RoachClawContextScope.allCases.count
+    }
+    var latestVersionLabel: String {
+        guard let latestVersionInfo else { return "Not checked" }
+        return latestVersionInfo.updateAvailable ? latestVersionInfo.latestVersion : "Current"
+    }
+    var latestVersionDetail: String {
+        guard let latestVersionInfo else { return "Manual check available" }
+        return latestVersionInfo.message ?? "\(latestVersionInfo.currentVersion) -> \(latestVersionInfo.latestVersion)"
+    }
+    var systemUpdateStageLabel: String {
+        systemUpdateStatus?.stage.capitalized ?? "Idle"
+    }
+    var systemUpdateDetail: String {
+        systemUpdateStatus?.message ?? "No update in progress"
+    }
+    var canRequestSystemUpdate: Bool {
+        guard let latestVersionInfo else { return false }
+        let stage = systemUpdateStatus?.stage.lowercased() ?? "idle"
+        return latestVersionInfo.updateAvailable && ["idle", "complete", "error"].contains(stage)
+    }
+    var benchmarkStatusLabel: String {
+        benchmarkStatus?.status.capitalized ?? "Idle"
+    }
+    var benchmarkDetail: String {
+        if let benchmarkId = benchmarkStatus?.benchmarkId, !benchmarkId.isEmpty {
+            return benchmarkId
+        }
+        return isRunningBenchmark ? "Running locally" : "Ready to run"
     }
 
     func refreshConfigOnly() {
@@ -1560,6 +2600,12 @@ final class WorkspaceModel: ObservableObject {
         errorLine = nil
     }
 
+    func setRoachClawContextBudget(_ value: Int) {
+        roachClawContextCharacterBudget = min(max(value, 3_000), 40_000)
+        statusLine = "Updated RoachClaw context budget."
+        errorLine = nil
+    }
+
     func dismissPendingLaunchIntro() {
         guard config.pendingLaunchIntro else { return }
 
@@ -1588,9 +2634,19 @@ final class WorkspaceModel: ObservableObject {
         return permissions
     }
 
+    private static func loadRoachClawContextBudget() -> Int {
+        let stored = UserDefaults.standard.integer(forKey: roachClawContextBudgetKey)
+        guard stored > 0 else { return 12_000 }
+        return min(max(stored, 3_000), 40_000)
+    }
+
     private func persistRoachClawContextPermissions() {
         guard let data = try? JSONEncoder().encode(roachClawContextPermissions) else { return }
         UserDefaults.standard.set(data, forKey: Self.roachClawContextPermissionsKey)
+    }
+
+    private func persistRoachClawContextBudget() {
+        UserDefaults.standard.set(roachClawContextCharacterBudget, forKey: Self.roachClawContextBudgetKey)
     }
 
     private func reconcilePreparedWorkspaceConfigIfNeeded() {
@@ -1857,7 +2913,7 @@ final class WorkspaceModel: ObservableObject {
 
         dictationSeedDraft = promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         errorLine = nil
-        speechStatusLine = "Listening on-device."
+        speechStatusLine = "\(speechCapabilitySnapshot.engineName) listening. \(speechCapabilitySnapshot.sttModeLabel), no server detour."
 
         do {
             try await speechController.startTranscription { [weak self] transcript in
@@ -1866,12 +2922,12 @@ final class WorkspaceModel: ObservableObject {
                 self?.finishDictation(transcript)
             }
             isDictatingPrompt = true
-            statusLine = "Voice prompt lane is live."
+            statusLine = "RoachSpeech voice lane is live."
         } catch {
             isDictatingPrompt = false
             speechStatusLine = nil
             errorLine = error.localizedDescription
-            statusLine = "Voice prompt lane unavailable."
+            statusLine = "RoachSpeech lane unavailable."
         }
     }
 
@@ -1889,7 +2945,7 @@ final class WorkspaceModel: ObservableObject {
         }
 
         errorLine = nil
-        speechStatusLine = "Reading back the latest reply."
+        speechStatusLine = "\(speechCapabilitySnapshot.engineName) reading back the latest reply."
         isSpeakingLatestReply = true
         speechController.speak(latestReply) { [weak self] finished in
             Task { @MainActor in
@@ -2043,6 +3099,116 @@ final class WorkspaceModel: ObservableObject {
         } catch {
             errorLine = error.localizedDescription
             statusLine = "Obsidian import failed."
+        }
+    }
+
+    @discardableResult
+    func importDroppedVaultProviders(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else {
+            errorLine = "Drop files or folders from Finder. RoachNet cannot stash that payload."
+            return false
+        }
+
+        statusLine = "Dragging loot into the vault."
+        errorLine = nil
+
+        let batch = VaultDropImportBatch(expectedCount: fileProviders.count)
+
+        for provider in fileProviders {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, error in
+                let errorMessage = error?.localizedDescription
+                let sourceURL = Self.fileURL(fromDroppedItem: item)
+
+                Task { @MainActor in
+                    guard let self else { return }
+
+                    if let errorMessage {
+                        batch.failureMessages.append(errorMessage)
+                    } else if let sourceURL {
+                        do {
+                            let importedURL = try self.importVaultItem(from: sourceURL)
+                            batch.importedURLs.append(importedURL)
+                        } catch {
+                            batch.failureMessages.append(error.localizedDescription)
+                        }
+                    } else {
+                        batch.failureMessages.append("Finder did not hand RoachNet a usable file URL.")
+                    }
+
+                    guard batch.isComplete else { return }
+                    self.finishDroppedVaultImport(importedURLs: batch.importedURLs, failures: batch.failureMessages)
+                }
+            }
+        }
+
+        return true
+    }
+
+    nonisolated private static func fileURL(fromDroppedItem item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL, url.isFileURL {
+            return url
+        }
+        if let url = item as? NSURL, (url as URL).isFileURL {
+            return url as URL
+        }
+        if let data = item as? Data,
+           let url = NSURL(absoluteURLWithDataRepresentation: data, relativeTo: nil) as URL?,
+           url.isFileURL {
+            return url
+        }
+        if let string = item as? String {
+            if let url = URL(string: string), url.isFileURL {
+                return url
+            }
+            let fileURL = URL(fileURLWithPath: NSString(string: string).expandingTildeInPath)
+            return fileURL.isFileURL ? fileURL : nil
+        }
+        return nil
+    }
+
+    private func importVaultItem(from sourceURL: URL) throws -> URL {
+        let fileManager = FileManager.default
+        let vaultRoot = VaultDropImportSupport.vaultRootURL(storagePath: storagePath)
+        try fileManager.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+
+        let source = sourceURL.standardizedFileURL
+        let accessed = source.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                source.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard fileManager.fileExists(atPath: source.path) else {
+            throw NSError(
+                domain: "RoachNetVaultDrop",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "\(source.lastPathComponent) is not available anymore."]
+            )
+        }
+
+        if VaultDropImportSupport.isInsideVault(source, vaultRootURL: vaultRoot) {
+            return source
+        }
+
+        let destination = VaultDropImportSupport.destinationURL(for: source, in: vaultRoot, fileManager: fileManager)
+        try fileManager.copyItem(at: source, to: destination)
+        return destination
+    }
+
+    private func finishDroppedVaultImport(importedURLs: [URL], failures: [String]) {
+        if let firstURL = importedURLs.first {
+            previewVaultURL(firstURL, subtitle: firstURL.path)
+        }
+
+        if importedURLs.isEmpty {
+            errorLine = failures.first ?? "Vault drop failed."
+            statusLine = "Vault drop failed."
+        } else {
+            statusLine = "Vault swallowed \(importedURLs.count) item\(importedURLs.count == 1 ? "" : "s")."
+            errorLine = failures.isEmpty ? nil : "\(failures.count) item\(failures.count == 1 ? "" : "s") failed to import."
+            Task { await refreshRuntimeState(silently: true) }
         }
     }
 
@@ -2374,6 +3540,17 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    func downloadRoachSpeechPack(url: String, packID: String, kind: String) async {
+        await runAction("roachspeech-\(packID)", status: "Queueing RoachSpeech pack.") {
+            _ = try await ManagedAppRuntimeBridge.shared.downloadRoachSpeechPack(
+                using: self.config,
+                url: url,
+                packID: packID,
+                kind: kind
+            )
+        }
+    }
+
     func applyWikipediaSelection() async {
         let optionId = selectedWikipediaOptionId
         await runAction("wikipedia-\(optionId)", status: "Updating Wikipedia selection.") {
@@ -2647,9 +3824,15 @@ final class WorkspaceModel: ObservableObject {
 
         guard !sections.isEmpty else { return "" }
 
+        let contextBody = sections.joined(separator: "\n\n")
+        let budgetedContextBody = RoachClawContextSupport.normalizedExcerpt(
+            contextBody,
+            maxCharacters: roachClawContextCharacterBudget
+        ) ?? contextBody
+
         return """
         Explicitly permitted local app context:
-        \(sections.joined(separator: "\n\n"))
+        \(budgetedContextBody)
 
         Use this local context only if it materially helps the request. Do not invent files, projects, or archives that are not listed here.
         """
@@ -2814,6 +3997,18 @@ final class WorkspaceModel: ObservableObject {
             }
             selectedPane = .roachClaw
             await queueRoachClawModel(modelName)
+        case "roachspeech-pack", "roachvoice-pack":
+            guard
+                let remoteURL = queryValue("url", in: components),
+                let packID = queryValue("pack", in: components) ?? queryValue("packID", in: components)
+            else {
+                errorLine = "RoachNet couldn't tell which RoachSpeech pack to install."
+                statusLine = "Install link incomplete."
+                return
+            }
+            let kind = queryValue("kind", in: components) ?? "roachVoice"
+            selectedPane = .roachClaw
+            await downloadRoachSpeechPack(url: remoteURL, packID: packID, kind: kind)
         default:
             errorLine = "RoachNet didn't recognize that App Store install action."
             statusLine = "Unknown install action."
@@ -2996,6 +4191,109 @@ final class WorkspaceModel: ObservableObject {
             errorLine = error.localizedDescription
             statusLine = "AI routing update failed."
         }
+    }
+
+    func requestSettingsPane(_ pane: RoachNetSettingsPane) {
+        UserDefaults.standard.set(pane.rawValue, forKey: RoachNetSettingsPane.requestedPaneUserDefaultsKey)
+    }
+
+    func checkForRoachNetUpdates(force: Bool = false) async {
+        guard setupCompleted, !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        errorLine = nil
+        statusLine = "Checking release lane."
+
+        do {
+            latestVersionInfo = try await ManagedAppRuntimeBridge.shared.checkLatestVersion(
+                using: config,
+                force: force
+            )
+            statusLine = latestVersionInfo?.updateAvailable == true ? "Update available." : "RoachNet is current."
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "Update check failed."
+        }
+
+        isCheckingForUpdates = false
+    }
+
+    func refreshUpdateStatusIfNeeded() async {
+        guard setupCompleted, systemUpdateStatus == nil else { return }
+        await refreshSystemUpdateStatus()
+    }
+
+    func refreshSystemUpdateStatus() async {
+        guard setupCompleted else { return }
+
+        do {
+            systemUpdateStatus = try await ManagedAppRuntimeBridge.shared.getSystemUpdateStatus(using: config)
+        } catch {
+            if errorLine == nil {
+                errorLine = error.localizedDescription
+            }
+        }
+    }
+
+    func requestRoachNetUpdate() async {
+        guard setupCompleted, canRequestSystemUpdate, !isRequestingUpdate else { return }
+        isRequestingUpdate = true
+        errorLine = nil
+        statusLine = "Requesting update."
+
+        do {
+            let result = try await ManagedAppRuntimeBridge.shared.requestSystemUpdate(using: config)
+            statusLine = result.message ?? result.note ?? "Update requested."
+            await refreshSystemUpdateStatus()
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "Update request failed."
+        }
+
+        isRequestingUpdate = false
+    }
+
+    func refreshBenchmarkStatusIfNeeded() async {
+        guard setupCompleted, benchmarkStatus == nil else { return }
+        await refreshBenchmarkStatus()
+    }
+
+    func refreshBenchmarkStatus() async {
+        guard setupCompleted else { return }
+
+        do {
+            benchmarkStatus = try await ManagedAppRuntimeBridge.shared.getBenchmarkStatus(using: config)
+        } catch {
+            if errorLine == nil {
+                errorLine = error.localizedDescription
+            }
+        }
+    }
+
+    func runRoachNetBenchmark(type: String) async {
+        guard setupCompleted, !isRunningBenchmark else { return }
+        isRunningBenchmark = true
+        errorLine = nil
+        statusLine = "Starting \(type) benchmark."
+
+        do {
+            let result = try await ManagedAppRuntimeBridge.shared.runBenchmark(
+                using: config,
+                type: type,
+                synchronous: false
+            )
+            statusLine = result.message ?? "Benchmark queued."
+            benchmarkStatus = RoachNetBenchmarkStatusResponse(
+                status: "starting",
+                benchmarkId: result.benchmark_id ?? result.job_id
+            )
+            try? await Task.sleep(for: .milliseconds(400))
+            await refreshBenchmarkStatus()
+        } catch {
+            errorLine = error.localizedDescription
+            statusLine = "Benchmark failed to start."
+        }
+
+        isRunningBenchmark = false
     }
 
     func saveSettingsFromPreferences() async {
@@ -3268,10 +4566,251 @@ private struct ChatBubble: View {
     }
 }
 
+private struct HomeMascotDialogBubble: View {
+    let text: String
+    let accent: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .foregroundStyle(RoachPalette.text)
+            .lineLimit(3)
+            .minimumScaleFactor(0.78)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 18,
+                    bottomTrailingRadius: 8,
+                    topTrailingRadius: 18,
+                    style: .continuous
+                )
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            accent.opacity(0.16),
+                            RoachPalette.panelRaised.opacity(0.82),
+                            Color.black.opacity(0.18),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            )
+            .overlay(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 18,
+                    bottomTrailingRadius: 8,
+                    topTrailingRadius: 18,
+                    style: .continuous
+                )
+                .stroke(accent.opacity(0.22), lineWidth: 1)
+            )
+            .shadow(color: accent.opacity(0.10), radius: 18, y: 10)
+    }
+}
+
+private struct RoachHomeMascotView: View {
+    let isThinking: Bool
+    let isListening: Bool
+    let nudge: Bool
+    let accent: Color
+
+    @State private var isHovering = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: false)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+
+            Canvas { context, size in
+                drawMascot(context: &context, size: size, time: time)
+            }
+        }
+        .scaleEffect(isHovering ? 1.035 : (nudge ? 1.02 : 1.0))
+        .animation(.spring(response: 0.30, dampingFraction: 0.64), value: isHovering)
+        .animation(.spring(response: 0.28, dampingFraction: 0.58), value: nudge)
+        .onHover { isHovering = $0 }
+    }
+
+    private func drawMascot(context: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        let width = max(1, size.width)
+        let height = max(1, size.height)
+        let scale = min(width / 260, height / 210)
+        let center = CGPoint(x: width * 0.50, y: height * 0.56)
+        let sway = CGFloat(sin(time * 2.1)) * 4 * scale
+        let breathe = CGFloat(0.5 + 0.5 * sin(time * 2.8))
+        let antenna = CGFloat(sin(time * (isListening ? 8.0 : 3.2))) * 7 * scale
+        let thinkingPulse = isThinking ? CGFloat(0.5 + 0.5 * sin(time * 6.0)) : 0
+
+        let shadowRect = CGRect(
+            x: center.x - 82 * scale,
+            y: center.y + 58 * scale,
+            width: 164 * scale,
+            height: 18 * scale
+        )
+        context.fill(
+            Path(ellipseIn: shadowRect),
+            with: .color(Color.black.opacity(0.32))
+        )
+
+        drawDitherHalo(context: &context, size: size, time: time, center: center, scale: scale)
+
+        let shellRect = CGRect(
+            x: center.x - 58 * scale + sway,
+            y: center.y - 70 * scale - breathe * 3 * scale,
+            width: 116 * scale,
+            height: 142 * scale
+        )
+        let shell = Path(roundedRect: shellRect, cornerRadius: 48 * scale)
+        context.fill(shell, with: .color(RoachPalette.backgroundRaised.opacity(0.92)))
+        context.fill(
+            shell,
+            with: .linearGradient(
+                Gradient(colors: [
+                    accent.opacity(0.26 + thinkingPulse * 0.10),
+                    RoachPalette.panelRaised.opacity(0.92),
+                    RoachPalette.magenta.opacity(isThinking ? 0.22 : 0.08),
+                ]),
+                startPoint: CGPoint(x: shellRect.minX, y: shellRect.minY),
+                endPoint: CGPoint(x: shellRect.maxX, y: shellRect.maxY)
+            )
+        )
+        context.stroke(shell, with: .color(accent.opacity(0.72)), lineWidth: 2 * scale)
+
+        let headRect = CGRect(
+            x: center.x - 39 * scale + sway,
+            y: center.y - 103 * scale - breathe * 2 * scale,
+            width: 78 * scale,
+            height: 56 * scale
+        )
+        let head = Path(roundedRect: headRect, cornerRadius: 28 * scale)
+        context.fill(head, with: .color(RoachPalette.background.opacity(0.96)))
+        context.stroke(head, with: .color(accent.opacity(0.66)), lineWidth: 1.7 * scale)
+
+        drawWingLines(context: &context, center: center, scale: scale, sway: sway, breathe: breathe)
+        drawLegs(context: &context, center: center, scale: scale, time: time, sway: sway)
+        drawAntennae(context: &context, center: center, scale: scale, sway: sway, antenna: antenna)
+        drawFace(context: &context, center: center, scale: scale, sway: sway, time: time)
+    }
+
+    private func drawDitherHalo(
+        context: inout GraphicsContext,
+        size: CGSize,
+        time: TimeInterval,
+        center: CGPoint,
+        scale: CGFloat
+    ) {
+        let cell: CGFloat = max(4, 6 * scale)
+        let columns = Int(ceil(size.width / cell))
+        let rows = Int(ceil(size.height / cell))
+
+        for row in 0...rows {
+            for column in 0...columns {
+                let point = CGPoint(x: CGFloat(column) * cell, y: CGFloat(row) * cell)
+                let dx = (point.x - center.x) / max(1, 120 * scale)
+                let dy = (point.y - center.y) / max(1, 92 * scale)
+                let radius = sqrt(dx * dx + dy * dy)
+                let ring = max(0, 1.0 - abs(Double(radius) - 0.70) * 2.9)
+                let sweep = 0.5 + 0.5 * sin(Double(column) * 0.33 + Double(row) * 0.19 + time * 2.0)
+                let threshold = ((Double((row & 3) * 4 + (column & 3)) / 16.0) * 0.45)
+                let intensity = ring * (0.34 + 0.22 * sweep)
+
+                guard intensity > threshold else { continue }
+
+                let rect = CGRect(x: point.x, y: point.y, width: max(1, cell - 2), height: max(1, cell - 2))
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 1.2 * scale),
+                    with: .color(accent.opacity(min(0.20, intensity - threshold + 0.035)))
+                )
+            }
+        }
+    }
+
+    private func drawWingLines(context: inout GraphicsContext, center: CGPoint, scale: CGFloat, sway: CGFloat, breathe: CGFloat) {
+        for offset in [-24, 0, 24] {
+            var line = Path()
+            line.move(to: CGPoint(x: center.x + CGFloat(offset) * scale + sway * 0.28, y: center.y - 54 * scale))
+            line.addQuadCurve(
+                to: CGPoint(x: center.x + CGFloat(offset) * 0.45 * scale + sway * 0.16, y: center.y + 54 * scale),
+                control: CGPoint(x: center.x + CGFloat(offset) * 0.82 * scale + sway, y: center.y + CGFloat(breathe) * 5 * scale)
+            )
+            context.stroke(line, with: .color(accent.opacity(offset == 0 ? 0.38 : 0.24)), lineWidth: offset == 0 ? 1.4 * scale : 1.0 * scale)
+        }
+    }
+
+    private func drawLegs(context: inout GraphicsContext, center: CGPoint, scale: CGFloat, time: TimeInterval, sway: CGFloat) {
+        for index in 0..<3 {
+            let y = center.y + CGFloat(index * 29 - 32) * scale
+            let kick = CGFloat(sin(time * 3.0 + Double(index))) * 7 * scale
+            drawLeg(
+                context: &context,
+                start: CGPoint(x: center.x - 42 * scale + sway, y: y),
+                mid: CGPoint(x: center.x - (76 + CGFloat(index * 8)) * scale - kick, y: y + (index == 1 ? 5 : -6) * scale),
+                end: CGPoint(x: center.x - (106 + CGFloat(index * 10)) * scale - kick, y: y + (index == 2 ? 22 : -20) * scale),
+                scale: scale
+            )
+            drawLeg(
+                context: &context,
+                start: CGPoint(x: center.x + 42 * scale + sway, y: y),
+                mid: CGPoint(x: center.x + (76 + CGFloat(index * 8)) * scale + kick, y: y + (index == 1 ? 5 : -6) * scale),
+                end: CGPoint(x: center.x + (106 + CGFloat(index * 10)) * scale + kick, y: y + (index == 2 ? 22 : -20) * scale),
+                scale: scale
+            )
+        }
+    }
+
+    private func drawLeg(context: inout GraphicsContext, start: CGPoint, mid: CGPoint, end: CGPoint, scale: CGFloat) {
+        var path = Path()
+        path.move(to: start)
+        path.addLine(to: mid)
+        path.addLine(to: end)
+        context.stroke(path, with: .color(accent.opacity(0.76)), lineWidth: 1.9 * scale)
+    }
+
+    private func drawAntennae(context: inout GraphicsContext, center: CGPoint, scale: CGFloat, sway: CGFloat, antenna: CGFloat) {
+        for side: CGFloat in [-1, 1] {
+            var path = Path()
+            let start = CGPoint(x: center.x + side * 25 * scale + sway, y: center.y - 93 * scale)
+            path.move(to: start)
+            path.addQuadCurve(
+                to: CGPoint(x: center.x + side * (90 * scale + antenna), y: center.y - 132 * scale + antenna * 0.22),
+                control: CGPoint(x: center.x + side * (50 * scale + antenna * 0.40), y: center.y - 140 * scale)
+            )
+            context.stroke(path, with: .color(accent.opacity(0.82)), lineWidth: 1.8 * scale)
+        }
+    }
+
+    private func drawFace(context: inout GraphicsContext, center: CGPoint, scale: CGFloat, sway: CGFloat, time: TimeInterval) {
+        let blink = sin(time * 1.6) > 0.94
+        for side: CGFloat in [-1, 1] {
+            let eyeRect = CGRect(
+                x: center.x + side * 17 * scale - 4 * scale + sway,
+                y: center.y - 84 * scale,
+                width: 8 * scale,
+                height: blink ? 2 * scale : 10 * scale
+            )
+            context.fill(Path(ellipseIn: eyeRect), with: .color(RoachPalette.text.opacity(0.92)))
+        }
+
+        var smile = Path()
+        smile.move(to: CGPoint(x: center.x - 12 * scale + sway, y: center.y - 66 * scale))
+        smile.addQuadCurve(
+            to: CGPoint(x: center.x + 12 * scale + sway, y: center.y - 66 * scale),
+            control: CGPoint(x: center.x + sway, y: center.y - 58 * scale)
+        )
+        context.stroke(smile, with: .color(accent.opacity(0.74)), lineWidth: 1.4 * scale)
+    }
+}
+
 private struct GlobalRoachClawPanel: View {
     @ObservedObject var model: WorkspaceModel
     let onDismiss: () -> Void
 
+    @State private var appeared = false
     @FocusState private var promptFocused: Bool
 
     private var recentThread: [ChatLine] {
@@ -3299,15 +4838,14 @@ private struct GlobalRoachClawPanel: View {
 
                 RoachInsetPanel {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 8) {
-                            RoachTag(model.selectedChatModelLabel, accent: RoachPalette.magenta)
-                            RoachTag(model.isDictatingPrompt ? "Listening" : "Ready", accent: model.isDictatingPrompt ? RoachPalette.green : RoachPalette.cyan)
-                            RoachTag(model.enabledRoachClawContextCount == 0 ? "Context locked" : "\(model.enabledRoachClawContextCount) lanes", accent: model.enabledRoachClawContextCount == 0 ? RoachPalette.warning : RoachPalette.green)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                RoachTag(model.selectedChatModelLabel, accent: RoachPalette.magenta)
+                                RoachTag(model.speechCapabilitySnapshot.engineName, accent: RoachPalette.cyan)
+                                RoachTag(model.isDictatingPrompt ? "Listening" : model.speechCapabilitySnapshot.sttModeLabel, accent: model.isDictatingPrompt ? RoachPalette.green : RoachPalette.cyan)
+                                RoachTag(model.enabledRoachClawContextCount == 0 ? "Context locked" : "\(model.enabledRoachClawContextCount) lanes", accent: model.enabledRoachClawContextCount == 0 ? RoachPalette.warning : RoachPalette.green)
+                            }
                         }
-
-                        Text("Chat, ask for work, or start voice without leaving the surface you are using.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
                     }
                 }
 
@@ -3346,8 +4884,13 @@ private struct GlobalRoachClawPanel: View {
                 footer
             }
         }
+        .opacity(appeared ? 1 : 0)
+        .scaleEffect(appeared ? 1 : 0.985, anchor: .topTrailing)
         .onAppear {
             promptFocused = true
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
+                appeared = true
+            }
         }
         .onExitCommand {
             onDismiss()
@@ -3382,21 +4925,19 @@ private struct GlobalRoachClawPanel: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                RoachKicker("RoachClaw Anywhere")
-                Text("Ask without breaking flow.")
-                    .font(.system(size: 23, weight: .bold, design: .rounded))
-                    .foregroundStyle(RoachPalette.text)
-                Text("The same agent, memory, voice, and context controls float over every RoachNet surface.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(RoachPalette.muted)
-                    .lineLimit(2)
+                        RoachKicker("RoachClaw")
+                        Text("Ask anywhere.")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundStyle(RoachPalette.text)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                    }
+                }
             }
-        }
-    }
 
     private var headerActions: some View {
         HStack(spacing: 10) {
-            Button("Full Workbench") {
+            Button("Workbench") {
                 model.selectedPane = .roachClaw
                 onDismiss()
             }
@@ -3441,7 +4982,7 @@ private struct GlobalRoachClawPanel: View {
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
 
-                        Button(model.isSendingPrompt ? "Sending..." : "Send to RoachClaw") {
+                        Button(model.isSendingPrompt ? "Sending..." : "Send") {
                             sendPrompt()
                         }
                         .buttonStyle(RoachPrimaryButtonStyle())
@@ -3454,7 +4995,7 @@ private struct GlobalRoachClawPanel: View {
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
 
-                        Button(model.isSendingPrompt ? "Sending..." : "Send to RoachClaw") {
+                        Button(model.isSendingPrompt ? "Sending..." : "Send") {
                             sendPrompt()
                         }
                         .buttonStyle(RoachPrimaryButtonStyle())
@@ -3470,8 +5011,8 @@ private struct GlobalRoachClawPanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 RoachSectionHeader(
                     "Context",
-                    title: "Open the ground truth the request needs.",
-                    detail: "Vault, project, captured web, and live app context stay permissioned while the global panel is open."
+                    title: "Permissions.",
+                    detail: nil
                 )
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 142), spacing: 8)], alignment: .leading, spacing: 8) {
@@ -3533,7 +5074,7 @@ private struct GlobalRoachClawPanel: View {
 
                 Spacer(minLength: 8)
 
-                Text("Cmd-K opens the command bar. \(RoachNetGlobalHotKey.hint) opens it from the desktop.")
+                Text(RoachNetGlobalHotKey.hint)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(RoachPalette.muted)
                     .lineLimit(1)
@@ -3554,7 +5095,7 @@ private struct GlobalRoachClawPanel: View {
                     .disabled(model.latestRoachClawReply == nil)
                 }
 
-                Text("Cmd-K in shell. \(RoachNetGlobalHotKey.hint) from the desktop.")
+                Text(RoachNetGlobalHotKey.hint)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(RoachPalette.muted)
             }
@@ -3721,109 +5262,611 @@ private final class LaunchGuideVideoWindowController: NSWindowController, NSWind
 
 private struct LaunchGuideFeatureColumn: View {
     let featureRows: [GuideFeature]
+    let pathwaySteps: [LaunchGuideStep]
+    @Binding var selectedFeatureID: String
     let onDismiss: () -> Void
 
-    var body: some View {
-        RoachSpotlightPanel(accent: RoachPalette.magenta) {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 16) {
-                    RoachOrbitMark()
-                        .frame(width: 72, height: 72)
+    private var selectedFeature: GuideFeature? {
+        featureRows.first { $0.id == selectedFeatureID } ?? featureRows.first
+    }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        RoachKicker("First Launch")
-                        Text("RoachNet starts here.")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(RoachPalette.text)
-                        Text("Home, Dev, RoachClaw, maps, and the vault all stay under one root. This guide gets you moving fast.")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
-                            .fixedSize(horizontal: false, vertical: true)
+    private var selectedFeatureIndex: Int {
+        featureRows.firstIndex { $0.id == selectedFeatureID } ?? 0
+    }
+
+    var body: some View {
+        RoachSpotlightPanel(accent: selectedFeature?.accent ?? RoachPalette.magenta) {
+            VStack(alignment: .leading, spacing: 16) {
+                LaunchGuideHero(
+                    feature: selectedFeature,
+                    progressText: "\(selectedFeatureIndex + 1)/\(max(featureRows.count, 1))"
+                )
+
+                LaunchGuidePathway(steps: pathwaySteps)
+
+                LaunchGuideFeatureWorkbench(
+                    featureRows: featureRows,
+                    selectedFeatureID: $selectedFeatureID,
+                    selectedFeature: selectedFeature
+                )
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        Button("Skip Intro") {
+                            onDismiss()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+
+                        Button("Enter RoachNet") {
+                            onDismiss()
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Enter RoachNet") {
+                            onDismiss()
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+
+                        Button("Skip Intro") {
+                            onDismiss()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
                     }
                 }
+                .padding(.top, 2)
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: selectedFeatureID)
+        }
+        .frame(minWidth: 300, idealWidth: 720, maxWidth: .infinity, alignment: .topLeading)
+    }
+}
 
-                ScrollView(.horizontal, showsIndicators: false) {
+private struct LaunchGuideHero: View {
+    let feature: GuideFeature?
+    let progressText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 16) {
+                LaunchGuidePulseMark(accent: feature?.accent ?? RoachPalette.green)
+                    .frame(width: 92, height: 92)
+
+                VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        RoachTag("Local-first", accent: RoachPalette.green)
-                        RoachTag("Contained runtime", accent: RoachPalette.magenta)
+                        RoachKicker("v1.0.5 Native Guide")
                         RoachTag(RoachNetGlobalHotKey.hint, accent: RoachPalette.cyan)
                     }
+
+                    Text("Your local command bunker.")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.72)
+
+                    Text("The fast route through Home, command search, RoachClaw, RoachSpeech, Dev, RoachArcade, Maps, Vault, and the runtime bits that keep the machine honest.")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    LaunchGuideSignalGrid()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let feature {
+                LaunchGuideNowReading(feature: feature, progressText: progressText)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct LaunchGuidePulseMark: View {
+    let accent: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            accent.opacity(0.18),
+                            RoachPalette.panelGlass,
+                            Color.black.opacity(0.28),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(accent.opacity(0.32), lineWidth: 1)
+                )
+
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(accent.opacity(pulse ? 0.12 : 0.34), lineWidth: 2)
+                .scaleEffect(pulse ? 1.08 : 0.94)
+
+            RoachOrbitMark()
+                .padding(12)
+        }
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+    }
+}
+
+private struct LaunchGuideSignalGrid: View {
+    private let columns = [
+        GridItem(.adaptive(minimum: 106, maximum: 150), spacing: 8, alignment: .leading),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            LaunchGuideSignalPill(value: "Local-first", detail: "default", accent: RoachPalette.green)
+            LaunchGuideSignalPill(value: "Core ML", detail: "speech", accent: RoachPalette.magenta)
+            LaunchGuideSignalPill(value: "ES-DE", detail: "arcade", accent: RoachPalette.cyan)
+            LaunchGuideSignalPill(value: "Vault", detail: "drop zone", accent: RoachPalette.bronze)
+        }
+    }
+}
+
+private struct LaunchGuideSignalPill: View {
+    let value: String
+    let detail: String
+    let accent: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+            Text(detail)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(RoachPalette.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(accent.opacity(0.09))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(accent.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private struct LaunchGuideNowReading: View {
+    let feature: GuideFeature
+    let progressText: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(progressText)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(feature.accent)
+                .frame(width: 44, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(feature.accent.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Reading: \(feature.title)", systemImage: feature.systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RoachPalette.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.74)
+                Text(feature.commandHint)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(RoachPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(RoachPalette.panelGlass)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(feature.accent.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct LaunchGuidePathway: View {
+    let steps: [LaunchGuideStep]
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 158, maximum: 238), spacing: 8, alignment: .topLeading),
+    ]
+
+    var body: some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("First ten minutes", systemImage: "checklist.checked")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    RoachTag("best path", accent: RoachPalette.green)
                 }
 
-                VStack(spacing: 10) {
-                    ForEach(featureRows) { feature in
-                        RoachInsetPanel {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: feature.systemImage)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(RoachPalette.green)
-                                    .frame(width: 32, height: 32)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .fill(RoachPalette.panelGlass)
-                                    )
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(feature.title)
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Text(feature.detail)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                    ForEach(steps) { step in
+                        LaunchGuideStepTile(step: step)
                     }
-                }
-
-                RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Use it like this")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(RoachPalette.text)
-                        Text("Start on Home, pull the command bar when you need speed, then move into Dev or RoachClaw without losing the stack.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 12) {
-                    Button("Skip Intro") {
-                        onDismiss()
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-
-                    Button("Enter RoachNet") {
-                        onDismiss()
-                    }
-                    .buttonStyle(RoachPrimaryButtonStyle())
                 }
             }
         }
-        .frame(minWidth: 300, idealWidth: 340, maxWidth: 360)
+    }
+}
+
+private struct LaunchGuideStepTile: View {
+    let step: LaunchGuideStep
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(step.accent.opacity(0.14))
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(step.accent)
+                }
+                .frame(width: 24, height: 24)
+
+                Text(step.number)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(step.accent)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+
+            Label(step.title, systemImage: step.systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(RoachPalette.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+
+            Text(step.detail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(RoachPalette.muted)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            step.accent.opacity(0.08),
+                            RoachPalette.panelGlass,
+                            Color.black.opacity(0.08),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(step.accent.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private struct LaunchGuideFeatureWorkbench: View {
+    let featureRows: [GuideFeature]
+    @Binding var selectedFeatureID: String
+    let selectedFeature: GuideFeature?
+
+    var body: some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Feature map", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("Pick a lane. Get the useful move.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        LaunchGuideFeaturePicker(
+                            featureRows: featureRows,
+                            selectedFeatureID: $selectedFeatureID,
+                            isCompact: false
+                        )
+                        .frame(width: 228)
+
+                        if let selectedFeature {
+                            LaunchGuideFeatureDetail(feature: selectedFeature)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        LaunchGuideFeaturePicker(
+                            featureRows: featureRows,
+                            selectedFeatureID: $selectedFeatureID,
+                            isCompact: true
+                        )
+
+                        if let selectedFeature {
+                            LaunchGuideFeatureDetail(feature: selectedFeature)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LaunchGuideFeaturePicker: View {
+    let featureRows: [GuideFeature]
+    @Binding var selectedFeatureID: String
+    let isCompact: Bool
+
+    var body: some View {
+        Group {
+            if isCompact {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(featureRows) { feature in
+                            LaunchGuideFeatureButton(
+                                feature: feature,
+                                isSelected: selectedFeatureID == feature.id,
+                                isCompact: true
+                            ) {
+                                selectedFeatureID = feature.id
+                            }
+                            .frame(width: 154)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(featureRows) { feature in
+                        LaunchGuideFeatureButton(
+                            feature: feature,
+                            isSelected: selectedFeatureID == feature.id,
+                            isCompact: false
+                        ) {
+                            selectedFeatureID = feature.id
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LaunchGuideFeatureButton: View {
+    let feature: GuideFeature
+    let isSelected: Bool
+    let isCompact: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 9) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(isSelected ? feature.accent : Color.clear)
+                    .frame(width: 3, height: isCompact ? 28 : 38)
+
+                Image(systemName: feature.systemImage)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(isSelected ? feature.accent : RoachPalette.muted)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(isSelected ? feature.accent.opacity(0.16) : RoachPalette.panelGlass)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(feature.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isSelected ? RoachPalette.text : RoachPalette.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Text(feature.section)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(feature.accent.opacity(isSelected ? 0.92 : 0.58))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.76)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 8)
+            .padding(.leading, 5)
+            .padding(.trailing, 9)
+            .frame(maxWidth: .infinity, minHeight: isCompact ? 52 : 50, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? feature.accent.opacity(0.13) : RoachPalette.panelRaised.opacity(0.44))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isSelected ? feature.accent.opacity(0.42) : RoachPalette.border.opacity(0.78), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct LaunchGuideFeatureDetail: View {
+    let feature: GuideFeature
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: feature.systemImage)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(feature.accent)
+                    .frame(width: 48, height: 48)
+                    .background(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(feature.accent.opacity(0.15))
+                    )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    LaunchGuideTagCloud(tags: [feature.section] + feature.tags, accent: feature.accent)
+
+                    Text(feature.title)
+                        .font(.system(size: 23, weight: .bold))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.76)
+
+                    Text(feature.detail)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                LaunchGuideHintRow(
+                    title: "Do first",
+                    detail: feature.primaryAction,
+                    systemImage: "cursorarrow.click.2",
+                    accent: feature.accent
+                )
+                LaunchGuideHintRow(
+                    title: "Command search",
+                    detail: feature.commandHint,
+                    systemImage: "command.circle.fill",
+                    accent: RoachPalette.cyan
+                )
+                LaunchGuideHintRow(
+                    title: "Fast hint",
+                    detail: feature.quickHint,
+                    systemImage: "bolt.fill",
+                    accent: RoachPalette.green
+                )
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            feature.accent.opacity(0.10),
+                            RoachPalette.panelGlass,
+                            Color.black.opacity(0.10),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(feature.accent.opacity(0.20), lineWidth: 1)
+        )
+    }
+}
+
+private struct LaunchGuideTagCloud: View {
+    let tags: [String]
+    let accent: Color
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(Array(tags.prefix(4)), id: \.self) { tag in
+                    RoachTag(tag, accent: tag == (tags.first ?? "") ? accent : RoachPalette.cyan)
+                }
+            }
+            .padding(.vertical, 1)
+        }
+    }
+}
+
+private struct LaunchGuideHintRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let accent: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(accent)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(accent.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent)
+                    .textCase(.uppercase)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                Text(detail)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(RoachPalette.text.opacity(0.86))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 private struct LaunchGuideVideoColumn: View {
     @ObservedObject var playbackController: LaunchGuidePlaybackController
+    let quickActions: [LaunchGuideQuickAction]
     let onDismiss: () -> Void
 
     var body: some View {
         RoachSpotlightPanel(accent: RoachPalette.cyan) {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        RoachKicker("Launch Reel")
-                        Text("Real shell. Real first run.")
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        RoachKicker("Launch Controls")
+                        Text("Watch, search, or just drive.")
                             .font(.system(size: 24, weight: .bold))
                             .foregroundStyle(RoachPalette.text)
-                        Text("This is the actual native RoachNet shell, not a concept render. Open the reel, then go straight into the app.")
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.76)
+                        Text("The guide is useful without the video. The command bar is the real map.")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
                             .fixedSize(horizontal: false, vertical: true)
@@ -3831,105 +5874,408 @@ private struct LaunchGuideVideoColumn: View {
 
                     Spacer()
 
-                    RoachTag("Native Capture", accent: RoachPalette.green)
+                    RoachTag("no maze", accent: RoachPalette.green)
+                }
+
+                LaunchGuideReelCard(playbackController: playbackController)
+
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Label("Quick actions", systemImage: "wand.and.stars")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(RoachPalette.text)
+                            Spacer(minLength: 8)
+                            RoachTag("search these", accent: RoachPalette.magenta)
+                        }
+
+                        LaunchGuideQuickActionGrid(actions: quickActions)
+                    }
                 }
 
                 RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if playbackController.hasVideo {
-                            Text("The guide opens in its own floating window so the shell stays usable while you get oriented.")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(RoachPalette.text)
-                                .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 9) {
+                        Label("Access stays put", systemImage: "pin.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(RoachPalette.text)
 
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    RoachTag("Home", accent: RoachPalette.green)
-                                    RoachTag("RoachClaw", accent: RoachPalette.magenta)
-                                    RoachTag("Vault Shelves", accent: RoachPalette.cyan)
-                                    RoachTag("Runtime", accent: RoachPalette.bronze)
-                                }
-                            }
-
-                            Text(playbackController.isPresentingWindow ? "Guide window is open now." : "Guide window is ready.")
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(RoachPalette.green)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("What it shows")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(RoachPalette.text)
-                                Text("Home, RoachClaw, Easy Setup, vault shelves, runtime health, and the command bar.")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(RoachPalette.muted)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        } else {
-                            Text("Guide video unavailable")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(RoachPalette.text)
-                            Text("RoachNet can still open the shell cleanly. Rebuild `roachnet-launch-guide.mp4` later to restore the launch reel.")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        LaunchGuideHintRow(
+                            title: "Sidebar",
+                            detail: "Guide button stays in the shell utilities.",
+                            systemImage: "sidebar.leading",
+                            accent: RoachPalette.green
+                        )
+                        LaunchGuideHintRow(
+                            title: "Command",
+                            detail: "`Open Guided Tour` replays this sheet without resetting setup.",
+                            systemImage: "command.circle.fill",
+                            accent: RoachPalette.cyan
+                        )
+                        LaunchGuideHintRow(
+                            title: "First launch",
+                            detail: "The intro sheet still appears after setup, then gets out of the way.",
+                            systemImage: "sparkle.magnifyingglass",
+                            accent: RoachPalette.magenta
+                        )
                     }
-                    .frame(maxWidth: .infinity, minHeight: 360, alignment: .leading)
                 }
 
-                HStack(spacing: 12) {
-                    Button(playbackController.isPresentingWindow ? "Replay Reel" : "Open Reel") {
-                        playbackController.presentVideoWindow()
-                    }
-                    .buttonStyle(RoachSecondaryButtonStyle())
-                    .disabled(!playbackController.hasVideo)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        Button(playbackController.isPresentingWindow ? "Replay Reel" : "Open Reel") {
+                            playbackController.presentVideoWindow()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                        .disabled(!playbackController.hasVideo)
 
-                    Spacer()
+                        Spacer(minLength: 0)
 
-                    Button("Enter RoachNet") {
-                        onDismiss()
+                        Button("Enter RoachNet") {
+                            onDismiss()
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
                     }
-                    .buttonStyle(RoachPrimaryButtonStyle())
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Enter RoachNet") {
+                            onDismiss()
+                        }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+
+                        Button(playbackController.isPresentingWindow ? "Replay Reel" : "Open Reel") {
+                            playbackController.presentVideoWindow()
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                        .disabled(!playbackController.hasVideo)
+                    }
                 }
             }
         }
+        .frame(minWidth: 300, idealWidth: 440, maxWidth: 500, alignment: .topLeading)
+    }
+}
+
+private struct LaunchGuideReelCard: View {
+    @ObservedObject var playbackController: LaunchGuidePlaybackController
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            RoachPalette.cyan.opacity(0.16),
+                            RoachPalette.magenta.opacity(0.08),
+                            Color.black.opacity(0.26),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            TimelineView(.animation(minimumInterval: 1.0 / 16.0, paused: false)) { timeline in
+                Canvas { context, size in
+                    let time = timeline.date.timeIntervalSinceReferenceDate
+                    let stripeHeight: CGFloat = 8
+                    let rowCount = Int(ceil(size.height / stripeHeight))
+
+                    for row in 0...rowCount where row.isMultiple(of: 2) {
+                        let y = CGFloat(row) * stripeHeight
+                        let alpha = 0.020 + 0.016 * abs(sin(time + Double(row) * 0.41))
+                        context.fill(
+                            Path(CGRect(x: 0, y: y, width: size.width, height: 1)),
+                            with: .color(Color.white.opacity(alpha))
+                        )
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .allowsHitTesting(false)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: playbackController.hasVideo ? "play.rectangle.fill" : "play.slash.fill")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(playbackController.hasVideo ? RoachPalette.cyan : RoachPalette.muted)
+                        .frame(width: 46, height: 46)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.black.opacity(0.22))
+                        )
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(playbackController.hasVideo ? "Native launch reel" : "Written guide mode")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(RoachPalette.text)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.76)
+
+                        Text(playbackController.hasVideo ? "Home, command search, local AI, voice packs, games, maps, vault shelves, settings, updates." : "Video asset is missing; the field guide still carries the release path.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(RoachPalette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                LaunchGuideTagCloud(
+                    tags: ["Home", "RoachClaw", "RoachSpeech", "RoachArcade", "Maps/GPS", "Vault", "Updates"],
+                    accent: RoachPalette.cyan
+                )
+
+                Text(playbackController.isPresentingWindow ? "Reel window is open." : playbackController.hasVideo ? "Reel is ready." : "Rebuild `roachnet-launch-guide.mp4` when capture refresh lands.")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(playbackController.hasVideo ? RoachPalette.green : RoachPalette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(RoachPalette.cyan.opacity(0.20), lineWidth: 1)
+        )
+    }
+}
+
+private struct LaunchGuideQuickActionGrid: View {
+    let actions: [LaunchGuideQuickAction]
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 176, maximum: 240), spacing: 8, alignment: .topLeading),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            ForEach(actions) { action in
+                LaunchGuideQuickActionTile(action: action)
+            }
+        }
+    }
+}
+
+private struct LaunchGuideQuickActionTile: View {
+    let action: LaunchGuideQuickAction
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: action.systemImage)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(action.accent)
+                    .frame(width: 26, height: 26)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(action.accent.opacity(0.12))
+                    )
+
+                Text(action.title)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(action.accent)
+                    .textCase(.uppercase)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.74)
+            }
+
+            Text(action.detail)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RoachPalette.text.opacity(0.86))
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(action.accent.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(action.accent.opacity(0.15), lineWidth: 1)
+        )
     }
 }
 
 private struct LaunchGuideSheet: View {
     let onDismiss: () -> Void
     @StateObject private var playbackController = LaunchGuidePlaybackController()
+    @State private var selectedFeatureID = "home"
 
     private let featureRows: [GuideFeature] = [
         .init(
             id: "home",
-            title: "Home command grid",
-            detail: "Start in Home, see the runtime pulse, and move into the next lane without digging through menus.",
-            systemImage: "square.grid.2x2.fill"
+            title: "Home",
+            detail: "The command deck shows what is installed, what is stale, and where to jump next.",
+            systemImage: "square.grid.2x2.fill",
+            section: "Start",
+            primaryAction: "Check Home after setup. It is the release dashboard without the dashboard swamp.",
+            quickHint: "Use the Guide button or \(RoachNetGlobalHotKey.hint) when you lose the thread.",
+            commandHint: "Search `home`, `runtime`, or `updates` when you want the machine status fast.",
+            accent: RoachPalette.green,
+            tags: ["Status", "Next move", "Native"]
         ),
         .init(
             id: "command",
             title: "Command Bar",
-            detail: "Use Cmd-K inside the shell or \(RoachNetGlobalHotKey.hint) from anywhere on the desktop.",
-            systemImage: "command.circle.fill"
+            detail: "One search lane for panes, files, settings, updates, diagnostics, and the weird little chores.",
+            systemImage: "command.circle.fill",
+            section: "Shortcut",
+            primaryAction: "Hit \(RoachNetGlobalHotKey.hint), type what you mean, and let the shell route it.",
+            quickHint: "Search works with aliases. `maps gps`, `voice pack`, and `open guide` all count.",
+            commandHint: "Search `open guide`, `voice prompt`, `copy diagnostics`, or any pane name.",
+            accent: RoachPalette.cyan,
+            tags: ["Search", "Aliases", "Global"]
         ),
         .init(
             id: "roachclaw",
-            title: "RoachClaw workbench",
-            detail: "Check the local AI lane, confirm the default model, and send a real prompt without leaving the app.",
-            systemImage: "sparkles"
+            title: "RoachClaw",
+            detail: "The RoachNet-owned AI workbench reads permitted local context before anything leaves the box.",
+            systemImage: "sparkles",
+            section: "Local AI",
+            primaryAction: "Open RoachClaw, choose the context scopes, then ask against the real vault/app state.",
+            quickHint: "Start local. Cloud fallback is a choice, not the default landlord.",
+            commandHint: "Search `RoachClaw`, `allow vault context`, or `stage next useful move`.",
+            accent: RoachPalette.magenta,
+            tags: ["RoachBrain", "Context", "Local"]
         ),
         .init(
-            id: "field",
-            title: "Vault shelves",
-            detail: "Stage atlas packs, queue study bundles, and keep captured or reference material inside one living shelf.",
-            systemImage: "map.fill"
+            id: "roachspeech",
+            title: "RoachSpeech",
+            detail: "Core ML speech lanes handle dictation, reply reading, model packs, and optional voice cloning.",
+            systemImage: "waveform.and.mic",
+            section: "Voice",
+            primaryAction: "Install the base Whisper/Kokoro packs first; add Chatterbox only when cloning is needed.",
+            quickHint: "Model packs live under RoachNet storage and validate before they swap in.",
+            commandHint: "Search `voice prompt`, `listen to latest reply`, or `model store`.",
+            accent: RoachPalette.green,
+            tags: ["Core ML", "Model packs", "Voice"]
+        ),
+        .init(
+            id: "dev",
+            title: "Dev Studio",
+            detail: "A native IDE-style surface with editor, terminal transcript handling, and inline RoachClaw assist.",
+            systemImage: "terminal.fill",
+            section: "Build",
+            primaryAction: "Open Dev when the task needs files, shell output, and AI help in the same lane.",
+            quickHint: "Paths are redacted where needed; terminal traces stay useful without getting sloppy.",
+            commandHint: "Search `Dev`, `stage dev agent prompt`, or `open projects root`.",
+            accent: RoachPalette.cyan,
+            tags: ["Editor", "Terminal", "Assist"]
+        ),
+        .init(
+            id: "arcade",
+            title: "RoachArcade",
+            detail: "ES-DE imports, ROM metadata, Mac games, mods, cheats, Vortex manifests, and runner readiness.",
+            systemImage: "gamecontroller.fill",
+            section: "Games",
+            primaryAction: "Import an ES-DE library or ROM folder, then let the shelf show what can actually run.",
+            quickHint: "Windows titles say `Needs Runner` until GPTK/CrossOver/Wine is real.",
+            commandHint: "Search `RoachArcade`, `apps store`, or `open storage library`.",
+            accent: RoachPalette.magenta,
+            tags: ["ES-DE", "ROMs", "Mods"]
+        ),
+        .init(
+            id: "maps",
+            title: "Maps/GPS",
+            detail: "Native map packs, offline source profiles, live phone GPS packets, and stale/live fix labels.",
+            systemImage: "map.fill",
+            section: "Atlas",
+            primaryAction: "Load curated map packs, then pair RoachPhone when live position matters.",
+            quickHint: "Offline maps stay useful when web maps start acting like toll booths.",
+            commandHint: "Search `Maps`, `gps`, or `open runtime health` if packets look stale.",
+            accent: RoachPalette.cyan,
+            tags: ["Offline", "GPS", "Packs"]
+        ),
+        .init(
+            id: "vault",
+            title: "Vault",
+            detail: "Drag/drop files, books, media, archive metadata, transcripts, lyrics, previews, and local search.",
+            systemImage: "books.vertical.fill",
+            section: "Library",
+            primaryAction: "Drop files into Vault first; books, media, and sidecars become something you can use.",
+            quickHint: "Keep transcripts beside the source instead of making a mystery folder shrine.",
+            commandHint: "Search `Vault`, `import Obsidian vault`, or a file name after import.",
+            accent: RoachPalette.bronze,
+            tags: ["Books", "Media", "Transcripts"]
         ),
         .init(
             id: "runtime",
-            title: "Runtime recovery",
-            detail: "Use Runtime and Diagnostics to inspect the gateway, logs, and contained storage when something needs attention.",
-            systemImage: "server.rack"
+            title: "Runtime/Settings/Updates",
+            detail: "Inspect contained services, logs, paths, diagnostics, native settings, and update requests.",
+            systemImage: "server.rack",
+            section: "Maintain",
+            primaryAction: "Check Runtime before blaming the app. Check Settings before blaming yourself.",
+            quickHint: "Copy diagnostics from the command bar when a bug report needs clean evidence.",
+            commandHint: "Search `refresh runtime`, `check for updates`, `open runtime log`, or `settings`.",
+            accent: RoachPalette.cyan,
+            tags: ["Logs", "Settings", "Updates"]
+        ),
+    ]
+
+    private let pathwaySteps: [LaunchGuideStep] = [
+        .init(
+            id: "deck",
+            number: "01",
+            title: "Open the deck",
+            detail: "Home tells you what is installed, alive, stale, or waiting.",
+            systemImage: "square.grid.2x2.fill",
+            accent: RoachPalette.green
+        ),
+        .init(
+            id: "content",
+            number: "02",
+            title: "Load your stuff",
+            detail: "Drop vault files, books, media, ROMs, maps, and packs into their lanes.",
+            systemImage: "tray.and.arrow.down.fill",
+            accent: RoachPalette.bronze
+        ),
+        .init(
+            id: "ai",
+            number: "03",
+            title: "Pick a brain",
+            detail: "Use RoachClaw and RoachSpeech with explicit local context.",
+            systemImage: "sparkles",
+            accent: RoachPalette.magenta
+        ),
+        .init(
+            id: "maintain",
+            number: "04",
+            title: "Keep it clean",
+            detail: "Runtime, Settings, Updates, and diagnostics keep the bolts visible.",
+            systemImage: "wrench.and.screwdriver.fill",
+            accent: RoachPalette.cyan
+        ),
+    ]
+
+    private let quickActions: [LaunchGuideQuickAction] = [
+        .init(
+            id: "command",
+            title: "Command",
+            detail: "\(RoachNetGlobalHotKey.hint) opens the command bar from anywhere in the shell.",
+            systemImage: "command.circle.fill",
+            accent: RoachPalette.cyan
+        ),
+        .init(
+            id: "drop",
+            title: "Drop",
+            detail: "Vault accepts files, books, media, metadata, and sidecars without ceremony.",
+            systemImage: "tray.and.arrow.down.fill",
+            accent: RoachPalette.bronze
+        ),
+        .init(
+            id: "packs",
+            title: "Packs",
+            detail: "RoachSpeech model packs install, validate, then swap into local storage.",
+            systemImage: "shippingbox.fill",
+            accent: RoachPalette.green
+        ),
+        .init(
+            id: "diagnose",
+            title: "Diagnose",
+            detail: "Runtime logs, diagnostics, Settings, and Updates stay one search away.",
+            systemImage: "stethoscope",
+            accent: RoachPalette.magenta
         ),
     ]
 
@@ -3940,28 +6286,54 @@ private struct LaunchGuideSheet: View {
                 .ignoresSafeArea()
 
             GeometryReader { proxy in
-                let isCompact = proxy.size.width < 1280
+                let isCompact = proxy.size.width < 1120
+                let contentWidth = max(300, min(proxy.size.width - 32, 1180))
 
-                Group {
-                    if isCompact {
-                        VStack(spacing: 16) {
-                            LaunchGuideFeatureColumn(featureRows: featureRows, onDismiss: onDismiss)
-                            LaunchGuideVideoColumn(playbackController: playbackController, onDismiss: onDismiss)
-                        }
-                    } else {
-                        HStack(spacing: 18) {
-                            LaunchGuideFeatureColumn(featureRows: featureRows, onDismiss: onDismiss)
-                            LaunchGuideVideoColumn(playbackController: playbackController, onDismiss: onDismiss)
+                ScrollView(showsIndicators: false) {
+                    Group {
+                        if isCompact {
+                            VStack(spacing: 16) {
+                                LaunchGuideFeatureColumn(
+                                    featureRows: featureRows,
+                                    pathwaySteps: pathwaySteps,
+                                    selectedFeatureID: $selectedFeatureID,
+                                    onDismiss: onDismiss
+                                )
+                                LaunchGuideVideoColumn(
+                                    playbackController: playbackController,
+                                    quickActions: quickActions,
+                                    onDismiss: onDismiss
+                                )
+                            }
+                        } else {
+                            HStack(alignment: .top, spacing: 18) {
+                                LaunchGuideFeatureColumn(
+                                    featureRows: featureRows,
+                                    pathwaySteps: pathwaySteps,
+                                    selectedFeatureID: $selectedFeatureID,
+                                    onDismiss: onDismiss
+                                )
+                                LaunchGuideVideoColumn(
+                                    playbackController: playbackController,
+                                    quickActions: quickActions,
+                                    onDismiss: onDismiss
+                                )
+                            }
                         }
                     }
+                    .frame(
+                        maxWidth: contentWidth,
+                        alignment: .center
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: proxy.size.height, alignment: .top)
                 }
-                .frame(
-                    maxWidth: min(proxy.size.width - 40, 1160),
-                    maxHeight: min(proxy.size.height - 40, 720),
-                    alignment: .center
-                )
-                .padding(20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaPadding(.top, 8)
+                .safeAreaPadding(.bottom, 8)
             }
         }
         .onAppear {
@@ -3975,13 +6347,20 @@ private struct LaunchGuideSheet: View {
 
 struct RoachNetMacApp: App {
     @NSApplicationDelegateAdaptor(RoachNetMacAppDelegate.self) private var appDelegate
-    @StateObject private var model = WorkspaceModel()
+    @StateObject private var model: WorkspaceModel
+
+    @MainActor
+    init() {
+        let model = WorkspaceModel()
+        _model = StateObject(wrappedValue: model)
+        RoachNetMacAppDelegate.bootstrapModel = model
+    }
 
     var body: some Scene {
         WindowGroup("RoachNet", id: "main") {
             RootWorkspaceView(model: model)
                 .background(MainWindowConfigurator())
-                .frame(minWidth: 760, idealWidth: 1100, minHeight: 560, idealHeight: 760)
+                .frame(minWidth: 760, idealWidth: 1360, minHeight: 580, idealHeight: 860)
                 .onAppear {
                     roachWindowDebug("RootWorkspaceView appeared.")
                     appDelegate.model = model
@@ -3992,13 +6371,136 @@ struct RoachNetMacApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        .commands {
+            RoachNetAppCommands(model: model)
+        }
 
         Settings {
             RoachNetSettingsView(model: model)
-                .frame(minWidth: 680, idealWidth: 760, maxWidth: 880, minHeight: 520, idealHeight: 600)
+                .frame(minWidth: 760, idealWidth: 900, maxWidth: 1040, minHeight: 560, idealHeight: 680)
                 .onAppear {
                     appDelegate.model = model
                 }
+        }
+
+    }
+}
+
+@MainActor
+private final class RoachNetAboutWindowPresenter {
+    static let shared = RoachNetAboutWindowPresenter()
+
+    private var window: NSWindow?
+
+    func present() {
+        if let window {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            return
+        }
+
+        let host = NSHostingController(rootView: RoachNetAboutView())
+        let aboutWindow = NSWindow(contentViewController: host)
+        aboutWindow.title = "About RoachNet"
+        aboutWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        aboutWindow.titleVisibility = .hidden
+        aboutWindow.titlebarAppearsTransparent = true
+        aboutWindow.isReleasedWhenClosed = false
+        aboutWindow.setContentSize(NSSize(width: 940, height: 680))
+        aboutWindow.minSize = NSSize(width: 520, height: 480)
+        aboutWindow.center()
+
+        window = aboutWindow
+        NSApp.activate(ignoringOtherApps: true)
+        aboutWindow.makeKeyAndOrderFront(nil)
+        aboutWindow.orderFrontRegardless()
+    }
+}
+
+private struct RoachNetAppCommands: Commands {
+    @ObservedObject var model: WorkspaceModel
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("About RoachNet") {
+                RoachNetAboutWindowPresenter.shared.present()
+            }
+        }
+
+        CommandMenu("RoachNet") {
+            Button {
+                NotificationCenter.default.post(name: .roachNetOpenCommandPalette, object: nil)
+            } label: {
+                Label("Command Bar", systemImage: "command")
+            }
+            .keyboardShortcut("r", modifiers: [.command, .control])
+
+            Button {
+                NotificationCenter.default.post(name: .roachNetOpenGlobalRoachClaw, object: nil)
+            } label: {
+                Label("RoachClaw Overlay", systemImage: "sparkles")
+            }
+            .keyboardShortcut("k", modifiers: [.command, .option])
+
+            Divider()
+
+            Button {
+                Task { await model.refreshRuntimeState() }
+            } label: {
+                Label("Refresh Runtime", systemImage: "arrow.clockwise")
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button {
+                model.openStorageInFinder()
+            } label: {
+                Label("Reveal Storage", systemImage: "externaldrive.fill")
+            }
+            .keyboardShortcut("r", modifiers: [.command, .option])
+
+            Button {
+                Task { await model.shutdownRuntime() }
+            } label: {
+                Label("Stop Runtime", systemImage: "stop.circle")
+            }
+            .disabled(!model.setupCompleted)
+
+            SettingsLink {
+                Label("Settings...", systemImage: "gearshape")
+            }
+        }
+
+        CommandMenu("Sections") {
+            Button("Home") {
+                model.selectedPane = .home
+            }
+            .keyboardShortcut("1", modifiers: [.command])
+
+            Button("Dev") {
+                model.selectedPane = .dev
+            }
+            .keyboardShortcut("2", modifiers: [.command])
+
+            Button("RoachClaw") {
+                model.selectedPane = .roachClaw
+            }
+            .keyboardShortcut("3", modifiers: [.command])
+
+            Button("RoachArcade") {
+                model.selectedPane = .arcade
+            }
+            .keyboardShortcut("4", modifiers: [.command])
+
+            Button("Vault") {
+                model.selectedPane = .knowledge
+            }
+            .keyboardShortcut("5", modifiers: [.command])
+
+            Button("Runtime") {
+                model.selectedPane = .runtime
+            }
+            .keyboardShortcut("6", modifiers: [.command])
         }
     }
 }
@@ -4014,8 +6516,8 @@ private struct MainWindowConfigurator: NSViewRepresentable {
                 lastWindow = window
             }
 
-            let minimumSize = NSSize(width: 760, height: 560)
-            let preferredSize = NSSize(width: 1220, height: 852)
+            let minimumSize = NSSize(width: 900, height: 640)
+            let preferredSize = NSSize(width: 1400, height: 900)
             window.minSize = minimumSize
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
@@ -4098,18 +6600,28 @@ private final class RoachWindowAttachmentView: NSView {
 
 private struct RootWorkspaceView: View {
     @ObservedObject var model: WorkspaceModel
+    @Environment(\.openSettings) private var openSettings
     @AppStorage("hasSeenLaunchGuide") private var hasSeenLaunchGuide = false
     @AppStorage("recentCommandPaletteIDs") private var recentCommandPaletteIDsRaw = ""
     @Namespace private var sidebarMotion
     @StateObject private var detachedPaletteCoordinator = DetachedCommandPaletteCoordinator()
+    @StateObject private var phoneLocationBridge = RoachPhoneLocationBridge()
     @State private var showLaunchGuide = false
     @State private var showCommandPalette = false
     @State private var showGlobalRoachClaw = false
     @State private var sidebarCollapsed = false
     @State private var homeMenuSection: HomeMenuSection = .commandDeck
+    @State private var homeMascotNudge = false
+    @State private var homeMascotLineIndex = 0
+    @State private var selectedMapCollectionSlug: String?
+    @State private var mapViewerMode: RoachMapViewerMode = .drive
+    @State private var mapZoomLevel = 0.72
+    @State private var manualPhoneGPSPayload = RoachPhoneLocationFix.samplePayload
+    @State private var isVaultDropTarget = false
     @State private var didScheduleInitialRefresh = false
     @State private var scheduledStoreConfigurationPath: String?
-    private let topTitlebarInset: CGFloat = 18
+    @FocusState private var homePromptFocused: Bool
+    private let topTitlebarInset: CGFloat = 56
     private let surfacePadding: CGFloat = 8
     private let shellSpring = Animation.spring(response: 0.42, dampingFraction: 0.86, blendDuration: 0.12)
 
@@ -4127,29 +6639,80 @@ private struct RootWorkspaceView: View {
     private var shellDetail: String {
         switch activePane {
         case .suite:
-            return "Installed surfaces, staged modules, and the next thing to open."
+            return "Installed surfaces and staged modules."
         case .home:
-            return "Bring the important stuff home and keep it there."
+            return "Home is where the Roach is!"
         case .dev:
-            return "A quieter desk for code, the shell, and the next real edit."
+            return "Editor, terminal, local AI."
         case .roachClaw:
-            return "A real chat lane first. Local by default, cloud only when it earns the trip."
+            return "Chat, voice, context. No rented brain."
         case .arcade:
-            return "Backlog fossils, ROMs, macOS games, mods, and cheats in one local shelf."
+            return "ROMs, Mac games, mods, cheats."
         case .maps:
-            return "Notes, captures, atlas packs, study shelves, and saved media under one library."
+            return "Maps, packs, phone GPS."
         case .education:
-            return "Notes, captures, atlas packs, study shelves, and saved media under one library."
+            return "Reference packs."
         case .knowledge:
-            return "Notes, captures, atlas packs, study shelves, books, media, and installed packs under one shelf."
+            return "Notes, books, captures, media."
         case .runtime:
-            return "The stack, the health, the sync state, and the logs in one place."
+            return "Services, paths, logs, trapdoors."
+        }
+    }
+
+    private func accent(for pane: WorkspacePane) -> Color {
+        switch pane {
+        case .suite, .home:
+            return RoachPalette.green
+        case .dev:
+            return RoachPalette.cyan
+        case .roachClaw:
+            return RoachPalette.magenta
+        case .arcade:
+            return RoachPalette.magenta
+        case .maps:
+            return RoachPalette.cyan
+        case .education, .knowledge:
+            return RoachPalette.bronze
+        case .runtime:
+            return RoachPalette.green
+        }
+    }
+
+    private var paneAccent: Color {
+        accent(for: activePane)
+    }
+
+    private var shellStatusSummary: String {
+        let readiness = model.setupCompleted ? "Ready" : "Setup"
+        let runtime = model.snapshot == nil ? "Waiting" : "Live"
+        let account = model.snapshot?.account.linked == true ? "Linked" : "Local"
+        return "\(readiness)  ·  \(runtime)  ·  \(account)"
+    }
+
+    private var shellHintSummary: String {
+        switch activePane {
+        case .home:
+            return "Pulse · Goodies · Loose bolts"
+        case .dev:
+            return "Editor · Terminal · Local AI"
+        case .roachClaw:
+            return "Thread · Context · No landlord"
+        case .arcade:
+            return "Library · Player · Mods"
+        case .maps:
+            return "Atlas · GPS · Offline Packs"
+        case .knowledge:
+            return "Shelf · Reader · Archive"
+        case .runtime:
+            return "Health · Logs · Wires"
+        case .suite, .education:
+            return "Global tools in the rail."
         }
     }
 
     private func displayedPane(for pane: WorkspacePane?) -> WorkspacePane {
         switch pane {
-        case .maps?, .education?:
+        case .education?:
             return .knowledge
         case let pane? where visiblePanes.contains(pane):
             return pane
@@ -4160,6 +6723,10 @@ private struct RootWorkspaceView: View {
 
     private var activePane: WorkspacePane {
         displayedPane(for: model.selectedPane)
+    }
+
+    private var shouldShowShellHeader: Bool {
+        !model.setupCompleted
     }
 
     private func scheduleLocalStoreConfiguration() {
@@ -4182,18 +6749,17 @@ private struct RootWorkspaceView: View {
             let isVeryTightShell = proxy.size.width < 900 || proxy.size.height < 680
             let autoCollapsed = proxy.size.width < 1080
             let effectiveSidebarCollapsed = sidebarCollapsed || autoCollapsed
-            let shellPadding = isVeryTightShell ? 6.0 : (isTightShell ? 7.0 : surfacePadding)
-            let verticalInset = proxy.size.height < 700 ? 10.0 : (isTightShell ? 14.0 : topTitlebarInset)
-            let sidebarWidth = effectiveSidebarCollapsed ? (isVeryTightShell ? 64.0 : 70.0) : (isTightShell ? 268.0 : 292.0)
-            let shellSpacing = effectiveSidebarCollapsed ? 8.0 : (isTightShell ? 12.0 : 16.0)
+            let shellPadding = isVeryTightShell ? 5.0 : (isTightShell ? 7.0 : surfacePadding)
+            let verticalInset = isVeryTightShell ? 50.0 : (isTightShell ? 52.0 : topTitlebarInset)
+            let sidebarWidth = effectiveSidebarCollapsed ? (isVeryTightShell ? 60.0 : 66.0) : (isTightShell ? 248.0 : 276.0)
+            let shellSpacing = effectiveSidebarCollapsed ? 7.0 : (isTightShell ? 10.0 : 14.0)
 
             ZStack {
                 RoachBackground()
 
                 Group {
                     if isCompactShell {
-                        VStack(alignment: .leading, spacing: 12) {
-                            compactShellHeader(isTight: isTightShell)
+                        VStack(alignment: .leading, spacing: 10) {
                             compactNavigation(isTight: isTightShell)
                             detailPane(isTight: isTightShell)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4215,6 +6781,12 @@ private struct RootWorkspaceView: View {
                 .animation(shellSpring, value: effectiveSidebarCollapsed)
                 .animation(shellSpring, value: activePane)
 
+                topWindowChrome(isCompact: isCompactShell, isTight: isTightShell, isVeryTight: isVeryTightShell)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.horizontal, shellPadding + 2)
+                    .padding(.top, isVeryTightShell ? 7 : 9)
+                    .zIndex(12)
+
                 if showLaunchGuide {
                     LaunchGuideSheet {
                         hasSeenLaunchGuide = true
@@ -4229,12 +6801,23 @@ private struct RootWorkspaceView: View {
                     CommandPaletteSheet(
                         entries: commandPaletteEntries,
                         featuredEntries: featuredCommandPaletteEntries,
+                        recentEntries: recentCommandPaletteEntries,
+                        leadingReservedWidth: isCompactShell ? 0 : sidebarWidth + shellSpacing + shellPadding,
                         onSelect: { entry in
                             performCommand(entry)
                         },
-                        onDismiss: { showCommandPalette = false }
+                        onDismiss: {
+                            withAnimation(.spring(response: 0.22, dampingFraction: 0.90)) {
+                                showCommandPalette = false
+                            }
+                        }
                     )
-                    .transition(.opacity)
+                    .transition(
+                        .asymmetric(
+                            insertion: .scale(scale: 0.96, anchor: .top).combined(with: .opacity),
+                            removal: .scale(scale: 0.985, anchor: .top).combined(with: .opacity)
+                        )
+                    )
                     .zIndex(15)
                 }
 
@@ -4292,7 +6875,7 @@ private struct RootWorkspaceView: View {
         .task {
             scheduleLocalStoreConfiguration()
 
-            if model.selectedPane == .maps || model.selectedPane == .education {
+            if model.selectedPane == .education {
                 model.selectedPane = .knowledge
             } else if !visiblePanes.contains(model.selectedPane ?? .home) {
                 model.selectedPane = .home
@@ -4321,10 +6904,15 @@ private struct RootWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .roachNetOpenCommandPalette)) { _ in
             detachedPaletteCoordinator.dismiss()
-            showCommandPalette = true
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+                showCommandPalette = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .roachNetOpenDetachedCommandPalette)) { _ in
             presentDetachedCommandPalette()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roachNetOpenGlobalRoachClaw)) { _ in
+            openGlobalRoachClaw()
         }
         .sheet(
             isPresented: Binding(
@@ -4358,6 +6946,105 @@ private struct RootWorkspaceView: View {
         }
     }
 
+    private func topWindowChrome(isCompact: Bool, isTight: Bool, isVeryTight: Bool) -> some View {
+        HStack(spacing: isTight ? 8 : 10) {
+            HStack(spacing: 9) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(paneAccent.opacity(0.13))
+                    RoachModuleMark(
+                        systemName: activePane.icon,
+                        assetName: activePane.assetName,
+                        size: activePane.assetName == nil ? 15 : 18,
+                        isSelected: true
+                    )
+                }
+                .frame(width: 30, height: 30)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(activePane.rawValue)
+                        .font(.system(size: isTight ? 12 : 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(1)
+                    if !isVeryTight {
+                        Text(shellHintSummary)
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                    }
+                }
+            }
+
+            Spacer(minLength: 6)
+
+            if !isVeryTight {
+                HStack(spacing: 6) {
+                    RoachTag(model.snapshot == nil ? "warming" : "live", accent: model.snapshot == nil ? RoachPalette.warning : RoachPalette.green)
+                    RoachTag(model.snapshot?.account.linked == true ? "linked" : "local", accent: RoachPalette.cyan)
+                }
+            }
+
+            Button {
+                showCommandPalette = true
+            } label: {
+                if isVeryTight {
+                    Image(systemName: "magnifyingglass")
+                } else {
+                    Label("Command", systemImage: "magnifyingglass")
+                        .labelStyle(.titleAndIcon)
+                }
+            }
+            .buttonStyle(RoachSecondaryButtonStyle())
+            .keyboardShortcut("k", modifiers: [.command])
+            .help("Open command bar")
+
+            Button {
+                openGlobalRoachClaw()
+            } label: {
+                if isVeryTight {
+                    Image(systemName: "sparkles")
+                } else {
+                    Label("Claw", systemImage: "sparkles")
+                        .labelStyle(.titleAndIcon)
+                }
+            }
+            .buttonStyle(RoachSecondaryButtonStyle())
+            .help("Open RoachClaw anywhere")
+
+            Button {
+                openNativeSettings()
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(RoachUtilityButtonStyle(tint: RoachPalette.bronze))
+            .help("Open settings")
+        }
+        .padding(.horizontal, isTight ? 9 : 11)
+        .padding(.vertical, isTight ? 7 : 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.82),
+                            RoachPalette.panel.opacity(0.88),
+                            Color.black.opacity(0.64),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(paneAccent.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.30), radius: 18, x: 0, y: 10)
+        .shadow(color: paneAccent.opacity(0.05), radius: 24, x: 0, y: 12)
+    }
+
     private func openGlobalRoachClaw() {
         detachedPaletteCoordinator.dismiss()
         showCommandPalette = false
@@ -4372,39 +7059,70 @@ private struct RootWorkspaceView: View {
         }
     }
 
+    private func openNativeSettings(_ pane: RoachNetSettingsPane? = nil) {
+        if let pane {
+            model.requestSettingsPane(pane)
+        }
+        showCommandPalette = false
+        showGlobalRoachClaw = false
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+    }
+
+    private func openNativeSettings(forInternalPath path: String) -> Bool {
+        guard let pane = settingsPane(forInternalPath: path) else { return false }
+        openNativeSettings(pane)
+        return true
+    }
+
+    private func settingsPane(forInternalPath path: String) -> RoachNetSettingsPane? {
+        let normalizedPath = path
+            .components(separatedBy: "?")[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        switch normalizedPath {
+        case "/settings", "/settings/system":
+            return .runtime
+        case "/settings/ai":
+            return .roachClaw
+        case "/settings/apps":
+            return .apps
+        case "/settings/maps":
+            return .atlas
+        case "/settings/models":
+            return .models
+        case "/settings/update":
+            return .updates
+        case "/settings/benchmark":
+            return .benchmark
+        case "/settings/support":
+            return .support
+        case "/settings/legal":
+            return .legal
+        case "/settings/zim", "/settings/zim/remote-explorer":
+            return .vault
+        default:
+            return nil
+        }
+    }
+
     private func sidebar(isCollapsed: Bool, isTight: Bool, isVeryTight: Bool) -> some View {
         RoachPanel {
             ZStack(alignment: .top) {
                 if isCollapsed {
-                    VStack(alignment: .center, spacing: 14) {
+                    VStack(alignment: .center, spacing: 12) {
                         RoachOrbitMark()
                             .matchedGeometryEffect(id: "sidebar-mark", in: sidebarMotion)
-                            .frame(width: isVeryTight ? 58 : 66, height: isVeryTight ? 58 : 66)
+                            .frame(width: isVeryTight ? 52 : 60, height: isVeryTight ? 52 : 60)
                             .padding(.top, 2)
 
                         sidebarToggleButton(isCollapsed: true)
                             .matchedGeometryEffect(id: "sidebar-toggle", in: sidebarMotion)
 
-                        Button {
-                            openGlobalRoachClaw()
-                        } label: {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(RoachPalette.green)
-                                .frame(width: isVeryTight ? 44 : 48, height: isVeryTight ? 44 : 48)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(RoachPalette.green.opacity(0.12))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(RoachPalette.green.opacity(0.25), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open RoachClaw anywhere")
+                        shellUtilityDock(isCompact: true, isVeryTight: isVeryTight)
 
-                        VStack(spacing: 10) {
+                        VStack(spacing: 8) {
                             ForEach(visiblePanes) { pane in
                                 Button {
                                     model.selectedPane = pane
@@ -4426,24 +7144,10 @@ private struct RootWorkspaceView: View {
 
                         Spacer(minLength: 0)
 
-                        Button {
-                            showCommandPalette = true
-                        } label: {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(RoachPalette.text)
-                                .frame(width: isVeryTight ? 44 : 48, height: isVeryTight ? 44 : 48)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(RoachPalette.panelRaised.opacity(0.70))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(RoachPalette.border, lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open Command Bar")
+                        Circle()
+                            .fill(model.snapshot == nil ? RoachPalette.warning : RoachPalette.green)
+                            .frame(width: 8, height: 8)
+                            .shadow(color: (model.snapshot == nil ? RoachPalette.warning : RoachPalette.green).opacity(0.30), radius: 8)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .transition(
@@ -4453,25 +7157,29 @@ private struct RootWorkspaceView: View {
                         )
                     )
                 } else {
-                    VStack(alignment: .leading, spacing: isTight ? 14 : 18) {
+                    VStack(alignment: .leading, spacing: isTight ? 12 : 16) {
                         HStack(spacing: 10) {
                             RoachOrbitMark()
                                 .matchedGeometryEffect(id: "sidebar-mark", in: sidebarMotion)
-                                .frame(width: isTight ? 64 : 72, height: isTight ? 64 : 72)
+                                .frame(width: isTight ? 54 : 62, height: isTight ? 54 : 62)
 
                             VStack(alignment: .leading, spacing: 6) {
+                                RoachKicker("Welcome to")
                                 Text("RoachNet")
                                     .font(.system(size: isTight ? 19 : 22, weight: .bold))
                                     .foregroundStyle(RoachPalette.text)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.74)
-                                Text("Contained stack on your hardware")
+                                Text("Offline on purpose.")
                                     .font(.system(size: isTight ? 11 : 12, weight: .medium))
                                     .foregroundStyle(RoachPalette.muted)
-                                    .lineLimit(2)
+                                    .lineLimit(1)
                                     .minimumScaleFactor(0.82)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
+
+                            sidebarToggleButton(isCollapsed: false)
+                                .matchedGeometryEffect(id: "sidebar-toggle", in: sidebarMotion)
                         }
 
                         VStack(spacing: isTight ? 8 : 10) {
@@ -4494,11 +7202,25 @@ private struct RootWorkspaceView: View {
                         Spacer()
 
                         RoachInsetPanel {
-                            VStack(alignment: .leading, spacing: 10) {
-                                RoachKicker("At A Glance")
-                                RoachStatusRow(title: "Install", value: model.setupCompleted ? "Ready" : "Locked", accent: model.setupCompleted ? RoachPalette.success : RoachPalette.warning)
-                                RoachStatusRow(title: "Runtime", value: model.snapshot == nil ? "Offline" : "Live", accent: model.snapshot == nil ? RoachPalette.warning : RoachPalette.green)
-                                RoachStatusRow(title: "Account", value: model.snapshot?.account.linked == true ? "Linked" : "Local", accent: model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.bronze)
+                            VStack(alignment: .leading, spacing: 12) {
+                                shellUtilityDock(isCompact: false, isVeryTight: isVeryTight)
+
+                                if !isVeryTight {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.06))
+                                        .frame(height: 1)
+
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(RoachNetGlobalHotKey.hint)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(RoachPalette.text.opacity(0.92))
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Text("Search. Claw. Settings.")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(RoachPalette.muted)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
                             }
                         }
                     }
@@ -4523,90 +7245,108 @@ private struct RootWorkspaceView: View {
             }
         } label: {
             Image(systemName: isCollapsed ? "sidebar.left" : "sidebar.leading")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(RoachPalette.text)
-                .frame(width: 36, height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(RoachPalette.panelRaised.opacity(0.72))
-                )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(RoachUtilityButtonStyle(tint: RoachPalette.text))
         .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
     }
 
+    @ViewBuilder
+    private func shellUtilityDock(isCompact: Bool, isVeryTight: Bool) -> some View {
+        if isCompact {
+            VStack(spacing: isVeryTight ? 6 : 8) {
+                shellCompactUtilityButton("Command Bar", systemImage: "magnifyingglass", tint: RoachPalette.green) {
+                    showCommandPalette = true
+                }
+                shellCompactUtilityButton("RoachClaw Anywhere", systemImage: "sparkles", tint: RoachPalette.magenta) {
+                    openGlobalRoachClaw()
+                }
+                shellCompactUtilityButton("Guide", systemImage: "play.rectangle", tint: RoachPalette.cyan) {
+                    showLaunchGuide = true
+                }
+                shellCompactUtilityButton("Settings", systemImage: "gearshape", tint: RoachPalette.bronze) {
+                    openNativeSettings()
+                }
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    shellExpandedUtilityButton("Command", systemImage: "magnifyingglass") {
+                        showCommandPalette = true
+                    }
+                    shellExpandedUtilityButton("Claw", systemImage: "sparkles") {
+                        openGlobalRoachClaw()
+                    }
+                    shellExpandedUtilityButton("Guide", systemImage: "play.rectangle") {
+                        showLaunchGuide = true
+                    }
+                    shellExpandedUtilityButton("Settings", systemImage: "gearshape") {
+                        openNativeSettings()
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    shellExpandedUtilityButton("Command", systemImage: "magnifyingglass") {
+                        showCommandPalette = true
+                    }
+                    shellExpandedUtilityButton("Claw", systemImage: "sparkles") {
+                        openGlobalRoachClaw()
+                    }
+                    shellExpandedUtilityButton("Guide", systemImage: "play.rectangle") {
+                        showLaunchGuide = true
+                    }
+                    shellExpandedUtilityButton("Settings", systemImage: "gearshape") {
+                        openNativeSettings()
+                    }
+                }
+            }
+        }
+    }
+
+    private func shellCompactUtilityButton(
+        _ title: String,
+        systemImage: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+        }
+        .buttonStyle(RoachUtilityButtonStyle(tint: tint))
+        .help(title)
+    }
+
+    private func shellExpandedUtilityButton(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
     private func compactShellHeader(isTight: Bool) -> some View {
-        let runtimeTitle = model.isLoading ? "Loading" : (model.snapshot == nil ? "Waiting" : "Live")
-        let runtimeAccent = model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
-        let accountTitle = model.snapshot?.account.linked == true ? "Account linked" : "Account local"
-        let accountAccent = model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.bronze
         return RoachPanel {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
                     RoachOrbitMark()
-                        .frame(width: isTight ? 68 : 80, height: isTight ? 68 : 80)
+                        .frame(width: isTight ? 52 : 62, height: isTight ? 52 : 62)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        RoachKicker("Contained Shell")
+                        RoachKicker("Welcome to")
                         Text("RoachNet")
-                            .font(.system(size: isTight ? 26 : 30, weight: .bold))
+                            .font(.system(size: isTight ? 22 : 26, weight: .bold))
                             .foregroundStyle(RoachPalette.text)
-                        Text("One root. The stack up front.")
+                        Text("Offline on purpose.")
                             .font(.system(size: isTight ? 12 : 13, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
-                        Text(shellDetail)
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(RoachPalette.muted.opacity(0.88))
-                            .lineLimit(2)
+                            .foregroundStyle(paneAccent)
                     }
 
                     Spacer(minLength: 0)
 
-                    VStack(alignment: .trailing, spacing: 10) {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 10) {
-                                Button("Claw") {
-                                    openGlobalRoachClaw()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("Command") {
-                                    showCommandPalette = true
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("Guide") {
-                                    showLaunchGuide = true
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-                            }
-
-                            VStack(spacing: 8) {
-                                Button("Claw") {
-                                    openGlobalRoachClaw()
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("Command") {
-                                    showCommandPalette = true
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-
-                                Button("Guide") {
-                                    showLaunchGuide = true
-                                }
-                                .buttonStyle(RoachSecondaryButtonStyle())
-                            }
-                        }
-                    }
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        RoachTag(runtimeTitle, accent: runtimeAccent)
-                        RoachTag(accountTitle, accent: accountAccent)
-                    }
-                    .padding(.vertical, 1)
+                    shellUtilityDock(isCompact: true, isVeryTight: false)
                 }
             }
         }
@@ -4619,7 +7359,7 @@ private struct RootWorkspaceView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             RoachKicker("Surfaces")
-                            Text("Jump where you need to go.")
+                            Text(activePane.rawValue)
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(RoachPalette.text)
                         }
@@ -4631,7 +7371,7 @@ private struct RootWorkspaceView: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         RoachKicker("Surfaces")
-                        Text("Jump where you need to go.")
+                        Text(activePane.rawValue)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(RoachPalette.text)
                         RoachTag(activePane.rawValue, accent: RoachPalette.green)
@@ -4665,9 +7405,6 @@ private struct RootWorkspaceView: View {
                                         .lineLimit(2)
                                 }
 
-                                if activePane == pane {
-                                    RoachTag("Open now", accent: RoachPalette.green)
-                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
@@ -4702,11 +7439,12 @@ private struct RootWorkspaceView: View {
                 if model.setupCompleted && activePane.prefersPinnedDetailSurface {
                     detailPaneStack(isTight: isTight)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .frame(minHeight: proxy.size.height, alignment: .topLeading)
+                        .frame(minHeight: max(0, proxy.size.height - 28), alignment: .topLeading)
                 } else {
                     ScrollView(showsIndicators: false) {
                         detailPaneStack(isTight: isTight)
                     }
+                    .id("shell-scroll-\(activePane.rawValue)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
@@ -4717,20 +7455,18 @@ private struct RootWorkspaceView: View {
     @ViewBuilder
     private func detailPaneStack(isTight: Bool) -> some View {
         VStack(alignment: .leading, spacing: isTight ? 16 : 18) {
-            headerBar(isTight: isTight)
+            if shouldShowShellHeader {
+                headerBar(isTight: isTight)
+            }
 
             if let errorLine = model.errorLine {
                 RoachNotice(title: "Runtime notice", detail: errorLine)
             }
 
-            if model.setupCompleted && activePane == .home {
-                commandTray(isTight: isTight)
-            }
-
             detailPaneSurface
         }
-        .padding(.bottom, 8)
-        .frame(maxWidth: isTight ? 1280 : 1480, alignment: .leading)
+        .padding(.top, shouldShowShellHeader ? (isTight ? 4 : 6) : (isTight ? 10 : 12))
+        .padding(.bottom, isTight ? 22 : 28)
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(shellSpring, value: activePane)
         .animation(shellSpring, value: model.setupCompleted)
@@ -4749,7 +7485,9 @@ private struct RootWorkspaceView: View {
                     roachClaw
                 case .arcade:
                     RoachArcadeView(model: model, store: model.roachArcadeStore)
-                case .maps, .education:
+                case .maps:
+                    maps
+                case .education:
                     knowledge
                 case .knowledge:
                     knowledge
@@ -4758,22 +7496,23 @@ private struct RootWorkspaceView: View {
                 }
             }
             .id(activePane.rawValue)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .transition(
+                .opacity
+                    .combined(with: .move(edge: .bottom))
+                    .combined(with: .scale(scale: 0.985, anchor: .top))
+            )
         } else {
             lockedState
                 .id("locked")
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .transition(
+                    .opacity
+                        .combined(with: .move(edge: .bottom))
+                        .combined(with: .scale(scale: 0.985, anchor: .top))
+                )
         }
     }
 
     private func headerBar(isTight: Bool) -> some View {
-        let commandLabel = isTight ? "Cmd-K" : "Command"
-        let roachClawLabel = isTight ? "Claw" : "RoachClaw"
-        let sidebarLabel = "Nav"
-        let runtimeTitle = model.isLoading ? "Runtime loading" : (model.snapshot == nil ? "Runtime waiting" : "Runtime live")
-        let runtimeAccent = model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
-        let accountTitle = model.snapshot?.account.linked == true ? "Account linked" : "Account local"
-        let accountAccent = model.snapshot?.account.linked == true ? RoachPalette.cyan : RoachPalette.bronze
         return VStack(alignment: .leading, spacing: 10) {
             responsiveBar {
                 if activePane == .roachClaw {
@@ -4801,42 +7540,22 @@ private struct RootWorkspaceView: View {
                             .font(.system(size: isTight ? 26 : 30, weight: .bold))
                             .foregroundStyle(RoachPalette.text)
                         Text(shellDetail)
-                            .font(.system(size: isTight ? 13 : 14, weight: .regular))
+                            .font(.system(size: isTight ? 13 : 14, weight: .medium))
                             .foregroundStyle(RoachPalette.muted)
                     }
                 }
             } actions: {
-                Button(roachClawLabel) {
-                    openGlobalRoachClaw()
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text(shellStatusSummary)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(model.setupCompleted ? paneAccent.opacity(0.92) : RoachPalette.warning)
+                        .multilineTextAlignment(.trailing)
+                    Text(shellHintSummary)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(RoachSecondaryButtonStyle())
-
-                Button(commandLabel) {
-                    showCommandPalette = true
-                }
-                .buttonStyle(RoachSecondaryButtonStyle())
-
-                Button("Guide") {
-                    showLaunchGuide = true
-                }
-                .buttonStyle(RoachSecondaryButtonStyle())
-
-                Button(sidebarLabel) {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                        sidebarCollapsed.toggle()
-                    }
-                }
-                .buttonStyle(RoachSecondaryButtonStyle())
-
-                RoachTag(model.setupCompleted ? "Ready" : "Setup", accent: model.setupCompleted ? RoachPalette.green : RoachPalette.warning)
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    RoachTag(runtimeTitle, accent: runtimeAccent)
-                    RoachTag(accountTitle, accent: accountAccent)
-                }
-                .padding(.vertical, 1)
             }
         }
     }
@@ -4848,8 +7567,9 @@ private struct RootWorkspaceView: View {
             RoachCommandTray(
                 label: "Command Bar",
                 prompt: isTight
-                    ? "Cmd-K here. \(RoachNetGlobalHotKey.hint) over the desktop."
-                    : "Jump anywhere fast. Cmd-K here, \(RoachNetGlobalHotKey.hint) from anywhere."
+                    ? "Search lanes and actions."
+                    : "Search lanes, files, actions, and RoachClaw.",
+                keys: RoachNetGlobalHotKey.hint
             )
         }
         .buttonStyle(RoachCardButtonStyle())
@@ -4864,15 +7584,21 @@ private struct RootWorkspaceView: View {
         return VStack(alignment: .leading, spacing: 18) {
             RoachInsetPanel {
                 VStack(alignment: .leading, spacing: 16) {
-                    RoachSectionHeader("Suite", title: "Installed surfaces, not browser tabs.", detail: "Open what is already on this machine, then stage the next useful module in the same app.")
+                    RoachSectionHeader("Suite", title: "Installed surfaces.", detail: "Open local lanes and stage the next module.")
 
                     LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
-                        suiteCard(title: "Home", detail: "The contained shell and the next useful move.", value: "Status, command bar, and launch deck", pane: .home)
-                        suiteCard(title: "Dev", detail: "Native coding, shell, and secrets surfaces.", value: "Projects and AI assist", pane: .dev)
+                        suiteCard(title: "Home", detail: "Status, command bar, launch deck.", value: "Runtime and next moves", pane: .home)
+                        suiteCard(title: "Dev", detail: "Editor, shell, secrets, AI.", value: "Projects and assist", pane: .dev)
                         suiteCard(title: "RoachArcade", detail: "ROMs, macOS games, mods, and cheats on disk.", value: "Built-in player and Vortex bridge", pane: .arcade)
                         suiteCard(
+                            title: "RoachAtlas",
+                            detail: "Offline map packs, phone GPS, and route prep.",
+                            value: "\(model.snapshot?.mapCollections.count ?? 0) map packs · \(phoneLocationBridge.routeSamples.count) trace samples",
+                            pane: .maps
+                        )
+                        suiteCard(
                             title: "Vault",
-                            detail: "Files, captured sites, imported notes, atlas packs, and study shelves.",
+                            detail: "Files, books, notes, media, packs.",
                             value: "\(model.snapshot?.knowledgeFiles.count ?? 0) files · \(model.snapshot?.siteArchives.count ?? 0) captures · \(model.snapshot?.mapCollections.count ?? 0) map packs",
                             pane: .knowledge
                         )
@@ -4912,7 +7638,7 @@ private struct RootWorkspaceView: View {
                 RoachSectionHeader(
                     "Setup",
                     title: "Finish setup. Then the full shell opens.",
-                    detail: "Install work stays in setup so the main app stays clean once you are in."
+                    detail: "Install work stays in setup."
                 )
 
                 LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
@@ -4957,68 +7683,20 @@ private struct RootWorkspaceView: View {
         let installedServices = serviceCatalogServices.filter { $0.installed ?? false }
         let availableServices = serviceCatalogServices.filter { !($0.installed ?? false) }
 
-        return VStack(alignment: .leading, spacing: 18) {
-            RoachSpotlightPanel(accent: RoachPalette.magenta) {
-                VStack(alignment: .leading, spacing: 18) {
-                    responsiveBar {
-                        HStack(alignment: .top, spacing: 16) {
-                            RoachModuleMark(
-                                systemName: WorkspacePane.home.icon,
-                                size: 56,
-                                isSelected: true,
-                                glow: true
-                            )
-
-                            RoachSectionHeader(
-                                "Home",
-                                title: "The offline spine is up.",
-                                detail: "RoachClaw, the vault, the dev desk, games, and the runtime stay under one roof instead of leaking into tabs, dashboards, and dead logins."
-                            )
-                        }
-                    } actions: {
-                        Button("Open Dev") {
-                            model.selectedPane = .dev
-                        }
-                        .buttonStyle(RoachPrimaryButtonStyle())
-
-                        Button("RoachClaw") {
-                            model.selectedPane = .roachClaw
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-                    }
-
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 16) {
-                            homeOverviewPanel(hardware: hardware, roachClaw: roachClaw)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            homeSignalDeck(
-                                hardware: hardware,
-                                installedServices: installedServices.count,
-                                availableServices: availableServices.count
-                            )
-                            .frame(width: 320)
-                        }
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            homeOverviewPanel(hardware: hardware, roachClaw: roachClaw)
-
-                            homeSignalDeck(
-                                hardware: hardware,
-                                installedServices: installedServices.count,
-                                availableServices: availableServices.count
-                            )
-                        }
-                    }
-                }
-            }
+        return VStack(alignment: .leading, spacing: 12) {
+            homeLandingSurface(
+                hardware: hardware,
+                roachClaw: roachClaw,
+                installedServices: installedServices.count,
+                availableServices: availableServices.count
+            )
 
             RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     RoachSectionHeader(
-                        "Command Grid",
-                        title: "Open the next thing that matters.",
-                        detail: "Core surfaces, installable shelves, and the next useful move stay in one grid."
+                        "Lanes",
+                        title: "All the Goodies",
+                        detail: nil
                     )
 
                     homeMenuStrip(
@@ -5027,11 +7705,13 @@ private struct RootWorkspaceView: View {
                     )
 
                     if homeMenuSection == .commandDeck {
-                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
                             ForEach(homeGridItems) { item in
                                 Button {
                                     if let pane = item.pane {
                                         model.selectedPane = pane
+                                    } else if openNativeSettings(forInternalPath: item.routePath) {
+                                        return
                                     } else {
                                         Task { await model.openRoute(item.routePath, title: item.title) }
                                     }
@@ -5045,10 +7725,10 @@ private struct RootWorkspaceView: View {
                         if installedServices.isEmpty {
                             emptyHomeMenuState(
                                 title: "No modules installed yet.",
-                                detail: "Use the Available Modules tab here on Home to stage the RoachNet services you actually want."
+                                detail: "Stage what you need from Available."
                             )
                         } else {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
                                 ForEach(installedServices) { service in
                                     serviceModuleCard(service)
                                 }
@@ -5058,10 +7738,10 @@ private struct RootWorkspaceView: View {
                         if availableServices.isEmpty {
                             emptyHomeMenuState(
                                 title: "Nothing left to stage.",
-                                detail: "All currently available modules are already installed in this RoachNet workspace."
+                                detail: "All available modules are installed."
                             )
                         } else {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
                                 ForEach(availableServices) { service in
                                     serviceModuleCard(service)
                                 }
@@ -5073,12 +7753,12 @@ private struct RootWorkspaceView: View {
 
             if readinessSteps.contains(where: { !$0.isReady }) {
                 RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         responsiveBar {
                             RoachSectionHeader(
                                 "Next Up",
-                                title: "Bring the missing pieces home without guessing.",
-                                detail: "RoachNet calls out the blockers instead of sending you hunting through setup cruft."
+                                title: "Loose bolts.",
+                                detail: nil
                             )
                         } actions: {
                             Button("Easy Setup") {
@@ -5087,7 +7767,7 @@ private struct RootWorkspaceView: View {
                             .buttonStyle(RoachSecondaryButtonStyle())
                         }
 
-                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                        LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
                             ForEach(readinessSteps.filter { !$0.isReady }) { step in
                                 readinessCard(step)
                             }
@@ -5101,9 +7781,6 @@ private struct RootWorkspaceView: View {
                     Text("Contained desktop build v\(bundleVersion)")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(RoachPalette.muted)
-                    Text("AI, archive, the dev desk, and the runtime stay under one root.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
                 }
             } actions: {
                 Button("Guide") {
@@ -5115,6 +7792,797 @@ private struct RootWorkspaceView: View {
                 footerAction(title: "Debug Info", path: "/api/system/debug-info")
             }
         }
+        .padding(.bottom, 24)
+    }
+
+    private func homeLandingSurface(
+        hardware: SystemInfoResponse.HardwareProfile?,
+        roachClaw: RoachClawStatusResponse?,
+        installedServices: Int,
+        availableServices: Int
+    ) -> some View {
+        RoachSpotlightPanel(accent: RoachPalette.green) {
+            VStack(alignment: .center, spacing: 14) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 18) {
+                        homeLandingCopy(hardware: hardware, roachClaw: roachClaw)
+                            .frame(minWidth: 260, idealWidth: 310, maxWidth: 360, alignment: .leading)
+
+                        homeMascotStage
+                            .frame(minWidth: 250, idealWidth: 360, maxWidth: 430)
+                            .frame(maxWidth: .infinity)
+
+                        homeLandingSignals(
+                            hardware: hardware,
+                            roachClaw: roachClaw,
+                            installedServices: installedServices,
+                            availableServices: availableServices
+                        )
+                        .frame(minWidth: 240, idealWidth: 284, maxWidth: 320, alignment: .leading)
+                    }
+
+                    VStack(alignment: .center, spacing: 14) {
+                        homeLandingCopy(hardware: hardware, roachClaw: roachClaw)
+                        homeMascotStage
+                            .frame(maxWidth: 440)
+                        homeLandingSignals(
+                            hardware: hardware,
+                            roachClaw: roachClaw,
+                            installedServices: installedServices,
+                            availableServices: availableServices
+                        )
+                    }
+                }
+
+                homeRoachClawComposer
+                    .frame(maxWidth: 780)
+                    .padding(.top, 2)
+
+                homeNextMovesDeck
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private func homeLandingCopy(
+        hardware: SystemInfoResponse.HardwareProfile?,
+        roachClaw: RoachClawStatusResponse?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                RoachModuleMark(
+                    systemName: WorkspacePane.home.icon,
+                    size: 26,
+                    isSelected: true,
+                    glow: true
+                )
+
+                RoachTag(model.setupCompleted ? "Local shell live" : "Setup needed", accent: model.setupCompleted ? RoachPalette.green : RoachPalette.warning)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                RoachKicker("Home")
+                Text("Home is where the Roach is!")
+                    .font(.system(size: 30, weight: .black, design: .rounded))
+                    .foregroundStyle(RoachPalette.text)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(homeMascotLine)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RoachPalette.muted)
+                    .lineSpacing(2)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            homeHeroCommandWell
+
+            Text(hardware == nil ? "Apple Silicon lane warming up." : "\(hardware?.platformLabel ?? "Apple Silicon") · \(hardware?.recommendedModelClass ?? "local")")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(RoachPalette.green.opacity(0.88))
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var homeHeroCommandWell: some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                    showCommandPalette = true
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "command.circle.fill")
+                        .font(.system(size: 15, weight: .bold))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Command")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                        Text(RoachNetGlobalHotKey.hint)
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.green.opacity(0.86))
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(RoachPalette.green)
+                }
+                .foregroundStyle(RoachPalette.text)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    RoachPalette.green.opacity(0.16),
+                                    RoachPalette.panelRaised.opacity(0.72),
+                                    Color.black.opacity(0.20),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .stroke(RoachPalette.green.opacity(0.22), lineWidth: 1)
+                )
+            }
+            .buttonStyle(RoachCardButtonStyle())
+            .help("Open the Raycast-style command bar.")
+
+            Button {
+                homePromptFocused = true
+            } label: {
+                Image(systemName: "text.cursor")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(RoachPalette.magenta)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(RoachPalette.magenta.opacity(0.11))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(RoachPalette.magenta.opacity(0.18), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(RoachCardButtonStyle())
+            .help("Focus the Home RoachClaw chat bar.")
+        }
+    }
+
+    private var homeMascotStage: some View {
+        VStack(spacing: 8) {
+            HomeMascotDialogBubble(
+                text: homeMascotDialog,
+                accent: model.isSendingPrompt ? RoachPalette.magenta : RoachPalette.green
+            )
+            .frame(maxWidth: 360)
+            .id(homeMascotDialog)
+            .transition(.scale(scale: 0.96, anchor: .bottom).combined(with: .opacity))
+
+            RoachHomeMascotView(
+                isThinking: model.isSendingPrompt,
+                isListening: model.isDictatingPrompt,
+                nudge: homeMascotNudge,
+                accent: RoachPalette.green
+            )
+            .frame(width: 230, height: 190)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.62)) {
+                    homeMascotLineIndex = (homeMascotLineIndex + 1) % homeMascotLines.count
+                    homeMascotNudge.toggle()
+                }
+            }
+            .help("Tap the roach for another local hint.")
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func homeLandingSignals(
+        hardware: SystemInfoResponse.HardwareProfile?,
+        roachClaw: RoachClawStatusResponse?,
+        installedServices: Int,
+        availableServices: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            homeSignalPill(
+                title: "Runtime",
+                value: model.snapshot == nil ? "Waking" : "Live",
+                detail: model.snapshot?.internetConnected == true ? "Network present" : "Offline fine",
+                systemImage: "server.rack",
+                accent: model.snapshot == nil ? RoachPalette.warning : RoachPalette.green
+            )
+            homeSignalPill(
+                title: "RoachClaw",
+                value: roachClaw?.ready == true ? "Ready" : "Staging",
+                detail: model.selectedChatModelLabel,
+                systemImage: "sparkles",
+                accent: roachClaw?.ready == true ? RoachPalette.green : RoachPalette.magenta
+            )
+            homeSignalPill(
+                title: "Vault",
+                value: "\(model.snapshot?.knowledgeFiles.count ?? 0) files",
+                detail: model.importedObsidianVaults.isEmpty ? "No live note vault" : "\(model.importedObsidianVaults.count) vaults",
+                systemImage: "books.vertical.fill",
+                accent: RoachPalette.cyan
+            )
+            homeSignalPill(
+                title: "Goodies",
+                value: "\(installedServices) / \(availableServices)",
+                detail: "Installed / waiting",
+                systemImage: "square.grid.2x2.fill",
+                accent: RoachPalette.bronze
+            )
+        }
+    }
+
+    private func homeSignalPill(
+        title: String,
+        value: String,
+        detail: String,
+        systemImage: String,
+        accent: Color
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(accent)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(accent.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(title.uppercased())
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(RoachPalette.muted)
+                    Spacer(minLength: 4)
+                    Text(value)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+
+                Text(detail)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(RoachPalette.text.opacity(0.76))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.74)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(RoachPalette.panelRaised.opacity(0.62))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(accent.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private var homeRoachClawComposer: some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 8) {
+                    RoachKicker("RoachClaw")
+                    Spacer(minLength: 8)
+                    Button {
+                        withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                            showCommandPalette = true
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "command")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(RoachNetGlobalHotKey.hint)
+                                .font(.system(size: 10, weight: .black, design: .monospaced))
+                        }
+                        .foregroundStyle(RoachPalette.green)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(RoachPalette.green.opacity(0.10))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open command bar")
+                }
+
+                HStack(alignment: .center, spacing: 10) {
+                    Button {
+                        Task { await model.togglePromptDictation() }
+                    } label: {
+                        Image(systemName: model.isDictatingPrompt ? "waveform.circle.fill" : "mic.circle.fill")
+                            .font(.system(size: 21, weight: .semibold))
+                            .foregroundStyle(model.isDictatingPrompt ? RoachPalette.green : RoachPalette.magenta)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .help(model.isDictatingPrompt ? "Stop voice prompt" : "Start voice prompt")
+
+                    TextField("Ask RoachClaw what to do next.", text: $model.promptDraft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(1...3)
+                        .focused($homePromptFocused)
+                        .onSubmit {
+                            sendHomePrompt()
+                        }
+
+                    Button {
+                        sendHomePrompt()
+                    } label: {
+                        Image(systemName: model.isSendingPrompt ? "hourglass" : "arrow.up.circle.fill")
+                            .font(.system(size: 21, weight: .bold))
+                            .foregroundStyle(homeCanSendPrompt ? RoachPalette.green : RoachPalette.muted)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!homeCanSendPrompt)
+                    .help("Send to RoachClaw")
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(homePromptChips, id: \.self) { prompt in
+                            Button(prompt) {
+                                stageHomePrompt(prompt)
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var homeNextMovesDeck: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                RoachKicker("RoachClaw Picks")
+                Spacer(minLength: 8)
+                Text("\(homeNextMoves.count) next moves")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(RoachPalette.muted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 205), spacing: 10)], alignment: .leading, spacing: 10) {
+                ForEach(homeNextMoves) { move in
+                    homeNextMoveCard(move)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func homeNextMoveCard(_ move: HomeNextMove) -> some View {
+        Button {
+            performHomeMove(move)
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: move.systemImage)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(move.accent)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(move.accent.opacity(0.13))
+                        )
+
+                    Spacer(minLength: 8)
+
+                    Text(move.badge.uppercased())
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .foregroundStyle(move.accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.70)
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(move.title)
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.78)
+
+                    Text(move.detail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, minHeight: 126, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                move.accent.opacity(0.13),
+                                RoachPalette.panelRaised.opacity(0.68),
+                                Color.black.opacity(0.18),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(move.accent.opacity(0.18), lineWidth: 1)
+            )
+        }
+        .buttonStyle(RoachCardButtonStyle())
+    }
+
+    private var homeMascotLines: [String] {
+        [
+            "Pick a lane. I’ll keep the wires from chewing each other.",
+            "The good stuff lives on disk. The rented stuff can wait outside.",
+            "Ask RoachClaw from here, then jump into the lane it points at.",
+            "Small machine. Big bunker. Fewer excuses.",
+        ]
+    }
+
+    private var homeMascotLine: String {
+        let lines = homeMascotLines
+        guard !lines.isEmpty else { return "Local shell ready." }
+        return lines[homeMascotLineIndex % lines.count]
+    }
+
+    private var homeMascotDialog: String {
+        let draft = model.promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if model.isSendingPrompt {
+            return "RoachClaw is chewing on it."
+        }
+        if model.isDictatingPrompt {
+            return "Listening locally. No rented ears."
+        }
+        if !draft.isEmpty {
+            return "That ask is staged. Send it when you’re ready."
+        }
+        if let latestReply = model.latestRoachClawReply, !latestReply.isEmpty {
+            return String(latestReply.prefix(96))
+        }
+        return homeMascotLine
+    }
+
+    private var homePromptChips: [String] {
+        [
+            "What should I do next?",
+            "Check this setup for loose bolts.",
+            "Find useful vault context for today.",
+            "Help me start a dev session.",
+        ]
+    }
+
+    private var homeCanSendPrompt: Bool {
+        model.setupCompleted
+            && !model.isSendingPrompt
+            && !model.chatModelOptions.isEmpty
+            && !model.promptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var homeNextMoves: [HomeNextMove] {
+        var moves: [HomeNextMove] = []
+        let snapshot = model.snapshot
+        let roachClawReady = snapshot?.roachClaw.ready == true
+        let providerReady = snapshot?.roachClaw.ollama.available == true || snapshot?.roachClaw.openclaw.available == true
+        let vaultFileCount = snapshot?.knowledgeFiles.count ?? 0
+        let hasImportedVaults = !model.importedObsidianVaults.isEmpty
+        let arcadeStats = model.roachArcadeStore.stats
+        let hasUserChat = model.chatLines.contains { $0.role == "User" }
+        let failedDownloads = snapshot?.downloads.filter { $0.status == "failed" }.count ?? 0
+
+        if !model.setupCompleted {
+            moves.append(
+                HomeNextMove(
+                    id: "setup",
+                    title: "Finish the bunker",
+                    detail: "Run Easy Setup so the native shell has a real install to drive.",
+                    badge: "Setup",
+                    systemImage: "bolt.fill",
+                    accent: RoachPalette.warning,
+                    target: .route(title: "Easy Setup", path: "/easy-setup")
+                )
+            )
+        }
+
+        if snapshot == nil {
+            moves.append(
+                HomeNextMove(
+                    id: "runtime-refresh",
+                    title: "Wake the runtime",
+                    detail: "Pull a fresh local snapshot before guessing what is alive.",
+                    badge: "Pulse",
+                    systemImage: "arrow.clockwise",
+                    accent: RoachPalette.green,
+                    target: .refreshRuntime
+                )
+            )
+        }
+
+        if !roachClawReady || !providerReady {
+            moves.append(
+                HomeNextMove(
+                    id: "ai-lane",
+                    title: "Warm RoachClaw",
+                    detail: "Stage the local model lane so Home, Dev, and Vault can ask better questions.",
+                    badge: "AI",
+                    systemImage: "sparkles",
+                    accent: RoachPalette.magenta,
+                    target: .route(title: "AI Control", path: "/settings/ai")
+                )
+            )
+        }
+
+        if vaultFileCount == 0 {
+            moves.append(
+                HomeNextMove(
+                    id: "vault-feed",
+                    title: "Feed the vault",
+                    detail: "Drop in notes, books, captures, or media. Empty shelves make bad bunkers.",
+                    badge: "Vault",
+                    systemImage: "books.vertical.fill",
+                    accent: RoachPalette.cyan,
+                    target: .pane(.knowledge)
+                )
+            )
+        } else if !hasImportedVaults {
+            moves.append(
+                HomeNextMove(
+                    id: "obsidian-import",
+                    title: "Point at your notes",
+                    detail: "Import an Obsidian vault without copying it into another note jail.",
+                    badge: "Notes",
+                    systemImage: "square.stack.3d.up.badge.plus",
+                    accent: RoachPalette.cyan,
+                    target: .importVault
+                )
+            )
+        }
+
+        if arcadeStats.games == 0 {
+            moves.append(
+                HomeNextMove(
+                    id: "arcade-import",
+                    title: "Load the game shelf",
+                    detail: "Import ES-DE, ROMs, Mac games, runners, and mods. One shelf, fewer launcher ghosts.",
+                    badge: "Arcade",
+                    systemImage: "gamecontroller.fill",
+                    accent: RoachPalette.magenta,
+                    target: .pane(.arcade)
+                )
+            )
+        }
+
+        if !hasUserChat {
+            moves.append(
+                HomeNextMove(
+                    id: "first-ask",
+                    title: "Ask for the first move",
+                    detail: "Let RoachClaw read the machine before it starts pretending.",
+                    badge: "Ask",
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    accent: RoachPalette.green,
+                    target: .prompt("Read the current RoachNet setup and give me the next three useful moves. Keep it concrete.")
+                )
+            )
+        }
+
+        if failedDownloads > 0 {
+            moves.append(
+                HomeNextMove(
+                    id: "failed-downloads",
+                    title: "Clear failed pulls",
+                    detail: "\(failedDownloads) download\(failedDownloads == 1 ? "" : "s") failed. Clean the lane before it lies to you.",
+                    badge: "Fix",
+                    systemImage: "exclamationmark.triangle.fill",
+                    accent: RoachPalette.warning,
+                    target: .route(title: "Runtime", path: "/settings/system")
+                )
+            )
+        }
+
+        moves.append(
+            HomeNextMove(
+                id: "dev-session",
+                title: "Open the workbench",
+                detail: "Editor, terminal, inline assist, and project state. One bench, no tab graveyard.",
+                badge: "Dev",
+                systemImage: "terminal.fill",
+                accent: RoachPalette.cyan,
+                target: .pane(.dev)
+            )
+        )
+
+        moves.append(
+            HomeNextMove(
+                id: "command",
+                title: "Search the whole stack",
+                detail: "Open the command bar. Faster than hunting menus like it’s 2009.",
+                badge: RoachNetGlobalHotKey.hint,
+                systemImage: "command.circle.fill",
+                accent: RoachPalette.green,
+                target: .commandBar
+            )
+        )
+
+        var seen = Set<String>()
+        return moves.filter { seen.insert($0.id).inserted }.prefix(4).map { $0 }
+    }
+
+    private func sendHomePrompt() {
+        guard homeCanSendPrompt else { return }
+        Task { await model.sendPrompt() }
+    }
+
+    private func stageHomePrompt(_ prompt: String) {
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.84)) {
+            model.promptDraft = prompt
+            homePromptFocused = true
+        }
+    }
+
+    private func performHomeMove(_ move: HomeNextMove) {
+        switch move.target {
+        case let .pane(pane):
+            withAnimation(shellSpring) {
+                model.selectedPane = pane
+            }
+        case let .route(title, path):
+            if openNativeSettings(forInternalPath: path) {
+                return
+            }
+            Task { await model.openRoute(path, title: title) }
+        case let .prompt(prompt):
+            stageHomePrompt(prompt)
+        case .commandBar:
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                showCommandPalette = true
+            }
+        case .refreshRuntime:
+            Task { await model.refreshRuntimeState() }
+        case .importVault:
+            model.importObsidianVault()
+        }
+    }
+
+    private var homeHeroLaunchDeck: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
+            homeHeroActionCard(
+                title: "Command Bar",
+                detail: RoachNetGlobalHotKey.hint,
+                systemImage: "magnifyingglass",
+                accent: RoachPalette.green
+            ) {
+                showCommandPalette = true
+            }
+
+            homeHeroActionCard(
+                title: "RoachClaw",
+                detail: "Local AI.",
+                systemImage: "sparkles",
+                accent: RoachPalette.magenta
+            ) {
+                openGlobalRoachClaw()
+            }
+
+            homeHeroActionCard(
+                title: "Dev Desk",
+                detail: "IDE shell.",
+                systemImage: "terminal.fill",
+                accent: RoachPalette.cyan
+            ) {
+                model.selectedPane = .dev
+            }
+
+            homeHeroActionCard(
+                title: "Arcade",
+                detail: "Game shelf.",
+                systemImage: "gamecontroller.fill",
+                accent: RoachPalette.magenta
+            ) {
+                model.selectedPane = .arcade
+            }
+
+            homeHeroActionCard(
+                title: "Vault",
+                detail: "Books, notes.",
+                systemImage: "books.vertical.fill",
+                accent: RoachPalette.cyan
+            ) {
+                model.selectedPane = .knowledge
+            }
+
+            homeHeroActionCard(
+                title: "RoachAtlas",
+                detail: "Offline maps.",
+                systemImage: "map.fill",
+                accent: RoachPalette.bronze
+            ) {
+                model.selectedPane = .maps
+            }
+        }
+    }
+
+    private func homeHeroActionCard(
+        title: String,
+        detail: String,
+        systemImage: String,
+        accent: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(accent.opacity(0.14))
+                    Image(systemName: systemImage)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(accent)
+                }
+                .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                    Text(detail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(RoachPalette.muted)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                }
+
+                Spacer(minLength: 6)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(accent)
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                accent.opacity(0.10),
+                                RoachPalette.panelRaised.opacity(0.82),
+                                Color.black.opacity(0.16),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(accent.opacity(0.20), lineWidth: 1)
+            )
+        }
+        .buttonStyle(RoachCardButtonStyle())
     }
 
     private func homeSignalDeck(
@@ -5124,21 +8592,27 @@ private struct RootWorkspaceView: View {
     ) -> some View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 12) {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                RoachSectionHeader(
+                    "Status",
+                    title: "Pulse check.",
+                    detail: nil
+                )
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
                     RoachMetricCard(
                         label: "Runtime",
                         value: model.snapshot == nil ? "Waiting" : "Live",
-                        detail: model.snapshot?.internetConnected == true ? "Online, but still local-first." : "Offline is still fully usable."
+                        detail: model.snapshot?.internetConnected == true ? "Online" : "Offline"
                     )
                     RoachMetricCard(
                         label: "Account",
                         value: model.snapshot?.account.linked == true ? "Linked" : "Local",
-                        detail: model.snapshot?.account.linked == true ? "Cloud chat and sync lane available." : "Everything stays on this box."
+                        detail: model.snapshot?.account.linked == true ? "Sync" : "This Mac"
                     )
                     RoachMetricCard(
                         label: "Modules",
                         value: "\(installedServices) live / \(availableServices) staged",
-                        detail: "Install what you need. Ignore the rest."
+                        detail: "Installed / staged"
                     )
                     RoachMetricCard(
                         label: "Machine",
@@ -5160,9 +8634,9 @@ private struct RootWorkspaceView: View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
                 RoachSectionHeader(
-                    "At A Glance",
-                    title: "What matters, up front.",
-                        detail: "Read the machine, see the blockers, and keep moving."
+                    "Overview",
+                    title: "Stack on disk.",
+                    detail: nil
                 )
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -5170,8 +8644,8 @@ private struct RootWorkspaceView: View {
                         "Runtime",
                         value: roachClaw?.preferredMode ?? hardware?.recommendedRuntime ?? "native_local",
                         detail: model.snapshot?.internetConnected == true
-                            ? "Live, contained, and still in one root."
-                            : "Offline is fine. The shell still moves.",
+                            ? "Live"
+                            : "Offline",
                         systemName: "server.rack",
                         accent: RoachPalette.green
                     )
@@ -5179,15 +8653,15 @@ private struct RootWorkspaceView: View {
                         "AI lane",
                         value: model.displayedRoachClawDefaultModel,
                         detail: roachClaw?.ollama.available == true
-                            ? "Local RoachClaw is ready."
-                            : "Finish the first local model from AI Control or Easy Setup.",
+                            ? "Ready"
+                            : "Needs model",
                         systemName: "sparkles",
                         accent: RoachPalette.magenta
                     )
                     RoachDigestRow(
                         "Vault",
                         value: "\(model.snapshot?.knowledgeFiles.count ?? 0) local files",
-                        detail: "Maps, notes, docs, and captures stay grouped together.",
+                        detail: "Shelf",
                         systemName: "books.vertical.fill",
                         accent: RoachPalette.cyan
                     )
@@ -5197,241 +8671,151 @@ private struct RootWorkspaceView: View {
     }
 
     private var roachClaw: some View {
-        let roachClaw = model.snapshot?.roachClaw
-        let providers = model.snapshot?.providers.providers ?? [:]
         let chatModels = model.chatModelOptions
         let recommendedQuickstartModel = model.recommendedLocalModels.first ?? model.config.roachClawDefaultModel
         let cloudModels = chatModels.filter { $0.localizedCaseInsensitiveContains(":cloud") }
         let activeModelDownloads = model.snapshot?.downloads.filter { $0.filetype == "model" && $0.status != "failed" } ?? []
 
-        return VStack(alignment: .leading, spacing: 18) {
-            RoachSpotlightPanel(accent: RoachPalette.green) {
-                VStack(alignment: .leading, spacing: 16) {
-                    responsiveBar {
-                        RoachSectionHeader(
-                            "RoachClaw",
-                            title: "Keep the thread in front.",
-                            detail: "Chat first, local by default, and keep voice, routing, memory, and app context inside one workbench."
+        return VStack(alignment: .leading, spacing: 14) {
+            roachClawControlStrip(
+                cloudModels: cloudModels.count,
+                activeModelDownloads: activeModelDownloads.count
+            )
+
+            roachClawConversationAndActionDeck(
+                roachClaw: model.snapshot?.roachClaw,
+                recommendedQuickstartModel: recommendedQuickstartModel,
+                cloudModel: cloudModels.first,
+                activeModelDownloads: activeModelDownloads.count,
+                cloudModels: cloudModels.count
+            )
+
+            roachClawWorkingSetDock
+        }
+    }
+
+    private func roachClawControlStrip(
+        cloudModels: Int,
+        activeModelDownloads: Int
+    ) -> some View {
+        RoachSpotlightPanel(accent: RoachPalette.magenta) {
+            VStack(alignment: .leading, spacing: 12) {
+                responsiveBar {
+                    HStack(alignment: .center, spacing: 14) {
+                        RoachModuleMark(
+                            systemName: WorkspacePane.roachClaw.icon,
+                            assetName: WorkspacePane.roachClaw.assetName,
+                            size: 32,
+                            isSelected: true,
+                            glow: true
                         )
-                    } actions: {
-                        Button("AI Control") {
-                            Task { await model.openRoute("/settings/ai", title: "AI Control") }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
 
-                        Menu {
-                            ForEach(chatModels, id: \.self) { modelName in
-                                Button(model.chatModelLabel(for: modelName)) {
-                                    model.selectedChatModel = modelName
-                                }
-                            }
-
-                            Divider()
-
-                            Button("Open Model Store") {
-                                Task { await model.openRoute("/settings/models", title: "Model Store") }
-                            }
-                        } label: {
-                            Text(model.selectedChatModelLabel)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("RoachClaw")
+                                .font(.system(size: 21, weight: .bold, design: .rounded))
+                                .foregroundStyle(RoachPalette.text)
+                            Text("Local first.")
+                                .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(RoachPalette.muted)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
                         }
-                        .menuStyle(.borderlessButton)
+                    }
+                } actions: {
+                    roachClawTopActions(chatModels: model.chatModelOptions)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        RoachTag(model.selectedChatModelLabel, accent: RoachPalette.green)
+                        RoachTag("\(model.roachBrainPinnedCount) pinned", accent: RoachPalette.magenta)
+                        RoachTag("\(model.enabledRoachClawContextCount) lanes", accent: RoachPalette.cyan)
+                        RoachTag(cloudModels == 0 ? "no cloud rent" : "\(cloudModels) escape routes", accent: RoachPalette.bronze)
+                        if activeModelDownloads > 0 {
+                            RoachTag("\(activeModelDownloads) model pulls", accent: RoachPalette.warning)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func roachClawTopActions(chatModels: [String]) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                Button(model.isDictatingPrompt ? "Stop Voice" : "Voice") {
+                    Task { await model.togglePromptDictation() }
+                }
+                .buttonStyle(RoachSecondaryButtonStyle())
+
+                Menu {
+                    ForEach(chatModels, id: \.self) { modelName in
+                        Button(model.chatModelLabel(for: modelName)) {
+                            model.selectedChatModel = modelName
+                        }
                     }
 
-                    roachClawWorkbenchSignalGrid(
-                        recommendedQuickstartModel: recommendedQuickstartModel,
-                        cloudModels: cloudModels.count
-                    )
+                    Divider()
 
-                    roachClawConversationAndActionDeck(
-                        roachClaw: roachClaw,
-                        recommendedQuickstartModel: recommendedQuickstartModel,
-                        cloudModel: cloudModels.first,
-                        activeModelDownloads: activeModelDownloads.count,
-                        cloudModels: cloudModels.count
-                    )
+                    Button("Model Store") {
+                        openNativeSettings(.models)
+                    }
+                } label: {
+                    Label("Model", systemImage: "cpu")
+                        .labelStyle(.titleAndIcon)
                 }
+                .buttonStyle(RoachSecondaryButtonStyle())
             }
 
-            roachClawOverviewPanel(roachClaw: roachClaw, providers: providers)
+            Menu {
+                Button(model.isDictatingPrompt ? "Stop Voice" : "Voice") {
+                    Task { await model.togglePromptDictation() }
+                }
 
-            LazyVGrid(columns: vaultShelfColumns, alignment: .leading, spacing: 16) {
-                RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            RoachKicker("RoachBrain")
-                            Spacer()
-                            RoachTag("\(model.roachBrainWikiStatus.pageCount) wiki", accent: RoachPalette.cyan)
-                            Text("\(model.roachBrainMemories.count)")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(RoachPalette.muted)
-                        }
+                Divider()
 
-                        TextField("Search local memory", text: $model.roachBrainQuery)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(RoachPalette.text)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(RoachPalette.panelRaised.opacity(0.64))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(RoachPalette.border, lineWidth: 1)
-                            )
-
-                        if model.roachBrainVisibleMatches.isEmpty {
-                            Text("Run a few real threads or pin a useful answer. The local memory shelf starts filling from there.")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-                        } else {
-                            ForEach(model.roachBrainVisibleMatches.prefix(4)) { match in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack {
-                                        Text(match.memory.title)
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundStyle(RoachPalette.text)
-                                            .lineLimit(1)
-                                        Spacer()
-                                        if match.memory.pinned {
-                                            RoachTag("Pinned", accent: RoachPalette.magenta)
-                                        }
-                                    }
-
-                                    Text(match.memory.summary)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
-                                        .fixedSize(horizontal: false, vertical: true)
-
-                                    if !match.memory.tags.isEmpty {
-                                        ScrollView(.horizontal, showsIndicators: false) {
-                                            HStack(spacing: 6) {
-                                                ForEach(match.memory.tags.prefix(4), id: \.self) { tag in
-                                                    RoachTag(tag, accent: RoachPalette.cyan)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                .padding(12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(Color.black.opacity(0.18))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(RoachPalette.border, lineWidth: 1)
-                                )
-                            }
-                        }
+                ForEach(chatModels, id: \.self) { modelName in
+                    Button(model.chatModelLabel(for: modelName)) {
+                        model.selectedChatModel = modelName
                     }
                 }
 
-                RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        RoachKicker("Model Lane")
-                        Text("Pick the first route on purpose.")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(RoachPalette.text)
-                        Text(model.recommendedLocalModelSummary)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
+                Divider()
 
-                        if !activeModelDownloads.isEmpty {
-                            downloadsPanel(title: "Local Model Queue", jobs: activeModelDownloads)
-                        }
-
-                        if !model.recommendedLocalModels.isEmpty {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
-                                ForEach(model.recommendedLocalModels, id: \.self) { modelName in
-                                    RoachTag(
-                                        modelName,
-                                        accent: modelName == model.config.roachClawDefaultModel ? RoachPalette.green : RoachPalette.magenta
-                                    )
-                                }
-                            }
-                        }
-
-                        if let installed = roachClaw?.installedModels, !installed.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                RoachKicker("Installed")
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
-                                    ForEach(installed.prefix(8), id: \.self) { modelName in
-                                        RoachTag(
-                                            modelName,
-                                            accent: modelName == roachClaw?.resolvedDefaultModel ? RoachPalette.green : RoachPalette.muted
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        RoachNotice(
-                            title: "Compiled Wiki",
-                            detail: model.roachBrainWikiStatus.pageCount == 0
-                                ? "RoachBrain will compile saved turns into an Obsidian-readable local wiki as memory grows."
-                                : "\(model.roachBrainWikiStatus.pageCount) linked pages are ready at index.md for RoachClaw context.",
-                            accent: RoachPalette.cyan
-                        )
-                    }
+                Button("Model Store") {
+                    openNativeSettings(.models)
                 }
-
-                RoachInsetPanel {
-                    VStack(alignment: .leading, spacing: 14) {
-                        RoachKicker("Routing")
-                        Text("Keep one machine fast. Reach for the wider lane only when the local route stops being enough.")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(RoachPalette.text)
-
-                        Picker("Inference Route", selection: $model.config.distributedInferenceBackend) {
-                            Text("Disabled").tag("disabled")
-                            Text("Exo").tag("exo")
-                        }
-                        .pickerStyle(.segmented)
-
-                        if model.config.distributedInferenceBackend == "exo" {
-                            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                                RoachInlineField(
-                                    title: "exo Base URL",
-                                    value: $model.config.exoBaseUrl,
-                                    placeholder: "http://RoachNet:52415"
-                                )
-                                RoachInlineField(
-                                    title: "exo Model ID",
-                                    value: $model.config.exoModelId,
-                                    placeholder: "llama-3.2-3b"
-                                )
-                            }
-                        }
-
-                        Button("Save Route") {
-                            Task { await model.saveInferenceRoutingSettings() }
-                        }
-                        .buttonStyle(RoachPrimaryButtonStyle())
-
-                        if let skills = model.snapshot?.installedSkills, !skills.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                RoachKicker("Skills")
-                                ForEach(skills.prefix(4)) { skill in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(skill.name)
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(RoachPalette.text)
-                                        Text(skill.slug)
-                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(RoachPalette.muted)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(RoachPalette.text)
+                    .frame(width: 42, height: 42)
+                    .background(Circle().fill(RoachPalette.panelRaised.opacity(0.74)))
+                    .overlay(Circle().stroke(RoachPalette.border, lineWidth: 1))
             }
+            .menuStyle(.borderlessButton)
+        }
+    }
+
+    private func roachClawHeroStrip(
+        recommendedQuickstartModel: String,
+        cloudModels: Int
+    ) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], alignment: .leading, spacing: 12) {
+            RoachInfoPill(title: "Selected Model", value: model.selectedChatModelLabel)
+            RoachInfoPill(title: "Quickstart", value: recommendedQuickstartModel)
+            RoachInfoPill(title: "Memory", value: "\(model.roachBrainPinnedCount) pinned")
+            RoachInfoPill(
+                title: "Command Bar",
+                value: RoachNetGlobalHotKey.hint
+            )
+            RoachInfoPill(
+                title: "Fallback",
+                value: cloudModels == 0 ? "Local only" : "\(cloudModels) cloud routes"
+            )
+            RoachInfoPill(
+                title: "Context",
+                value: "\(model.enabledRoachClawContextCount) lanes armed"
+            )
         }
     }
 
@@ -5443,9 +8827,9 @@ private struct RootWorkspaceView: View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
                 RoachSectionHeader(
-                    "Signal Board",
-                    title: "Read the AI lane fast.",
-                    detail: "Default, memory, downloads, and fallback. No scavenger hunt."
+                    "Status",
+                    title: "AI lane.",
+                    detail: nil
                 )
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -5559,6 +8943,11 @@ private struct RootWorkspaceView: View {
                 value: model.roachBrainWikiStatus.pageCount == 0 ? "Ready" : "\(model.roachBrainWikiStatus.pageCount) pages",
                 detail: "Compiled markdown context"
             )
+            RoachMetricCard(
+                label: "Context",
+                value: "\(model.roachClawContextCharacterBudget / 1_000)k chars",
+                detail: "\(model.enabledRoachClawContextCount) permissioned lanes"
+            )
         }
     }
 
@@ -5579,14 +8968,8 @@ private struct RootWorkspaceView: View {
                         recommendedQuickstartModel: recommendedQuickstartModel,
                         cloudModel: cloudModel
                     )
-
-                    roachClawSignalDeck(
-                        roachClaw: roachClaw,
-                        activeModelDownloads: activeModelDownloads,
-                        cloudModels: cloudModels
-                    )
                 }
-                .frame(width: 320, alignment: .topLeading)
+                .frame(minWidth: 300, idealWidth: 330, maxWidth: 360, alignment: .topLeading)
             }
 
             VStack(alignment: .leading, spacing: 14) {
@@ -5596,12 +8979,6 @@ private struct RootWorkspaceView: View {
                         recommendedQuickstartModel: recommendedQuickstartModel,
                         cloudModel: cloudModel
                     )
-
-                    roachClawSignalDeck(
-                        roachClaw: roachClaw,
-                        activeModelDownloads: activeModelDownloads,
-                        cloudModels: cloudModels
-                    )
                 }
             }
         }
@@ -5609,10 +8986,10 @@ private struct RootWorkspaceView: View {
 
     private var roachClawStarterPrompts: [String] {
         [
-            "Give me the next useful move for this machine.",
-            "Summarize what RoachNet is running right now.",
-            "Turn the latest local context into a clean action list.",
-            "What should I pin into RoachBrain from this thread?",
+            "Summarize current runtime state.",
+            "What should I do next?",
+            "Search local context for blockers.",
+            "Save the useful part to memory.",
         ]
     }
 
@@ -5623,7 +9000,7 @@ private struct RootWorkspaceView: View {
         let threadTitle = latestPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? latestPrompt!
             : "Fresh thread"
-        let laneTitle = model.hasCloudChatFallback ? "Web lane active" : "Private lane first"
+        let laneTitle = model.hasCloudChatFallback ? "Web lane" : "Local first"
 
         return RoachInsetPanel {
             VStack(alignment: .leading, spacing: 16) {
@@ -5656,26 +9033,18 @@ private struct RootWorkspaceView: View {
                                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                                             .tracking(1.2)
                                             .foregroundStyle(RoachPalette.magenta)
-                                        Text(hasMessages ? "Keep the thread in front." : "What can RoachClaw help with?")
-                                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                                        Text(hasMessages ? "Thread" : "New chat")
+                                            .font(.system(size: 20, weight: .bold, design: .rounded))
                                             .foregroundStyle(RoachPalette.text)
                                     }
                                 }
-
-                                Text(hasMessages
-                                     ? "This lane stays chat-first. Threads stay in front while routing, voice, and memory stay one move off to the side."
-                                     : "Your thread stays with this workbench. Pair the private local lane when the machine should answer first.")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(RoachPalette.muted)
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
 
                             Spacer(minLength: 12)
 
                             HStack(spacing: 8) {
                                 RoachTag(laneTitle, accent: model.hasCloudChatFallback ? RoachPalette.cyan : RoachPalette.green)
-                                RoachTag(model.selectedChatModelLabel, accent: RoachPalette.magenta)
-                                RoachTag("\(threadLines.count) turns", accent: RoachPalette.cyan)
+                                RoachTag("\(threadLines.count) turns", accent: RoachPalette.magenta)
                             }
                         }
 
@@ -5705,22 +9074,15 @@ private struct RootWorkspaceView: View {
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .tracking(1.2)
                                         .foregroundStyle(RoachPalette.magenta)
-                                    Text(hasMessages ? "Keep the thread in front." : "What can RoachClaw help with?")
-                                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                                    Text(hasMessages ? "Thread" : "New chat")
+                                        .font(.system(size: 20, weight: .bold, design: .rounded))
                                         .foregroundStyle(RoachPalette.text)
                                 }
                             }
 
-                            Text(hasMessages
-                                 ? "This lane stays chat-first. Threads stay in front while routing, voice, and memory stay one move off to the side."
-                                 : "Your thread stays with this workbench. Pair the private local lane when the machine should answer first.")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(RoachPalette.muted)
-
                             HStack(spacing: 8) {
                                 RoachTag(laneTitle, accent: model.hasCloudChatFallback ? RoachPalette.cyan : RoachPalette.green)
-                                RoachTag(model.selectedChatModelLabel, accent: RoachPalette.magenta)
-                                RoachTag("\(threadLines.count) turns", accent: RoachPalette.cyan)
+                                RoachTag("\(threadLines.count) turns", accent: RoachPalette.magenta)
                             }
                         }
                     }
@@ -5761,15 +9123,13 @@ private struct RootWorkspaceView: View {
                                         .font(.system(size: 18, weight: .bold, design: .rounded))
                                         .foregroundStyle(RoachPalette.text)
                                         .lineLimit(1)
-                                    Text("Recent turns stay readable here while route, context, and voice stay one move away.")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
+                                        .truncationMode(.middle)
+                                        .minimumScaleFactor(0.76)
                                 }
 
                                 Spacer(minLength: 12)
 
                                 HStack(spacing: 8) {
-                                    RoachTag("Thread anchored", accent: RoachPalette.magenta)
                                     RoachTag(model.hasCloudChatFallback ? "Web lane" : "Private lane", accent: model.hasCloudChatFallback ? RoachPalette.cyan : RoachPalette.green)
                                 }
                             }
@@ -5778,11 +9138,10 @@ private struct RootWorkspaceView: View {
                                 Text(threadTitle)
                                     .font(.system(size: 18, weight: .bold, design: .rounded))
                                     .foregroundStyle(RoachPalette.text)
-                                Text("Recent turns stay readable here while route, context, and voice stay one move away.")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(RoachPalette.muted)
+                                    .lineLimit(2)
+                                    .truncationMode(.middle)
+                                    .minimumScaleFactor(0.76)
                                 HStack(spacing: 8) {
-                                    RoachTag("Thread anchored", accent: RoachPalette.magenta)
                                     RoachTag(model.hasCloudChatFallback ? "Web lane" : "Private lane", accent: model.hasCloudChatFallback ? RoachPalette.cyan : RoachPalette.green)
                                 }
                             }
@@ -5796,7 +9155,7 @@ private struct RootWorkspaceView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(minHeight: 390, idealHeight: 460, maxHeight: 560)
+                        .frame(minHeight: 360, idealHeight: 430, maxHeight: 520)
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -5818,32 +9177,22 @@ private struct RootWorkspaceView: View {
                         )
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 18) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(alignment: .top, spacing: 12) {
-                                ZStack {
-                                    Circle()
-                                        .fill(RoachPalette.cyan.opacity(0.14))
-                                        .frame(width: 54, height: 54)
-                                    Image(systemName: "message.badge.waveform.fill")
-                                        .font(.system(size: 21, weight: .bold))
-                                        .foregroundStyle(RoachPalette.cyan)
-                                }
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Start with one clear ask.")
-                                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                                        .foregroundStyle(RoachPalette.text)
-                                    Text("Use a starter prompt or drop straight into the composer. Keep the thread here instead of letting it dissolve into stray tabs and notes.")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(RoachPalette.muted)
-                                }
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(alignment: .top, spacing: 12) {
+                            ZStack {
+                                Circle()
+                                    .fill(RoachPalette.cyan.opacity(0.14))
+                                    .frame(width: 48, height: 48)
+                                Image(systemName: "message.badge.waveform.fill")
+                                    .font(.system(size: 19, weight: .bold))
+                                    .foregroundStyle(RoachPalette.cyan)
                             }
 
-                            HStack(spacing: 8) {
-                                RoachTag("Thread-first lane", accent: RoachPalette.magenta)
-                                RoachTag("Private lane first", accent: RoachPalette.green)
-                                RoachTag("Context stays gated", accent: RoachPalette.cyan)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Start a thread.")
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                                    .foregroundStyle(RoachPalette.text)
+                                    .lineLimit(1)
                             }
                         }
 
@@ -5870,8 +9219,6 @@ private struct RootWorkspaceView: View {
                     )
                 }
 
-                roachClawWorkingSetDock
-
                 VStack(alignment: .leading, spacing: 10) {
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .bottom, spacing: 12) {
@@ -5884,12 +9231,6 @@ private struct RootWorkspaceView: View {
                             roachClawSendButton
                         }
                     }
-
-                    Text(model.hasCloudChatFallback
-                         ? "The web lane stays ready from anywhere. Promote the private local lane when this machine should answer first."
-                         : "RoachClaw stays private-first. Open a wider web lane only when the thread genuinely needs it.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
                 }
             }
         }
@@ -5913,8 +9254,8 @@ private struct RootWorkspaceView: View {
                 responsiveBar {
                     RoachSectionHeader(
                         "Working Set",
-                        title: "Keep the useful output close.",
-                        detail: "Recent replies and pinned memory act like lightweight artifacts: readable, copyable, and ready to save without leaving the thread."
+                        title: "Recent output.",
+                        detail: nil
                     )
                 } actions: {
                     HStack(spacing: 8) {
@@ -5924,37 +9265,35 @@ private struct RootWorkspaceView: View {
                 }
 
                 if replies.isEmpty && memories.isEmpty {
-                    Text("Ask once, then the pieces worth keeping start stacking here.")
+                    Text("No saved output yet.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
                 } else {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .top, spacing: 12) {
-                            ForEach(replies) { line in
-                                roachClawWorkingSetCard(
-                                    eyebrow: "Reply artifact",
-                                    title: String(line.text.prefix(58)),
-                                    detail: line.text,
-                                    accent: RoachPalette.magenta,
-                                    actionTitle: "Copy"
-                                ) {
-                                    let pasteboard = NSPasteboard.general
-                                    pasteboard.clearContents()
-                                    pasteboard.setString(line.text, forType: .string)
-                                    model.statusLine = "Copied a RoachClaw working-set reply."
-                                }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12)], alignment: .leading, spacing: 12) {
+                        ForEach(replies) { line in
+                            roachClawWorkingSetCard(
+                                eyebrow: "Reply artifact",
+                                title: String(line.text.prefix(58)),
+                                detail: line.text,
+                                accent: RoachPalette.magenta,
+                                actionTitle: "Copy"
+                            ) {
+                                let pasteboard = NSPasteboard.general
+                                pasteboard.clearContents()
+                                pasteboard.setString(line.text, forType: .string)
+                                model.statusLine = "Copied a RoachClaw working-set reply."
                             }
+                        }
 
-                            ForEach(memories) { memory in
-                                roachClawWorkingSetCard(
-                                    eyebrow: memory.pinned ? "Pinned recall" : "Memory recall",
-                                    title: memory.title,
-                                    detail: memory.summary.isEmpty ? memory.body : memory.summary,
-                                    accent: memory.pinned ? RoachPalette.green : RoachPalette.cyan,
-                                    actionTitle: "Stage"
-                                ) {
-                                    model.promptDraft = "Use this RoachBrain memory as context and give me the next useful move:\n\n\(memory.title)\n\n\(memory.summary.isEmpty ? memory.body : memory.summary)"
-                                }
+                        ForEach(memories) { memory in
+                            roachClawWorkingSetCard(
+                                eyebrow: memory.pinned ? "Pinned recall" : "Memory recall",
+                                title: memory.title,
+                                detail: memory.summary.isEmpty ? memory.body : memory.summary,
+                                accent: memory.pinned ? RoachPalette.green : RoachPalette.cyan,
+                                actionTitle: "Stage"
+                            ) {
+                                model.promptDraft = "Use this RoachBrain memory as context and give me the next useful move:\n\n\(memory.title)\n\n\(memory.summary.isEmpty ? memory.body : memory.summary)"
                             }
                         }
                     }
@@ -5999,7 +9338,7 @@ private struct RootWorkspaceView: View {
             .buttonStyle(RoachSecondaryButtonStyle())
         }
         .padding(14)
-        .frame(width: 240, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(minHeight: 172, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -6024,16 +9363,11 @@ private struct RootWorkspaceView: View {
     private func roachClawStarterPromptDeck(_ prompts: [String]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Start with the next sharp ask.")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(RoachPalette.text)
-                    Text("Drop a concrete prompt instead of letting the thread go soft.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(RoachPalette.muted)
-                }
+                Text("Prompts")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RoachPalette.text)
                 Spacer(minLength: 8)
-                RoachTag("Prompt deck", accent: RoachPalette.magenta)
+                RoachTag(RoachNetGlobalHotKey.hint, accent: RoachPalette.magenta)
             }
 
             LazyVGrid(
@@ -6050,15 +9384,10 @@ private struct RootWorkspaceView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(alignment: .top, spacing: 10) {
-                                ZStack {
-                                    Circle()
-                                        .fill(RoachPalette.magenta.opacity(0.18))
-                                        .frame(width: 34, height: 34)
-
-                                    Image(systemName: "sparkles")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(RoachPalette.magenta)
-                                }
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(RoachPalette.magenta)
+                                    .frame(width: 24, height: 24)
 
                                 Text(prompt)
                                     .font(.system(size: 13, weight: .semibold))
@@ -6066,14 +9395,9 @@ private struct RootWorkspaceView: View {
                                     .multilineTextAlignment(.leading)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
-
-                            Text("Drop this into the composer")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .tracking(0.9)
-                                .foregroundStyle(RoachPalette.muted)
                         }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .fill(
@@ -6108,10 +9432,8 @@ private struct RootWorkspaceView: View {
             responsiveBar {
                 RoachSectionHeader(
                     "Latest Reply",
-                    title: "Keep the part worth keeping.",
-                    detail: latestPrompt?.isEmpty == false
-                        ? "This was the last useful turn. Pin it, play it back, or keep the next follow-up pointed at the same thread."
-                        : "The last answer stays in view so you can decide if it belongs in RoachBrain."
+                    title: "Last answer.",
+                    detail: nil
                 )
             } actions: {
                 HStack(spacing: 8) {
@@ -6138,12 +9460,12 @@ private struct RootWorkspaceView: View {
 
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) {
-                    Button(model.isSpeakingLatestReply ? "Stop Reply" : "Listen Back") {
+                    Button(model.isSpeakingLatestReply ? "Stop" : "Listen") {
                         model.toggleLatestReplySpeech()
                     }
                     .buttonStyle(RoachSecondaryButtonStyle())
 
-                    Button(canSaveLatestReply ? "Save to RoachBrain" : "Await Reply") {
+                    Button(canSaveLatestReply ? "Save" : "Await Reply") {
                         model.saveLatestRoachClawResponseToRoachBrain()
                     }
                     .buttonStyle(RoachPrimaryButtonStyle())
@@ -6151,12 +9473,12 @@ private struct RootWorkspaceView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Button(model.isSpeakingLatestReply ? "Stop Reply" : "Listen Back") {
+                    Button(model.isSpeakingLatestReply ? "Stop" : "Listen") {
                         model.toggleLatestReplySpeech()
                     }
                     .buttonStyle(RoachSecondaryButtonStyle())
 
-                    Button(canSaveLatestReply ? "Save to RoachBrain" : "Await Reply") {
+                    Button(canSaveLatestReply ? "Save" : "Await Reply") {
                         model.saveLatestRoachClawResponseToRoachBrain()
                     }
                     .buttonStyle(RoachPrimaryButtonStyle())
@@ -6204,9 +9526,9 @@ private struct RootWorkspaceView: View {
                 }
 
                 RoachSectionHeader(
-                    "Control Deck",
-                    title: "Pick the lane that answers first.",
-                    detail: "Route the prompt, arm voice, and keep the useful part without leaving the thread."
+                    "Controls",
+                    title: "Route and context.",
+                    detail: nil
                 )
 
                 LazyVGrid(
@@ -6219,7 +9541,7 @@ private struct RootWorkspaceView: View {
                     roachClawRouteCard(
                         kicker: "Local first",
                         title: recommendedQuickstartModel,
-                        detail: "Keep the contained model lane in front until you deliberately step out to cloud.",
+                        detail: "Contained model",
                         accent: RoachPalette.green,
                         isActive: model.selectedChatModel == recommendedQuickstartModel
                     ) {
@@ -6232,7 +9554,7 @@ private struct RootWorkspaceView: View {
                         roachClawRouteCard(
                             kicker: "Cloud when needed",
                             title: cloudModel,
-                            detail: "Use the hosted lane when you need it, but keep the workbench and memory shelf in the same surface.",
+                            detail: "Hosted route",
                             accent: RoachPalette.cyan,
                             isActive: model.selectedChatModel == cloudModel
                         ) {
@@ -6241,60 +9563,34 @@ private struct RootWorkspaceView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    RoachDigestRow(
-                        "Selected",
-                        value: model.selectedChatModelLabel,
-                        detail: "Current prompt route for this workbench.",
-                        systemName: "brain.head.profile",
-                        accent: RoachPalette.magenta
-                    )
-                    RoachDigestRow(
-                        "Voice",
-                        value: model.isDictatingPrompt ? "Listening" : (model.isSpeakingLatestReply ? "Speaking" : "Standby"),
-                        detail: model.speechStatusLine ?? "Mic and playback stay in the thread instead of hiding behind another surface.",
-                        systemName: "waveform",
-                        accent: model.isDictatingPrompt ? RoachPalette.green : RoachPalette.cyan
-                    )
-                    RoachDigestRow(
-                        "RoachBrain",
-                        value: canSaveLatestReply ? "Ready to save" : "Waiting",
-                        detail: canSaveLatestReply ? "The latest assistant turn can be pinned into local recall." : "Run one good prompt and pin the part worth keeping.",
-                        systemName: "shippingbox.fill",
-                        accent: RoachPalette.bronze
-                    )
-                    RoachDigestRow(
-                        "Context",
-                        value: model.enabledRoachClawContextCount == 0 ? "Locked" : "\(model.enabledRoachClawContextCount) lanes armed",
-                        detail: model.enabledRoachClawContextCount == 0
-                            ? "Vault, captured web, and project context stay dark until you explicitly arm them."
-                            : "RoachClaw can read only the lanes you explicitly opened for this workbench.",
-                        systemName: "lock.shield.fill",
-                        accent: model.enabledRoachClawContextCount == 0 ? RoachPalette.warning : RoachPalette.green
-                    )
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
+                    RoachInfoPill(title: "STT", value: model.isDictatingPrompt ? "Listening" : model.speechCapabilitySnapshot.sttModeLabel)
+                    RoachInfoPill(title: "TTS", value: model.isSpeakingLatestReply ? "Speaking" : model.speechCapabilitySnapshot.ttsModeLabel)
+                    RoachInfoPill(title: "Memory", value: canSaveLatestReply ? "Save ready" : "\(model.roachBrainMemories.count) saved")
+                    RoachInfoPill(title: "Context", value: model.enabledRoachClawContextCount == 0 ? "Locked" : "\(model.enabledRoachClawContextCount) lanes")
                 }
 
                 roachClawContextAccessDeck
 
-                LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 10) {
-                    Button(canSaveLatestReply ? "Save to RoachBrain" : "Await Reply") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], alignment: .leading, spacing: 10) {
+                    Button(canSaveLatestReply ? "Save" : "Await Reply") {
                         model.saveLatestRoachClawResponseToRoachBrain()
                     }
                     .buttonStyle(RoachPrimaryButtonStyle())
                     .disabled(!canSaveLatestReply)
 
-                    Button(model.isSpeakingLatestReply ? "Stop Reply" : "Listen Back") {
+                    Button(model.isSpeakingLatestReply ? "Stop" : "Listen") {
                         model.toggleLatestReplySpeech()
                     }
                     .buttonStyle(RoachSecondaryButtonStyle())
                     .disabled(model.latestRoachClawReply == nil)
 
-                    Button(model.isDictatingPrompt ? "Stop Voice Prompt" : "Voice Prompt") {
+                    Button(model.isDictatingPrompt ? "Stop Voice" : "Voice") {
                         Task { await model.togglePromptDictation() }
                     }
                     .buttonStyle(RoachSecondaryButtonStyle())
 
-                    Button("Quickstart Local") {
+                    Button("Local") {
                         model.config.roachClawDefaultModel = recommendedQuickstartModel
                         model.selectedChatModel = recommendedQuickstartModel
                         Task { await model.applyRoachClawDefaults() }
@@ -6302,8 +9598,8 @@ private struct RootWorkspaceView: View {
                     .buttonStyle(RoachSecondaryButtonStyle())
                     .disabled(model.isApplyingDefaults)
 
-                    Button("Model Store") {
-                        Task { await model.openRoute("/settings/models", title: "Model Store") }
+                    Button("Models") {
+                        openNativeSettings(.models)
                     }
                     .buttonStyle(RoachSecondaryButtonStyle())
                 }
@@ -6314,9 +9610,9 @@ private struct RootWorkspaceView: View {
     private var roachClawContextAccessDeck: some View {
         VStack(alignment: .leading, spacing: 10) {
             RoachSectionHeader(
-                "Context Access",
-                title: "Open only the lanes you want RoachClaw to read.",
-                detail: "These permissions stay local to RoachNet. Open vault, captured web, or project context only when the thread actually needs more ground truth."
+                "Context",
+                title: "Context.",
+                detail: nil
             )
 
             ForEach(RoachClawContextScope.allCases) { scope in
@@ -6342,7 +9638,8 @@ private struct RootWorkspaceView: View {
                             Text(scope.detail)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(RoachPalette.muted)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
 
                         Spacer(minLength: 8)
@@ -6398,7 +9695,7 @@ private struct RootWorkspaceView: View {
                     .foregroundStyle(RoachPalette.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text(isActive ? "Answering first" : "Promote this lane")
+                Text(isActive ? "Active" : "Use")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(accent)
             }
@@ -6438,7 +9735,7 @@ private struct RootWorkspaceView: View {
             .buttonStyle(.plain)
             .padding(.bottom, 6)
 
-                TextField("Ask RoachClaw something concrete", text: $model.promptDraft, axis: .vertical)
+                TextField("Ask RoachClaw", text: $model.promptDraft, axis: .vertical)
                     .textFieldStyle(.plain)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(RoachPalette.text)
@@ -6465,25 +9762,57 @@ private struct RootWorkspaceView: View {
     }
 
     private var maps: some View {
-        let collections = model.snapshot?.mapCollections ?? []
+        let collections = mapDisplayCollections(from: model.snapshot?.mapCollections ?? [])
+        let selectedCollection = selectedMapCollection(in: collections)
         let activeMapDownloads = model.snapshot?.downloads.filter { $0.filetype == "map" && $0.status != "failed" } ?? []
         let failedMapDownloads = model.snapshot?.downloads.filter { $0.filetype == "map" && $0.status == "failed" } ?? []
+        let installedCount = collections.filter(\.isReady).count
+        let totalResources = collections.reduce(0) { $0 + $1.totalCount }
+        let readyResources = collections.reduce(0) { $0 + $1.installedCount }
+        let selectedActionKey = selectedCollection.map { "map-\($0.slug)" }
 
         return VStack(alignment: .leading, spacing: 18) {
-            RoachInsetPanel {
+            RoachSpotlightPanel(accent: RoachPalette.cyan) {
                 VStack(alignment: .leading, spacing: 16) {
                     responsiveBar {
-                        RoachSectionHeader("Atlas Shelf", title: "Offline regions live inside Vault now.", detail: "Download region packs, install the base atlas, and keep route references on the same shelf as notes, captures, and media.")
+                        RoachSectionHeader(
+                            "RoachAtlas",
+                            title: "Atlas.",
+                            detail: nil
+                        )
                     } actions: {
-                        Button("Open Atlas View") {
-                            Task { await model.openRoute("/maps", title: "Atlas Shelf") }
-                        }
-                        .buttonStyle(RoachSecondaryButtonStyle())
-                        Button(model.activeActions.contains("maps-base-assets") ? "Installing..." : "Install Atlas Base") {
+                        Button {
                             Task { await model.downloadBaseMapAssets() }
+                        } label: {
+                            Label(model.activeActions.contains("maps-base-assets") ? "Installing" : "Install Base", systemImage: "square.and.arrow.down.fill")
+                                .labelStyle(.titleAndIcon)
                         }
                         .buttonStyle(RoachPrimaryButtonStyle())
                         .disabled(model.activeActions.contains("maps-base-assets"))
+
+                        Button {
+                            model.selectedPane = .maps
+                        } label: {
+                            Label("Native Atlas", systemImage: "map.fill")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(RoachSecondaryButtonStyle())
+                    }
+
+                    Picker("Map mode", selection: $mapViewerMode) {
+                        ForEach(RoachMapViewerMode.allCases) { mode in
+                            Label(mode.rawValue, systemImage: mode.systemImage)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
+                        RoachMetricCard(label: "Packs", value: "\(installedCount) / \(collections.count)", detail: "Installed")
+                        RoachMetricCard(label: "Resources", value: "\(readyResources) / \(totalResources)", detail: "Ready")
+                        RoachMetricCard(label: "Phone", value: phoneLocationBridge.statusLabel, detail: phoneLocationBridge.latestFix?.coordinateLabel ?? "No fix")
+                        RoachMetricCard(label: "Trace", value: "\(phoneLocationBridge.routeSamples.count)", detail: phoneLocationBridge.routeSamples.isEmpty ? "No samples" : "Samples")
                     }
 
                     if !activeMapDownloads.isEmpty {
@@ -6494,7 +9823,7 @@ private struct RootWorkspaceView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             RoachNotice(
                                 title: "Map downloads need another pass",
-                                detail: "\(failedMapDownloads.count) failed map jobs are still in the local queue history.",
+                                detail: "\(failedMapDownloads.count) failed jobs.",
                                 accent: RoachPalette.warning
                             )
 
@@ -6507,40 +9836,56 @@ private struct RootWorkspaceView: View {
                 }
             }
 
-            LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
-                ForEach(collections) { collection in
-                    let installedCount = collection.installed_count ?? 0
-                    let totalCount = collection.total_count ?? collection.resources.count
-                    let fullyInstalled = totalCount > 0 && installedCount >= totalCount
-                    let actionKey = "map-\(collection.slug)"
+            RoachNativeMapViewer(
+                collection: selectedCollection,
+                mode: mapViewerMode,
+                zoomLevel: $mapZoomLevel,
+                latestFix: phoneLocationBridge.latestFix,
+                routeSamples: phoneLocationBridge.routeSamples,
+                installBusy: selectedActionKey.map { model.activeActions.contains($0) } ?? false,
+                onInstallSelected: {
+                    guard let selectedCollection else { return }
+                    Task { await model.downloadMapCollection(selectedCollection.slug) }
+                },
+                onOpenWebAtlas: {
+                    model.selectedPane = .maps
+                }
+            )
 
-                    Button {
-                        if fullyInstalled {
-                            Task { await model.openRoute("/maps", title: collection.name) }
-                        } else {
-                            Task { await model.downloadMapCollection(collection.slug) }
-                        }
-                    } label: {
-                        VaultVirtualShelfCard(
-                            title: collection.name,
-                            detail: collection.description ?? "Offline regional map pack ready to live on the atlas shelf.",
-                            pathLabel: "Vault / Atlas / \(collection.slug)",
-                            kindLabel: "Atlas Pack",
-                            actionLabel: fullyInstalled
-                                ? "Open atlas"
-                                : (model.activeActions.contains(actionKey) ? "Queueing..." : "Add to Vault"),
-                            accent: RoachPalette.cyan,
-                            fallbackSystemName: "map.fill",
-                            extraTags: [
-                                "\(installedCount) / \(totalCount) ready",
-                                fullyInstalled ? "Ready on shelf" : "Download to Vault",
-                            ]
-                        )
-                    }
-                    .buttonStyle(RoachCardButtonStyle())
-                    .disabled(model.activeActions.contains(actionKey))
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    RoachPhoneTrackingPanel(
+                        bridge: phoneLocationBridge,
+                        manualPayload: $manualPhoneGPSPayload
+                    )
+                    .frame(minWidth: 360, idealWidth: 440, maxWidth: 520)
+
+                    RoachMapSourceReadinessPanel(
+                        sources: RoachOpenMapSource.defaults,
+                        selectedCollection: selectedCollection,
+                        routeSamples: phoneLocationBridge.routeSamples
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    RoachPhoneTrackingPanel(
+                        bridge: phoneLocationBridge,
+                        manualPayload: $manualPhoneGPSPayload
+                    )
+
+                    RoachMapSourceReadinessPanel(
+                        sources: RoachOpenMapSource.defaults,
+                        selectedCollection: selectedCollection,
+                        routeSamples: phoneLocationBridge.routeSamples
+                    )
                 }
             }
+
+            RoachMapPackShelf(
+                collections: collections,
+                selectedSlug: $selectedMapCollectionSlug,
+                activeActionIDs: model.activeActions
+            )
         }
     }
 
@@ -6689,66 +10034,93 @@ private struct RootWorkspaceView: View {
         let selectedImportedVault = importedVaults.first(where: { $0.id == model.selectedImportedVaultID }) ?? importedVaults.first
         let activeImportedVaultName = selectedImportedVault?.name ?? "No live markdown vault selected"
         let importedVaultNotes = selectedImportedVault.map { VaultWorkspaceStore.noteURLs(in: $0, limit: nil) } ?? []
+        let installedPackCount = installedMapCollections.count
+            + installedEducationCategories.count
+            + (installedWikipediaOption == nil ? 0 : 1)
+            + installedModelNames.count
 
         return VStack(alignment: .leading, spacing: 18) {
-            RoachInsetPanel {
-                responsiveBar {
-                    RoachSectionHeader(
-                        "Vault",
-                        title: "One shelf. Fewer dead ends.",
-                        detail: "Notes, books, media, captures, and saved files stay close to the workspace and open inside RoachNet instead of bouncing you into another app."
-                    )
-                } actions: {
-                    HStack(spacing: 8) {
-                        Button("Import Obsidian Vault") {
+            RoachSpotlightPanel(accent: RoachPalette.bronze) {
+                VStack(alignment: .leading, spacing: 10) {
+                    responsiveBar {
+                        RoachSectionHeader(
+                            "Vault",
+                            title: "Vault.",
+                            detail: nil
+                        )
+                    } actions: {
+                        Button("Import Vault") {
                             model.importObsidianVault()
                         }
+                        .buttonStyle(RoachPrimaryButtonStyle())
+
+                        Button("Open Storage") {
+                            model.openStorageInFinder()
+                        }
                         .buttonStyle(RoachSecondaryButtonStyle())
-
-                        RoachTag("EPUB ready", accent: RoachPalette.magenta)
-                        RoachTag("Media preview", accent: RoachPalette.cyan)
-                        RoachTag("Shelf view", accent: RoachPalette.green)
-                        RoachTag("\(archives.count) captured sites", accent: RoachPalette.cyan)
-                        RoachTag("\(mapCollectionCount) atlas packs", accent: RoachPalette.cyan)
-                        RoachTag("\(educationCategoryCount) study shelves", accent: RoachPalette.green)
-                    }
-                }
-            }
-
-            RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 14) {
-                    RoachSectionHeader(
-                        "Shelf Pulse",
-                        title: "The living library stays readable at a glance.",
-                        detail: "See what is already on the shelf before you dive into notes, captures, atlases, study packs, or media."
-                    )
-
-                    LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
-                        RoachMetricCard(
-                            label: "Indexed",
-                            value: "\(files.count)",
-                            detail: files.isEmpty ? "No files on shelf yet" : "Files ready to open in place"
-                        )
-                        RoachMetricCard(
-                            label: "Imported vaults",
-                            value: "\(importedVaults.count)",
-                            detail: importedVaults.isEmpty ? activeImportedVaultName : "\(activeImportedVaultName) is active"
-                        )
-                        RoachMetricCard(
-                            label: "Captured web",
-                            value: "\(archives.count)",
-                            detail: archives.isEmpty ? "No mirrored sites yet" : "Offline site mirrors are shelved here"
-                        )
-                        RoachMetricCard(
-                            label: "Installed packs",
-                            value: "\(installedMapCollections.count + installedEducationCategories.count + (installedWikipediaOption == nil ? 0 : 1) + installedModelNames.count)",
-                            detail: "Atlas, study, Wikipedia, and model packs stay inside Vault"
-                        )
                     }
                 }
             }
 
             RoachArchiveVaultPanel(model: model, store: model.roachArchiveStore)
+                .layoutPriority(2)
+
+            RoachInsetPanel {
+                VStack(alignment: .leading, spacing: 12) {
+                    RoachSectionHeader(
+                        "Vault Lanes",
+                        title: "Fast shelves.",
+                        detail: nil
+                    )
+
+                    knowledgeHeroLaunchDeck(
+                        archivesCount: archives.count,
+                        mapCollectionCount: mapCollectionCount,
+                        educationCategoryCount: educationCategoryCount,
+                        installedModelCount: installedModelNames.count
+                    )
+                }
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    knowledgeOverviewPanel(
+                        activeImportedVaultName: activeImportedVaultName,
+                        importedVaultCount: importedVaults.count,
+                        filesCount: files.count,
+                        archivesCount: archives.count,
+                        installedPackCount: installedPackCount,
+                        installedModelCount: installedModelNames.count
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    knowledgeSignalDeck(
+                        filesCount: files.count,
+                        importedVaultCount: importedVaults.count,
+                        archivesCount: archives.count,
+                        installedPackCount: installedPackCount
+                    )
+                    .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    knowledgeOverviewPanel(
+                        activeImportedVaultName: activeImportedVaultName,
+                        importedVaultCount: importedVaults.count,
+                        filesCount: files.count,
+                        archivesCount: archives.count,
+                        installedPackCount: installedPackCount,
+                        installedModelCount: installedModelNames.count
+                    )
+
+                    knowledgeSignalDeck(
+                        filesCount: files.count,
+                        importedVaultCount: importedVaults.count,
+                        archivesCount: archives.count,
+                        installedPackCount: installedPackCount
+                    )
+                }
+            }
 
             if !archives.isEmpty {
                 RoachInsetPanel {
@@ -6756,11 +10128,11 @@ private struct RootWorkspaceView: View {
                         responsiveBar {
                             RoachSectionHeader(
                                 "Captured Web",
-                                title: "Captured sites belong on the same shelf.",
-                                detail: "The mirrored web lane is folded into Vault so saved sites, imported notes, and the rest of the library stop pretending they are separate products."
+                                title: "Captured sites.",
+                                detail: nil
                             )
                         } actions: {
-                            Button("Open Offline Web Apps") {
+                            Button("Open Captures") {
                                 Task { await model.openRoute("/site-archives", title: "Offline Web Apps") }
                             }
                             .buttonStyle(RoachSecondaryButtonStyle())
@@ -6776,7 +10148,7 @@ private struct RootWorkspaceView: View {
                                         detail: archive.url ?? "Captured site mirror already staged in the contained web lane.",
                                         pathLabel: "Vault / Captured Web / \(archive.slug)",
                                         kindLabel: "Captured Site",
-                                        actionLabel: "Open Offline Web Apps",
+                                        actionLabel: "Open capture",
                                         accent: RoachPalette.cyan,
                                         fallbackSystemName: "globe.badge.chevron.backward",
                                         extraTags: ["Contained mirror", "Vault lane"]
@@ -6795,8 +10167,8 @@ private struct RootWorkspaceView: View {
                         responsiveBar {
                             RoachSectionHeader(
                                 "Obsidian",
-                                title: "Bring the notes home without copying them.",
-                                detail: "Imported vaults stay where they already live on disk. RoachNet reads the same markdown, keeps the links live, and gives the notes their own shelf."
+                                title: "Shared markdown vaults.",
+                                detail: nil
                             )
                         } actions: {
                             if let selectedImportedVault {
@@ -6814,7 +10186,7 @@ private struct RootWorkspaceView: View {
                                 } label: {
                                     VaultVirtualShelfCard(
                                         title: vault.name,
-                                        detail: "RoachNet and Obsidian can point at the same markdown files without copying the vault into a second silo.",
+                                        detail: "Same markdown files.",
                                         pathLabel: vault.path,
                                         kindLabel: VaultWorkspaceStore.isObsidianCompatible(vault: vault) ? "Obsidian live link" : "Markdown shelf",
                                         actionLabel: vault.id == selectedImportedVault?.id ? "Selected shelf" : "Browse notes",
@@ -6836,21 +10208,20 @@ private struct RootWorkspaceView: View {
                 }
             }
 
-            maps
-
-            education
-
             if let selectedImportedVault, !importedVaultNotes.isEmpty {
                 RoachInsetPanel {
                     VStack(alignment: .leading, spacing: 16) {
                         responsiveBar {
                             RoachSectionHeader(
                                 "Notes Lane",
-                                title: "\(selectedImportedVault.name), inside RoachNet.",
-                                detail: "Open notes from the imported vault in the built-in editor and keep the same markdown readable in Obsidian."
+                                title: selectedImportedVault.name,
+                                detail: nil
                             )
                         } actions: {
-                            RoachTag("Shared with Obsidian", accent: RoachPalette.magenta)
+                            Button("Reveal Vault") {
+                                model.openImportedVaultInFinder(selectedImportedVault)
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
                         }
 
                         LazyVGrid(columns: vaultShelfColumns, alignment: .leading, spacing: 12) {
@@ -6883,11 +10254,14 @@ private struct RootWorkspaceView: View {
                         responsiveBar {
                             RoachSectionHeader(
                                 "Installed Packs",
-                                title: "App Store installs still land inside the library.",
-                                detail: "Maps, study shelves, Wikipedia, and model packs stay grouped with the rest of the contained vault instead of disappearing into separate setup lanes."
+                                title: "Installed packs.",
+                                detail: nil
                             )
                         } actions: {
-                            RoachTag("Installed via Apps", accent: RoachPalette.magenta)
+                            Button("Open Apps") {
+                                openNativeSettings(.apps)
+                            }
+                            .buttonStyle(RoachSecondaryButtonStyle())
                         }
 
                         LazyVGrid(columns: vaultShelfColumns, alignment: .leading, spacing: 12) {
@@ -6897,7 +10271,7 @@ private struct RootWorkspaceView: View {
                                 } label: {
                                     VaultVirtualShelfCard(
                                         title: collection.name,
-                                        detail: collection.description ?? "Offline region pack already staged inside RoachNet.",
+                                        detail: collection.description ?? "Offline region pack.",
                                         pathLabel: "Vault / Atlas / \(collection.slug)",
                                         kindLabel: "Map Pack",
                                         actionLabel: "Open atlas",
@@ -6919,7 +10293,7 @@ private struct RootWorkspaceView: View {
                                     } label: {
                                         VaultVirtualShelfCard(
                                             title: category.name,
-                                            detail: installedTier.description ?? category.description ?? "Curated offline reference shelf already staged inside the vault.",
+                                            detail: installedTier.description ?? category.description ?? "Offline reference shelf.",
                                             pathLabel: "Vault / Study / \(category.slug) / \(installedTier.slug)",
                                             kindLabel: "Study Shelf",
                                             actionLabel: "Open study shelf",
@@ -6938,7 +10312,7 @@ private struct RootWorkspaceView: View {
                                 } label: {
                                     VaultVirtualShelfCard(
                                         title: installedWikipediaOption.name,
-                                        detail: installedWikipediaOption.description ?? "The selected Wikipedia pack is staged in the contained study lane.",
+                                        detail: installedWikipediaOption.description ?? "Selected Wikipedia pack.",
                                         pathLabel: "Vault / Wikipedia / \(installedWikipediaOption.id)",
                                         kindLabel: "Wikipedia",
                                         actionLabel: "Open reference shelf",
@@ -6957,7 +10331,7 @@ private struct RootWorkspaceView: View {
                                 } label: {
                                     VaultVirtualShelfCard(
                                         title: modelName,
-                                        detail: "Contained RoachClaw model pack ready for local chat, coding, and assistant lanes.",
+                                        detail: "Local model pack.",
                                         pathLabel: "Vault / Models / \(modelName)",
                                         kindLabel: "Model Pack",
                                         actionLabel: "Open RoachClaw",
@@ -6975,9 +10349,52 @@ private struct RootWorkspaceView: View {
 
             if files.isEmpty {
                 RoachInsetPanel {
-                    Text("No indexed files yet.")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(RoachPalette.muted)
+                    VStack(alignment: .leading, spacing: 14) {
+                        RoachNotice(
+                            title: "Vault shelf is empty",
+                            detail: "Import a vault or drop files into storage.",
+                            accent: RoachPalette.cyan,
+                            systemName: "books.vertical.fill"
+                        )
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                Button {
+                                    model.importObsidianVault()
+                                } label: {
+                                    Label("Import Vault", systemImage: "square.stack.3d.up.badge.plus")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+
+                                Button {
+                                    model.openStorageInFinder()
+                                } label: {
+                                    Label("Open Storage", systemImage: "externaldrive.fill")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Button {
+                                    model.importObsidianVault()
+                                } label: {
+                                    Label("Import Vault", systemImage: "square.stack.3d.up.badge.plus")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .buttonStyle(RoachPrimaryButtonStyle())
+
+                                Button {
+                                    model.openStorageInFinder()
+                                } label: {
+                                    Label("Open Storage", systemImage: "externaldrive.fill")
+                                        .labelStyle(.titleAndIcon)
+                                }
+                                .buttonStyle(RoachSecondaryButtonStyle())
+                            }
+                        }
+                    }
                 }
             } else {
                 LazyVGrid(columns: vaultShelfColumns, alignment: .leading, spacing: 12) {
@@ -7003,6 +10420,8 @@ private struct RootWorkspaceView: View {
                                         return ["Open in RoachNet", "Text deck"]
                                     case .image:
                                         return ["Open in RoachNet", "Lightbox"]
+                                    case .archive:
+                                        return ["Open in RoachNet", "Archive"]
                                     default:
                                         return ["Open in RoachNet"]
                                     }
@@ -7011,6 +10430,172 @@ private struct RootWorkspaceView: View {
                         }
                         .buttonStyle(RoachCardButtonStyle())
                     }
+                }
+            }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isVaultDropTarget) { providers in
+            model.importDroppedVaultProviders(providers)
+        }
+        .overlay(alignment: .topTrailing) {
+            if isVaultDropTarget {
+                HStack(spacing: 10) {
+                    Image(systemName: "tray.and.arrow.down.fill")
+                        .font(.system(size: 16, weight: .bold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Drop into Vault")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                        Text("Files and folders get copied. No rental shelf involved.")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                }
+                .foregroundStyle(RoachPalette.text)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(RoachPalette.panelRaised.opacity(0.94))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(RoachPalette.green.opacity(0.72), lineWidth: 1)
+                )
+                .shadow(color: RoachPalette.green.opacity(0.22), radius: 18, x: 0, y: 8)
+                .padding(14)
+                .transition(.scale(scale: 0.94).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.22, dampingFraction: 0.84), value: isVaultDropTarget)
+    }
+
+    private func knowledgeHeroLaunchDeck(
+        archivesCount: Int,
+        mapCollectionCount: Int,
+        educationCategoryCount: Int,
+        installedModelCount: Int
+    ) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 8)], alignment: .leading, spacing: 8) {
+            homeHeroActionCard(
+                title: "Captured Web",
+                detail: archivesCount == 0 ? "Open or start the capture shelf." : "\(archivesCount) mirrors on shelf.",
+                systemImage: "globe.badge.chevron.backward",
+                accent: RoachPalette.cyan
+            ) {
+                Task { await model.openRoute("/site-archives", title: "Offline Web Apps") }
+            }
+
+            homeHeroActionCard(
+                title: "RoachAtlas",
+                detail: mapCollectionCount == 0 ? "Open the atlas lane." : "\(mapCollectionCount) atlas packs ready.",
+                systemImage: "map.fill",
+                accent: RoachPalette.cyan
+            ) {
+                model.selectedPane = .maps
+            }
+
+            homeHeroActionCard(
+                title: "Study Shelf",
+                detail: educationCategoryCount == 0 ? "Open docs and reference lanes." : "\(educationCategoryCount) study shelves staged.",
+                systemImage: "graduationcap.fill",
+                accent: RoachPalette.green
+            ) {
+                Task { await model.openRoute("/docs/home", title: "Study Shelf") }
+            }
+
+            homeHeroActionCard(
+                title: "Model Shelf",
+                detail: installedModelCount == 0 ? "Open the model store." : "\(installedModelCount) local models on disk.",
+                systemImage: "brain.head.profile",
+                accent: RoachPalette.magenta
+            ) {
+                openNativeSettings(.models)
+            }
+        }
+    }
+
+    private func knowledgeOverviewPanel(
+        activeImportedVaultName: String,
+        importedVaultCount: Int,
+        filesCount: Int,
+        archivesCount: Int,
+        installedPackCount: Int,
+        installedModelCount: Int
+    ) -> some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                RoachSectionHeader(
+                    "Index",
+                    title: "Local inventory.",
+                    detail: nil
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    RoachDigestRow(
+                        "Active vault",
+                        value: importedVaultCount == 0 ? "No live vault" : activeImportedVaultName,
+                        detail: importedVaultCount == 0 ? "Bring a markdown shelf in." : "\(importedVaultCount) linked vaults",
+                        systemName: "books.vertical.fill",
+                        accent: RoachPalette.magenta
+                    )
+                    RoachDigestRow(
+                        "Captured web",
+                        value: "\(archivesCount)",
+                        detail: archivesCount == 0 ? "No captures yet" : "Mirrors on the shelf",
+                        systemName: "globe.badge.chevron.backward",
+                        accent: RoachPalette.cyan
+                    )
+                    RoachDigestRow(
+                        "Files",
+                        value: "\(filesCount)",
+                        detail: filesCount == 0 ? "Shelf still empty" : "Open inside RoachNet",
+                        systemName: "doc.fill",
+                        accent: RoachPalette.green
+                    )
+                    RoachDigestRow(
+                        "Installed packs",
+                        value: "\(installedPackCount)",
+                        detail: installedModelCount == 0 ? "Atlas, study, and wiki" : "\(installedModelCount) model packs included",
+                        systemName: "shippingbox.fill",
+                        accent: RoachPalette.bronze
+                    )
+                }
+            }
+        }
+    }
+
+    private func knowledgeSignalDeck(
+        filesCount: Int,
+        importedVaultCount: Int,
+        archivesCount: Int,
+        installedPackCount: Int
+    ) -> some View {
+        RoachInsetPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                RoachSectionHeader(
+                    "Counts",
+                    title: "Vault totals.",
+                    detail: nil
+                )
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+                    RoachMetricCard(
+                        label: "Files",
+                        value: "\(filesCount)",
+                        detail: filesCount == 0 ? "No files yet" : "Ready to open"
+                    )
+                    RoachMetricCard(
+                        label: "Vaults",
+                        value: "\(importedVaultCount)",
+                        detail: importedVaultCount == 0 ? "Nothing linked" : "Markdown shelves linked"
+                    )
+                    RoachMetricCard(
+                        label: "Captures",
+                        value: "\(archivesCount)",
+                        detail: archivesCount == 0 ? "No mirrors yet" : "Stored offline"
+                    )
+                    RoachMetricCard(
+                        label: "Packs",
+                        value: "\(installedPackCount)",
+                        detail: installedPackCount == 0 ? "Nothing staged" : "Atlas, study, wiki, and models"
+                    )
                 }
             }
         }
@@ -7032,6 +10617,8 @@ private struct RootWorkspaceView: View {
             return "Image"
         case .pdf:
             return "PDF"
+        case .archive:
+            return "Archive"
         case .folder:
             return "Folder"
         default:
@@ -7055,6 +10642,8 @@ private struct RootWorkspaceView: View {
             return "photo.fill"
         case .pdf:
             return "doc.richtext.fill"
+        case .archive:
+            return "archivebox.fill"
         case .folder:
             return "folder.fill"
         default:
@@ -7078,6 +10667,8 @@ private struct RootWorkspaceView: View {
             return RoachPalette.magenta
         case .pdf:
             return RoachPalette.bronze
+        case .archive:
+            return RoachPalette.cyan
         case .folder:
             return RoachPalette.cyan
         default:
@@ -7088,23 +10679,25 @@ private struct RootWorkspaceView: View {
     private func vaultFilePreviewHint(for file: String) -> String {
         switch VaultPreviewKind.resolve(for: URL(fileURLWithPath: file)) {
         case .book:
-            return "Open the built-in reader surface and keep the book in your shelf."
+            return "Open in the built-in reader."
         case .video:
-            return "Open the video lane and keep the file in the same archive shell."
+            return "Open in the video lane."
         case .audio:
-            return "Play it in the built-in listening surface without leaving the vault."
+            return "Play in the listening surface."
         case .markdown:
-            return "Preview the note in-place and keep the markdown lane close to the wider vault."
+            return "Preview the note in place."
         case .text:
-            return "Open the file in the built-in text deck and keep config, logs, and source on the same shelf."
+            return "Open in the text deck."
         case .image:
-            return "Open the file in the lightbox and keep the visual tied to the rest of the archive."
+            return "Open in the lightbox."
         case .pdf:
-            return "Open the document in the built-in reader instead of bouncing out to Preview."
+            return "Open in the built-in reader."
+        case .archive:
+            return "Inspect the compressed package."
         case .folder:
-            return "Open the folder in the expanded shelf view and keep drilling inward without dropping to Finder."
+            return "Open the folder in Vault."
         default:
-            return "Open the file inside RoachNet and keep the archive lane tidy."
+            return "Open inside RoachNet."
         }
     }
 
@@ -7124,6 +10717,8 @@ private struct RootWorkspaceView: View {
             return "Open image"
         case .folder:
             return "Open folder"
+        case .archive:
+            return "Inspect"
         default:
             return "Preview"
         }
@@ -7132,7 +10727,7 @@ private struct RootWorkspaceView: View {
     private func importedVaultNoteDetail(noteURL: URL, vault: ImportedObsidianVault) -> String {
         let vaultRoot = vault.url.standardizedFileURL.path + "/"
         let relativePath = noteURL.standardizedFileURL.path.replacingOccurrences(of: vaultRoot, with: "")
-        return "Open \(relativePath) in the RoachNet notes lane while keeping the same file live for Obsidian."
+        return "Open \(relativePath) from the linked vault."
     }
 
     private var runtime: some View {
@@ -7146,11 +10741,11 @@ private struct RootWorkspaceView: View {
             RoachSpotlightPanel(accent: RoachPalette.green) {
                 VStack(alignment: .leading, spacing: 16) {
                     responsiveBar {
-                RoachSectionHeader(
-                    "Runtime",
-                    title: "Contained, readable, recoverable.",
-                    detail: "One local gateway in front, RoachTail and RoachSync behind it, and the runtime state you actually care about surfaced without a scavenger hunt."
-                )
+                        RoachSectionHeader(
+                            "Runtime",
+                            title: "Runtime console.",
+                            detail: nil
+                        )
                     } actions: {
                         Button(model.isLoading ? "Refreshing..." : "Refresh Runtime") {
                             Task { await model.refreshRuntimeState() }
@@ -7158,7 +10753,7 @@ private struct RootWorkspaceView: View {
                         .buttonStyle(RoachSecondaryButtonStyle())
                         .disabled(model.isLoading)
                         Button("Settings") {
-                            Task { await model.openRoute("/settings/system", title: "Settings") }
+                            openNativeSettings()
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
                     }
@@ -7174,7 +10769,7 @@ private struct RootWorkspaceView: View {
                                 roachTail: roachTail,
                                 roachSync: roachSync
                             )
-                            .frame(width: 320)
+                            .frame(minWidth: 340, idealWidth: 380, maxWidth: 430)
                         }
 
                         VStack(alignment: .leading, spacing: 14) {
@@ -7197,7 +10792,7 @@ private struct RootWorkspaceView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             RoachNotice(
                                 title: "Download history contains failures",
-                                detail: "\(failedDownloads.count) failed jobs are still in the local queue history and can be cleared without touching installed content.",
+                                detail: "\(failedDownloads.count) failed jobs in queue history.",
                                 accent: RoachPalette.warning
                             )
 
@@ -7216,8 +10811,8 @@ private struct RootWorkspaceView: View {
                         responsiveBar {
                             RoachSectionHeader(
                                 "Account",
-                                title: account.linked ? "Linked and ready." : "Local-only until you link it.",
-                                detail: "Web chat, saved app picks, and future synced settings hang off the same contained account lane."
+                                title: account.linked ? "Linked." : "Local account.",
+                                detail: nil
                             )
                         } actions: {
                             Button("Open Account") {
@@ -7285,8 +10880,8 @@ private struct RootWorkspaceView: View {
                         responsiveBar {
                             RoachSectionHeader(
                                 "RoachTail",
-                                title: roachTail.enabled ? "Private device lane is armed." : "Private device lane is off.",
-                                detail: "Pair iPhone and iPad builds with a one-time code, then keep chat carryover and App installs on the private bridge."
+                                title: roachTail.enabled ? "Device bridge on." : "Device bridge off.",
+                                detail: nil
                             )
                         } actions: {
                             Toggle(
@@ -7398,7 +10993,7 @@ private struct RootWorkspaceView: View {
                                                 .foregroundStyle(RoachPalette.muted)
                                         }
 
-                                        Text("The QR carries bridge and transport hints only. The phone still mints its own private peer token during pairing.")
+                                        Text("The phone mints its peer token during pairing.")
                                             .font(.system(size: 12, weight: .medium))
                                             .foregroundStyle(RoachPalette.muted)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -7416,8 +11011,8 @@ private struct RootWorkspaceView: View {
                         responsiveBar {
                             RoachSectionHeader(
                                 "RoachSync",
-                                title: roachSync.enabled ? "Contained sync lane is armed." : "Contained sync lane is off.",
-                                detail: "Keep the vault, settings, and future shared installs grouped under one private sync lane instead of loose host folders."
+                                title: roachSync.enabled ? "Sync on." : "Sync off.",
+                                detail: nil
                             )
                         } actions: {
                             Toggle(
@@ -7503,7 +11098,7 @@ private struct RootWorkspaceView: View {
             RoachInsetPanel {
                 VStack(alignment: .leading, spacing: 14) {
                     responsiveBar {
-                        RoachSectionHeader("Storage", title: "Keep content where you want it.", detail: "RoachNet can move the local content library to another folder without editing config files by hand.")
+                        RoachSectionHeader("Storage", title: "Content root.", detail: nil)
                     } actions: {
                         Button("Open Folder") {
                             model.openStorageInFinder()
@@ -7521,7 +11116,12 @@ private struct RootWorkspaceView: View {
                         value: RuntimeSurfacePathLabel.displayValue(model.storagePath, kind: .storageRoot),
                         accent: RoachPalette.green
                     )
-                    Text("Maps, Wikipedia packages, archives, and other local content now follow this shared storage root.")
+                    Text(RuntimeSurfacePathLabel.displayDetail(model.storagePath, kind: .storageRoot))
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(RoachPalette.muted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text("Maps, Wikipedia packages, archives, and logs use this root.")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -7535,35 +11135,62 @@ private struct RootWorkspaceView: View {
                 RoachMetricCard(
                     label: "Providers",
                     value: providerSummary,
-                    detail: "Ollama and OpenClaw state from the shared AI runtime layer."
+                    detail: "Ollama / OpenClaw"
                 )
             }
         }
     }
 
     private var summaryColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 212), spacing: 16, alignment: .top)]
+        [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)]
     }
 
     private var vaultShelfColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 240), spacing: 16, alignment: .top)]
+        [GridItem(.adaptive(minimum: 220), spacing: 12, alignment: .top)]
+    }
+
+    private func mapDisplayCollections(from collections: [MapCuratedCollection]) -> [RoachMapCollectionDisplay] {
+        collections.map { collection in
+            let resourceTitles = collection.resources.map(\.title)
+            let installedCount = max(0, collection.installed_count ?? 0)
+            let totalCount = max(collection.total_count ?? collection.resources.count, collection.resources.count)
+            return RoachMapCollectionDisplay(
+                slug: collection.slug,
+                name: collection.name,
+                detail: collection.description ?? "Offline region pack.",
+                installedCount: installedCount,
+                totalCount: totalCount,
+                resourceCount: collection.resources.count,
+                resourceTitles: resourceTitles
+            )
+        }
+    }
+
+    private func selectedMapCollection(in collections: [RoachMapCollectionDisplay]) -> RoachMapCollectionDisplay? {
+        if let selectedMapCollectionSlug,
+           let selected = collections.first(where: { $0.slug == selectedMapCollectionSlug }) {
+            return selected
+        }
+
+        return collections.first(where: \.isReady) ?? collections.first
     }
 
     private var homeGridItems: [CommandGridItem] {
         [
             CommandGridItem(
                 id: "maps",
-                title: "Atlas Shelf",
-                detail: "Open the vault atlas shelf and keep routes, packs, and offline regions close.",
-                badge: "Vault",
+                title: "RoachAtlas",
+                detail: "Native maps, phone GPS, offline regions.",
+                badge: "Native",
                 systemImage: "map.fill",
-                routePath: "/maps",
-                isInstalled: true
+                routePath: "",
+                isInstalled: true,
+                pane: .maps
             ),
             CommandGridItem(
                 id: "roacharcade",
                 title: "RoachArcade",
-                detail: "Open the game shelf. ROMs, installs, mods, cheats, and collection profiles stay attached to files you own.",
+                detail: "ROMs, Mac games, mods, cheats.",
                 badge: "Native",
                 systemImage: "gamecontroller.fill",
                 routePath: "",
@@ -7573,7 +11200,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "ai-control",
                 title: "AI Control",
-                detail: "See the model lane, the runtime, and what RoachClaw can actually see.",
+                detail: "Local models, memory, no server landlord.",
                 badge: "Runtime",
                 systemImage: "cpu.fill",
                 routePath: "/settings/ai",
@@ -7582,7 +11209,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "easy-setup",
                 title: "Easy Setup",
-                detail: "Fix the install, stage the runtime, and line up the first shelves.",
+                detail: "Install once. Quit babysitting it.",
                 badge: setupBadge,
                 systemImage: "bolt.fill",
                 routePath: "/easy-setup",
@@ -7591,7 +11218,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "offline-web",
                 title: "Web Shelf",
-                detail: "Keep captured sites readable from the vault instead of burying them in browser tabs.",
+                detail: "Saved pages. Fewer dead-tab fossils.",
                 badge: "Vault",
                 systemImage: "globe.badge.chevron.backward",
                 routePath: "/site-archives",
@@ -7600,7 +11227,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "install-apps",
                 title: "Install Apps",
-                detail: "Pull packs from the store and land them in the right shelf.",
+                detail: "Packs worth dragging home.",
                 badge: "App Store",
                 systemImage: "square.grid.2x2.fill",
                 routePath: "/settings/apps",
@@ -7609,7 +11236,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "docs",
                 title: "Study Shelf",
-                detail: "Read guides, runtime notes, and offline references from the same vault shelf.",
+                detail: "Docs with a pulse.",
                 badge: "Vault",
                 systemImage: "doc.text.fill",
                 routePath: "/docs/home",
@@ -7618,7 +11245,7 @@ private struct RootWorkspaceView: View {
             CommandGridItem(
                 id: "settings",
                 title: "Settings",
-                detail: "Tune RoachNet, storage, providers, and the parts that keep it running.",
+                detail: "Knobs, paths, escape hatches.",
                 badge: "System",
                 systemImage: "gearshape.fill",
                 routePath: "/settings/system",
@@ -7656,6 +11283,8 @@ private struct RootWorkspaceView: View {
         let cloudModel = model.chatModelOptions.first(where: { $0.localizedCaseInsensitiveContains(":cloud") })
         let storagePath = model.storagePath
         let installPath = model.installPath
+        let runtimeLogPath = model.snapshot?.serverInfo.logPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let liveRuntimeLogPath = runtimeLogPath.flatMap { $0.isEmpty ? nil : $0 }
         let projectsPath = RoachNetDeveloperPaths.projectsRoot(storagePath: storagePath)
         let importedVaults = model.importedObsidianVaults
         let selectedImportedVault = importedVaults.first(where: { $0.id == model.selectedImportedVaultID }) ?? importedVaults.first
@@ -7671,18 +11300,23 @@ private struct RootWorkspaceView: View {
                 systemImage: pane.icon,
                 target: .pane(pane),
                 badge: pane == activePane ? "Current" : nil,
-                keywords: [pane.rawValue, pane.subtitle, "module", "pane"]
+                keywords: [pane.rawValue, pane.subtitle, "module", "pane"],
+                aliases: [pane.rawValue.lowercased(), pane.icon]
             )
         }
 
         let routeEntries = homeGridItems.map { item in
-            CommandPaletteEntry(
+            let target: CommandPaletteTarget = item.id == "settings"
+                ? .openNativeSettings
+                : item.pane.map { .pane($0) } ?? .route(title: item.title, path: item.routePath)
+
+            return CommandPaletteEntry(
                 id: "route-\(item.id)",
                 section: "Open",
                 title: item.title,
                 detail: item.detail,
                 systemImage: item.systemImage,
-                target: item.pane.map { .pane($0) } ?? .route(title: item.title, path: item.routePath),
+                target: target,
                 keywords: [item.title, item.detail, item.routePath]
             )
         }
@@ -7769,16 +11403,88 @@ private struct RootWorkspaceView: View {
                     systemImage: "arrow.clockwise",
                     target: .refreshRuntime,
                     shortcut: "⌘R",
-                    keywords: ["health", "services", "reload", "snapshot"]
+                    keywords: ["health", "services", "reload", "snapshot"],
+                    aliases: ["restart status", "pulse check"],
+                    previewNote: "No ceremony. It asks the local runtime what is alive right now."
+                ),
+                CommandPaletteEntry(
+                    id: "action-check-updates",
+                    section: "Runtime",
+                    title: "Check for Updates",
+                    detail: "Ask the local release lane if a newer RoachNet build is ready.",
+                    systemImage: "arrow.down.circle.fill",
+                    target: .checkForUpdates,
+                    badge: model.latestVersionLabel,
+                    keywords: ["update", "updates", "release", "latest", "download", "installer"],
+                    aliases: ["upgrade", "new version", "release lane"],
+                    previewNote: "Checks the public release lane. Your files stay where they are."
+                ),
+                CommandPaletteEntry(
+                    id: "action-request-system-update",
+                    section: "Runtime",
+                    title: model.canRequestSystemUpdate ? "Install Available Update" : "Open Update Lane",
+                    detail: model.canRequestSystemUpdate
+                        ? "Hand the update to the contained runtime and replace the current build cleanly."
+                        : model.latestVersionDetail,
+                    systemImage: model.canRequestSystemUpdate ? "arrow.down.app.fill" : "gearshape.arrow.triangle.2.circlepath",
+                    target: model.canRequestSystemUpdate
+                        ? .requestSystemUpdate
+                        : .route(title: "Updates", path: "/settings/update"),
+                    badge: model.systemUpdateStageLabel,
+                    keywords: ["update", "install", "upgrade", "release", "latest", "settings"],
+                    aliases: ["upgrade roachnet", "install update"],
+                    previewNote: model.canRequestSystemUpdate
+                        ? "Hands the update to the contained installer instead of making you hunt for the bits."
+                        : "Opens the update lane so the current machine can tell you what it knows."
+                ),
+                CommandPaletteEntry(
+                    id: "action-copy-diagnostics",
+                    section: "Runtime",
+                    title: "Copy System Snapshot",
+                    detail: "Copy version, paths, services, model route, and update state. No vault contents.",
+                    systemImage: "doc.text.magnifyingglass",
+                    target: .copyDiagnostics,
+                    badge: model.snapshot == nil ? "No snapshot" : "Ready",
+                    keywords: ["diagnostics", "debug", "support", "status", "snapshot", "bug"],
+                    aliases: ["copy debug", "support bundle", "bug report"],
+                    previewNote: "A clean handoff for bug reports and release checks. The vault stays out of it."
+                ),
+                CommandPaletteEntry(
+                    id: "action-open-runtime-log",
+                    section: "Runtime",
+                    title: "Open Runtime Log",
+                    detail: liveRuntimeLogPath != nil
+                        ? "Open the local runtime log. The machine leaves tracks."
+                        : "Runtime has not reported a log path yet.",
+                    systemImage: "doc.text.fill",
+                    target: .revealPath(liveRuntimeLogPath ?? storagePath),
+                    badge: liveRuntimeLogPath.map { RuntimeSurfacePathLabel.displayValue($0, kind: .logFile) } ?? "Waiting",
+                    keywords: ["log", "logs", "runtime", "debug", "server", "stderr", "stdout"],
+                    aliases: ["open logs", "show log", "tail"],
+                    previewNote: "Useful when the polite UI stops being useful."
                 ),
                 CommandPaletteEntry(
                     id: "action-launch-guide",
                     section: "Open",
                     title: "Open Guided Tour",
-                    detail: "Replay the first-launch walkthrough for the command deck.",
+                    detail: "Open the v1.0.5 native field guide for lanes, packs, vault, games, maps, and updates.",
                     systemImage: "play.rectangle.fill",
                     target: .launchGuide,
-                    keywords: ["guide", "tour", "help", "walkthrough"]
+                    keywords: ["guide", "tour", "help", "walkthrough", "field", "v105", "model", "packs", "updates"],
+                    aliases: ["getting started", "intro", "first run", "launch guide"],
+                    previewNote: "Replays the polished guide without resetting the install."
+                ),
+                CommandPaletteEntry(
+                    id: "action-open-about",
+                    section: "Open",
+                    title: "About RoachNet",
+                    detail: "Open the native credits, links, version, and local-first notes.",
+                    systemImage: "info.circle.fill",
+                    target: .openAbout,
+                    badge: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Local",
+                    keywords: ["about", "credits", "version", "paypal", "donate", "github", "roachwares"],
+                    aliases: ["credits", "version info", "company"],
+                    previewNote: "Credits, build details, and the small print. The part people read after something breaks."
                 ),
                 CommandPaletteEntry(
                     id: "action-open-storage-root",
@@ -7788,7 +11494,9 @@ private struct RootWorkspaceView: View {
                     systemImage: "externaldrive.connected.to.line.below.fill",
                     target: .revealPath(storagePath),
                     badge: shortRuntimePath(storagePath),
-                    keywords: ["storage", "library", "vault", "disk", "files", storagePath]
+                    keywords: ["storage", "library", "vault", "disk", "files", storagePath],
+                    aliases: ["open files", "reveal storage", "show vault root"],
+                    previewNote: "Opens the actual folder. Not a dashboard pretending to be custody."
                 ),
                 CommandPaletteEntry(
                     id: "action-open-install-root",
@@ -7817,7 +11525,9 @@ private struct RootWorkspaceView: View {
                     detail: "Bring an existing markdown vault into RoachNet without copying it into a second notes silo.",
                     systemImage: "square.stack.3d.up.badge.plus",
                     target: .importObsidianVault,
-                    keywords: ["obsidian", "vault", "markdown", "notes", "import"]
+                    keywords: ["obsidian", "vault", "markdown", "notes", "import"],
+                    aliases: ["import notes", "markdown vault"],
+                    previewNote: "Points RoachNet at the vault you already own. No new note format gets invented."
                 ),
                 CommandPaletteEntry(
                     id: "action-open-model-store",
@@ -7827,7 +11537,9 @@ private struct RootWorkspaceView: View {
                     systemImage: "shippingbox.fill",
                     target: .route(title: "Model Store", path: "/settings/models"),
                     badge: model.selectedChatModelLabel,
-                    keywords: ["models", "ollama", "cloud", "store", "ai"]
+                    keywords: ["models", "ollama", "cloud", "store", "ai"],
+                    aliases: ["llm", "local ai", "weights"],
+                    previewNote: "Model weights belong on disk first. Cloud can wait outside."
                 ),
                 CommandPaletteEntry(
                     id: "action-open-roachclaw-anywhere",
@@ -7837,7 +11549,9 @@ private struct RootWorkspaceView: View {
                     systemImage: "sparkles",
                     target: .openGlobalRoachClaw,
                     badge: "Global",
-                    keywords: ["roachclaw", "assistant", "chat", "voice", "global", "anywhere"]
+                    keywords: ["roachclaw", "assistant", "chat", "voice", "global", "anywhere"],
+                    aliases: ["ai overlay", "ask ai", "chat anywhere"],
+                    previewNote: "Opens RoachClaw over the current surface so the app can stay in context."
                 ),
                 CommandPaletteEntry(
                     id: "action-voice-prompt",
@@ -8005,7 +11719,7 @@ private struct RootWorkspaceView: View {
                     title: "Open Runtime Health",
                     detail: "Jump to the runtime settings and service-health lane.",
                     systemImage: "stethoscope",
-                    target: .route(title: "Runtime Health", path: "/settings/system"),
+                    target: .openNativeSettings,
                     keywords: ["runtime", "health", "services", "diagnostics"]
                 ),
             ]
@@ -8024,7 +11738,21 @@ private struct RootWorkspaceView: View {
                 $0.section == "RoachClaw" || $0.id == "pane-RoachClaw" || $0.id == "action-open-model-store" || $0.id == "action-open-roachclaw-anywhere"
             }
         case .runtime:
-            return commandPaletteEntries.filter { $0.section == "Runtime" || $0.id == "pane-Runtime" }
+            return commandPaletteEntries.filter {
+                $0.section == "Runtime"
+                    || $0.id == "pane-Runtime"
+                    || $0.id == "action-check-updates"
+                    || $0.id == "action-request-system-update"
+                    || $0.id == "action-copy-diagnostics"
+                    || $0.id == "action-open-runtime-log"
+            }
+        case .maps:
+            return commandPaletteEntries.filter {
+                $0.id == "pane-Maps"
+                    || $0.id == "route-maps"
+                    || $0.id == "action-refresh-runtime"
+                    || $0.id == "action-open-storage-root"
+            }
         case .knowledge:
             return commandPaletteEntries.filter {
                 $0.id == "pane-Vault"
@@ -8053,9 +11781,13 @@ private struct RootWorkspaceView: View {
             recentCommandPaletteEntries,
             commandPaletteEntries.filter {
                 $0.id == "action-refresh-runtime"
+                    || $0.id == "action-copy-diagnostics"
+                    || $0.id == "action-open-runtime-log"
+                    || $0.id == "action-check-updates"
                     || $0.id == "action-open-roachclaw-anywhere"
                     || $0.id == "action-voice-prompt"
                     || $0.id == "action-open-model-store"
+                    || $0.id == "action-open-about"
                     || $0.id == "action-open-apps-store"
                     || $0.id == "action-open-storage-root"
                     || $0.id == "action-stage-next-useful-move"
@@ -8087,7 +11819,9 @@ private struct RootWorkspaceView: View {
         case let .pane(pane):
             model.selectedPane = pane
         case let .route(title, path):
-            Task { await model.openRoute(path, title: title) }
+            if !openNativeSettings(forInternalPath: path) {
+                Task { await model.openRoute(path, title: title) }
+            }
         case let .service(serviceName):
             Task {
                 if let service = model.snapshot?.services.first(where: { $0.service_name == serviceName }) {
@@ -8109,6 +11843,23 @@ private struct RootWorkspaceView: View {
         case .importObsidianVault:
             model.selectedPane = .knowledge
             model.importObsidianVault()
+        case .openNativeSettings:
+            openNativeSettings()
+        case .openAbout:
+            RoachNetAboutWindowPresenter.shared.present()
+        case .checkForUpdates:
+            openNativeSettings(.updates)
+            Task { await model.checkForRoachNetUpdates(force: true) }
+        case .requestSystemUpdate:
+            openNativeSettings(.updates)
+            if model.canRequestSystemUpdate {
+                Task { await model.requestRoachNetUpdate() }
+            }
+        case .copyDiagnostics:
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(commandPaletteDiagnosticsSnapshot(), forType: .string)
+            model.statusLine = "Copied RoachNet diagnostics."
         case .openGlobalRoachClaw:
             openGlobalRoachClaw()
         case let .stagePrompt(prompt):
@@ -8153,7 +11904,7 @@ private struct RootWorkspaceView: View {
             Task { await model.applyRoachClawDefaults() }
         case let .promoteCloudModel(modelName):
             guard modelName != "cloud-unavailable" else {
-                Task { await model.openRoute("/settings/ai", title: "AI Control") }
+                openNativeSettings(.roachClaw)
                 return
             }
             model.selectedChatModel = modelName
@@ -8164,6 +11915,34 @@ private struct RootWorkspaceView: View {
         }
     }
 
+    private func commandPaletteDiagnosticsSnapshot() -> String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "local"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "dev"
+        let runtimeState = model.snapshot == nil ? "waiting" : "live"
+        let accountState = model.snapshot?.account.linked == true ? "linked" : "local"
+        let serviceCount = model.snapshot?.services.count ?? 0
+        let installedServiceCount = model.snapshot?.services.filter { $0.installed ?? false }.count ?? 0
+        let roachClawState = model.snapshot?.roachClaw.ready == true ? "ready" : "staging"
+        let logPath = model.snapshot?.serverInfo.logPath ?? "not reported"
+
+        return """
+        RoachNet diagnostics
+        Version: \(version) (\(build))
+        Setup: \(model.setupCompleted ? "complete" : "incomplete")
+        Runtime: \(runtimeState)
+        Account: \(accountState)
+        Active pane: \(activePane.rawValue)
+        Install: \(model.installPath)
+        Storage: \(model.storagePath)
+        Log: \(logPath)
+        Services: \(installedServiceCount)/\(serviceCount) installed
+        RoachClaw: \(roachClawState)
+        Model: \(model.selectedChatModelLabel)
+        Latest release: \(model.latestVersionLabel)
+        Update lane: \(model.systemUpdateStageLabel)
+        """
+    }
+
     private func recordRecentCommand(_ entry: CommandPaletteEntry) {
         var ids = recentCommandPaletteIDs.filter { $0 != entry.id }
         ids.insert(entry.id, at: 0)
@@ -8172,7 +11951,11 @@ private struct RootWorkspaceView: View {
 
     private func presentDetachedCommandPalette() {
         showCommandPalette = false
-        detachedPaletteCoordinator.present(entries: commandPaletteEntries, featuredEntries: featuredCommandPaletteEntries) { entry in
+        detachedPaletteCoordinator.present(
+            entries: commandPaletteEntries,
+            featuredEntries: featuredCommandPaletteEntries,
+            recentEntries: recentCommandPaletteEntries
+        ) { entry in
             performCommand(entry, fromDetachedPalette: true)
         }
     }
@@ -8195,7 +11978,7 @@ private struct RootWorkspaceView: View {
     }
 
     private var visiblePanes: [WorkspacePane] {
-        WorkspacePane.allCases.filter { $0 != .suite && $0 != .maps && $0 != .education }
+        WorkspacePane.allCases.filter { $0 != .suite && $0 != .education }
     }
 
     private var readinessSteps: [ReadinessStep] {
@@ -8380,9 +12163,9 @@ private struct RootWorkspaceView: View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
                 RoachSectionHeader(
-                    "Signal Board",
-                    title: "Runtime, read fast.",
-                    detail: "The parts that matter before you disappear into logs."
+                    "Status",
+                    title: "Service state.",
+                    detail: nil
                 )
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -8399,12 +12182,12 @@ private struct RootWorkspaceView: View {
                     RoachMetricCard(
                         label: "RoachTail",
                         value: roachTail?.enabled == true ? "\(roachTail?.peers.count ?? 0) peers" : "Off",
-                        detail: roachTail?.enabled == true ? "Private bridge is armed." : "Private overlay disabled."
+                        detail: roachTail?.enabled == true ? "Private bridge" : "Bridge disabled"
                     )
                     RoachMetricCard(
                         label: "RoachSync",
                         value: roachSync?.enabled == true ? "\(roachSync?.peers.count ?? 0) peers" : "Off",
-                        detail: roachSync?.enabled == true ? "Sync lane is live." : "Contained sync is disabled."
+                        detail: roachSync?.enabled == true ? "Sync live" : "Sync disabled"
                     )
                 }
             }
@@ -8420,37 +12203,37 @@ private struct RootWorkspaceView: View {
         RoachInsetPanel {
             VStack(alignment: .leading, spacing: 14) {
                 RoachSectionHeader(
-                    "Runtime map",
-                    title: "One contained path. No scavenger hunt.",
-                    detail: "The root, the route, and the private lanes that matter when something feels off."
+                    "Paths",
+                    title: "Runtime roots.",
+                    detail: nil
                 )
 
                 VStack(alignment: .leading, spacing: 10) {
                     RoachDigestRow(
                         "Install root",
                         value: RuntimeSurfacePathLabel.displayValue(model.installPath, kind: .installRoot),
-                        detail: "The contained app root. No smear across the host when this lane is behaving.",
+                        detail: "App bundle root",
                         systemName: "shippingbox.fill",
                         accent: RoachPalette.green
                     )
                     RoachDigestRow(
                         "Storage root",
                         value: shortRuntimePath(model.storagePath),
-                        detail: "Maps, vault content, archives, logs, and runtime cache stay grouped here.",
+                        detail: "Content and cache",
                         systemName: "externaldrive.fill",
                         accent: RoachPalette.cyan
                     )
                     RoachDigestRow(
                         "Server target",
                         value: runtimeTargetLabel(serverInfo?.target),
-                        detail: "The active local route in front of the services.",
+                        detail: "Active route",
                         systemName: "network",
                         accent: RoachPalette.magenta
                     )
                     RoachDigestRow(
                         "Private lanes",
                         value: "\(roachTail?.enabled == true ? "Tail" : "Tail off") · \(roachSync?.enabled == true ? "Sync" : "Sync off")",
-                        detail: "RoachTail handles the private bridge. RoachSync keeps the shelf aligned.",
+                        detail: "Device bridge and sync",
                         systemName: "point.3.connected.trianglepath.dotted",
                         accent: RoachPalette.bronze
                     )
@@ -8537,44 +12320,127 @@ private struct RootWorkspaceView: View {
     }
 
     private func suiteCard(title: String, detail: String, value: String, pane: WorkspacePane) -> some View {
-        Button {
+        let accent = accent(for: pane)
+
+        return Button {
             model.selectedPane = pane
         } label: {
             RoachInsetPanel {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(title)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(RoachPalette.text)
-                    Text(detail)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(RoachPalette.muted)
-                    Text(value)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(RoachPalette.green)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .fill(accent.opacity(0.14))
+
+                            RoachModuleMark(
+                                systemName: pane.icon,
+                                assetName: pane.assetName,
+                                size: 18,
+                                isSelected: activePane == pane
+                            )
+                        }
+                        .frame(width: 44, height: 44)
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(accent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(title)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(RoachPalette.text)
+                        Text(value)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(accent)
+                        Text(detail)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(RoachPalette.muted)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text("Open lane")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(accent)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
             }
         }
         .buttonStyle(RoachCardButtonStyle())
     }
 
     private func homeMenuStrip(installedCount: Int, availableCount: Int) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
                 ForEach(HomeMenuSection.allCases) { section in
-                    Button {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                            homeMenuSection = section
-                        }
-                    } label: {
-                        RoachTag(
-                            homeMenuLabel(for: section, installedCount: installedCount, availableCount: availableCount),
-                            accent: homeMenuSection == section ? RoachPalette.green : RoachPalette.muted
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    homeMenuButton(section, installedCount: installedCount, availableCount: availableCount)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(HomeMenuSection.allCases) { section in
+                    homeMenuButton(section, installedCount: installedCount, availableCount: availableCount)
+                }
+            }
+        }
+    }
+
+    private func homeMenuButton(
+        _ section: HomeMenuSection,
+        installedCount: Int,
+        availableCount: Int
+    ) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                homeMenuSection = section
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Text(section.rawValue)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(homeMenuSection == section ? RoachPalette.text : RoachPalette.muted)
+                Spacer(minLength: 10)
+                Text(homeMenuCount(for: section, installedCount: installedCount, availableCount: availableCount))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(homeMenuSection == section ? paneAccent : RoachPalette.muted)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        homeMenuSection == section
+                            ? paneAccent.opacity(0.14)
+                            : RoachPalette.panelRaised.opacity(0.54)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(
+                        homeMenuSection == section ? paneAccent.opacity(0.22) : RoachPalette.border,
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func homeMenuCount(
+        for section: HomeMenuSection,
+        installedCount: Int,
+        availableCount: Int
+    ) -> String {
+        switch section {
+        case .commandDeck:
+            return "\(homeGridItems.count)"
+        case .installedModules:
+            return "\(installedCount)"
+        case .availableModules:
+            return "\(availableCount)"
         }
     }
 
@@ -8636,10 +12502,10 @@ private struct RootWorkspaceView: View {
         services: [ManagedSystemService]
     ) -> some View {
         RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 RoachSectionHeader("Modules", title: title, detail: detail)
 
-                LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 16) {
+                LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
                     ForEach(services) { service in
                         serviceModuleCard(service)
                     }
@@ -8657,12 +12523,12 @@ private struct RootWorkspaceView: View {
         let statusAccent = moduleStatusAccent(for: service)
 
         return RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     Image(systemName: descriptor.systemImage)
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(isInstalled ? RoachPalette.green : RoachPalette.warning)
-                        .frame(width: 42, height: 42)
+                        .frame(width: 38, height: 38)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .fill(RoachPalette.panelRaised.opacity(0.92))
@@ -8681,9 +12547,10 @@ private struct RootWorkspaceView: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(RoachPalette.text)
                     Text(descriptor.detail)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.84)
                 }
 
                 VStack(spacing: 8) {
@@ -8718,7 +12585,7 @@ private struct RootWorkspaceView: View {
                     }
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 214, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 186, alignment: .topLeading)
         }
     }
 
@@ -8786,12 +12653,12 @@ private struct RootWorkspaceView: View {
 
     private func commandGridCard(_ item: CommandGridItem) -> some View {
         RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     Image(systemName: item.systemImage)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 19, weight: .semibold))
                         .foregroundStyle(RoachPalette.green)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 40, height: 40)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .fill(RoachPalette.panelRaised.opacity(0.92))
@@ -8806,25 +12673,26 @@ private struct RootWorkspaceView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(item.title)
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(RoachPalette.text)
                         .minimumScaleFactor(0.82)
                     Text(item.detail)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.84)
                 }
 
                 HStack {
-                    Text(item.isInstalled ? "Open module" : "Install module")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    Text(item.isInstalled ? "Open" : "Install")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(item.isInstalled ? RoachPalette.green : RoachPalette.warning)
                     Spacer()
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 136, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
         }
     }
 
@@ -8884,12 +12752,12 @@ private struct RootWorkspaceView: View {
 
     private func readinessCard(_ step: ReadinessStep) -> some View {
         RoachInsetPanel {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     Image(systemName: step.systemImage)
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(step.accent)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 38, height: 38)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .fill(RoachPalette.panelRaised.opacity(0.92))
@@ -8905,32 +12773,39 @@ private struct RootWorkspaceView: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(RoachPalette.text)
                     Text(step.detail)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(RoachPalette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.84)
                 }
 
                 if let routePath = step.routePath {
                     if step.isReady {
                         Button("Review") {
-                            Task { await model.openRoute(routePath, title: step.title) }
+                            if !openNativeSettings(forInternalPath: routePath) {
+                                Task { await model.openRoute(routePath, title: step.title) }
+                            }
                         }
                         .buttonStyle(RoachSecondaryButtonStyle())
                     } else {
                         Button("Fix This") {
-                            Task { await model.openRoute(routePath, title: step.title) }
+                            if !openNativeSettings(forInternalPath: routePath) {
+                                Task { await model.openRoute(routePath, title: step.title) }
+                            }
                         }
                         .buttonStyle(RoachPrimaryButtonStyle())
                     }
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 172, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 148, alignment: .topLeading)
         }
     }
 
     private func footerAction(title: String, path: String) -> some View {
         Button(title) {
-            Task { await model.openRoute(path, title: title) }
+            if !openNativeSettings(forInternalPath: path) {
+                Task { await model.openRoute(path, title: title) }
+            }
         }
         .buttonStyle(RoachSecondaryButtonStyle())
     }
@@ -8982,7 +12857,10 @@ private struct RootWorkspaceView: View {
         }
     }
 }
+@MainActor
 final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
+    static var bootstrapModel: WorkspaceModel?
+
     weak var model: WorkspaceModel? {
         didSet {
             flushPendingURLsIfNeeded()
@@ -8992,6 +12870,7 @@ final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURLs: [URL] = []
     private var commandPaletteHotKeyRef: EventHotKeyRef?
     private var commandPaletteHotKeyHandler: EventHandlerRef?
+    private var fallbackWindowController: NSWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         roachWindowDebug("Application did finish launching.")
@@ -8999,6 +12878,7 @@ final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         registerCommandPaletteHotKey()
         bringPrimaryWindowForward()
+        scheduleFallbackWindowIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -9063,6 +12943,46 @@ final class RoachNetMacAppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 roachWindowDebug("App delegate found no window to bring forward yet.")
             }
+        }
+    }
+
+    private func scheduleFallbackWindowIfNeeded() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) { [weak self] in
+            guard let self else { return }
+
+            if NSApp.windows.contains(where: { $0.canBecomeKey || $0.isVisible }) {
+                self.bringPrimaryWindowForward()
+                return
+            }
+
+            guard let model = self.model ?? Self.bootstrapModel else {
+                roachWindowDebug("Fallback window skipped because no workspace model is available.")
+                return
+            }
+
+            let host = NSHostingController(
+                rootView: RootWorkspaceView(model: model)
+                    .background(MainWindowConfigurator())
+                    .frame(minWidth: 760, idealWidth: 1360, minHeight: 580, idealHeight: 860)
+            )
+            let window = NSWindow(contentViewController: host)
+            window.title = "RoachNet"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isRestorable = false
+            window.tabbingMode = .disallowed
+            window.minSize = NSSize(width: 900, height: 640)
+            window.setContentSize(NSSize(width: 1400, height: 900))
+            window.center()
+
+            let controller = NSWindowController(window: window)
+            fallbackWindowController = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            roachWindowDebug("Fallback main window created.")
         }
     }
 

@@ -10,6 +10,9 @@ on:
     paths:
       - 'collections/**/*.json'
 
+permissions:
+  contents: read
+
 jobs:
   validate-urls:
     runs-on: blacksmith-2vcpu-ubuntu-2404

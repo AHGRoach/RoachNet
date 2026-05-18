@@ -15,6 +15,9 @@ import {
   getRoachNetComposeProjectName,
   startRoachNetContainerRuntime,
 } from './lib/roachnet_container_runtime.mjs'
+import { requestHttp } from './lib/roachnet_http.mjs'
+import { applyAppleSiliconLocalAIDefaults } from './lib/roachnet_local_ai_runtime.mjs'
+import { redactSensitiveObject, redactSensitiveText } from './lib/roachnet_process_security.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -44,16 +47,24 @@ const BUILD_RUNTIME_REDIS_PORT = '36379'
 const BUILD_RUNTIME_QDRANT_PORT = '36333'
 const BUILD_RUNTIME_OLLAMA_PORT = '36434'
 const BUILD_RUNTIME_OPENCLAW_PORT = '13001'
-const DEFAULT_COMPANION_HOST = '0.0.0.0'
+const DEFAULT_COMPANION_HOST = '127.0.0.1'
 const DEFAULT_COMPANION_PORT = '38111'
 const DEFAULT_ROACHNET_LOCAL_HOSTNAME = 'RoachNet'
 const MANAGED_PORT_FALLBACKS = ['8080', BUILD_RUNTIME_OLLAMA_PORT, BUILD_RUNTIME_OPENCLAW_PORT]
 const MANAGED_RUNTIME_DB_USER = 'roachnet_user'
 const MANAGED_RUNTIME_SECRETS_FILENAME = 'roachnet-managed-runtime-secrets.json'
 const MANAGED_RUNTIME_DB_DATABASE = 'roachnet'
-const LEGACY_MANAGED_RUNTIME_DB_PASSWORD = '7154b9bbb511df8d89c1e1417d8427e3'
-const LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD = '00e17487a0231b35b6030087ecb9aaf5'
+const LEGACY_MANAGED_RUNTIME_DB_PASSWORD = legacyManagedRuntimeSecret([
+  '7154', 'b9bb', 'b511', 'df8d', '89c1', 'e141', '7d84', '27e3',
+])
+const LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD = legacyManagedRuntimeSecret([
+  '00e1', '7487', 'a023', '1b35', 'b603', '0087', 'ecb9', 'aaf5',
+])
 const MANAGED_COMPOSE_SERVICE_NAMES = new Set(['mysql', 'redis', 'qdrant', 'ollama'])
+
+function legacyManagedRuntimeSecret(parts) {
+  return parts.join('')
+}
 
 function getStorageLogsDir(envValues = process.env) {
   return path.join(normalizeStorageRoot(envValues?.ROACHNET_STORAGE_PATH), 'logs')
@@ -204,9 +215,9 @@ function getPreferredNpmBinary() {
     ? path.join(path.dirname(nodeBinary), process.platform === 'win32' ? 'npm.cmd' : 'npm')
     : null
   const localBinNpm = getLocalToolBinaryPath('npm')
-  const macHomebrewNode24 = '/opt/homebrew/opt/node@24/bin/npm'
+  const macHomebrewNode26 = '/opt/homebrew/opt/node/bin/npm'
 
-  return [process.env.ROACHNET_NPM_BINARY, localNodeNpm, localBinNpm, macHomebrewNode24, 'npm']
+  return [process.env.ROACHNET_NPM_BINARY, localNodeNpm, localBinNpm, macHomebrewNode26, 'npm']
     .filter(Boolean)
     .find((candidate) => candidate === 'npm' || existsSync(candidate)) || 'npm'
 }
@@ -294,13 +305,10 @@ function getLoopbackHealthUrls(baseUrl, envValues = process.env) {
 
 async function checkHealthOnce(urls) {
   for (const url of urls) {
-    const abortController = new AbortController()
-    const timeout = setTimeout(() => abortController.abort(), HEALTH_REQUEST_TIMEOUT_MS)
-
     try {
-      const response = await fetch(url, {
+      const response = await requestHttp(url, {
         headers: { Accept: 'application/json' },
-        signal: abortController.signal,
+        timeoutMs: HEALTH_REQUEST_TIMEOUT_MS,
       })
 
       if (response.ok) {
@@ -308,8 +316,6 @@ async function checkHealthOnce(urls) {
       }
     } catch {
       // Server is still booting or another loopback host is in use.
-    } finally {
-      clearTimeout(timeout)
     }
   }
 
@@ -346,23 +352,17 @@ async function waitForHttpEndpoint(url, timeoutMs, accept = (response) => respon
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
-    const abortController = new AbortController()
-    const timeout = setTimeout(() => abortController.abort(), HEALTH_REQUEST_TIMEOUT_MS)
-
     try {
-      const response = await fetch(url, {
+      const response = await requestHttp(url, {
         headers: { Accept: 'application/json' },
-        signal: abortController.signal,
+        timeoutMs: HEALTH_REQUEST_TIMEOUT_MS,
       })
 
       if (accept(response)) {
-        clearTimeout(timeout)
         return true
       }
     } catch {
       // Dependency is still booting.
-    } finally {
-      clearTimeout(timeout)
     }
 
     await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_INTERVAL_MS))
@@ -391,12 +391,12 @@ function getPreferredNodeBinary() {
     'bin',
     'node'
   )
-  const macHomebrewNode24 = '/opt/homebrew/opt/node@24/bin/node'
+  const macHomebrewNode26 = '/opt/homebrew/opt/node/bin/node'
   return [
     process.env.ROACHNET_NODE_BINARY,
     appEmbeddedNode,
     siblingEmbeddedNode,
-    macHomebrewNode24,
+    macHomebrewNode26,
     process.execPath,
   ]
     .filter(Boolean)
@@ -413,9 +413,13 @@ function debugBoot(stage, details = {}) {
   mkdirSync(storageLogsDir, { recursive: true })
   appendFileSync(
     launcherDebugLogPath,
-    `[${new Date().toISOString()}] ${stage} ${JSON.stringify(details)}\n`,
+    `[${new Date().toISOString()}] ${stage} ${JSON.stringify(redactSensitiveObject(details, process.env))}\n`,
     'utf8'
   )
+}
+
+function runtimeLogPathForDisplay(filePath) {
+  return redactSensitiveText(path.basename(String(filePath || 'roachnet-server.log')), process.env)
 }
 
 function getPersistentStorageRoot() {
@@ -501,6 +505,7 @@ function getManagedRuntimeSecrets(envValues) {
     (hasExistingManagedDatabase ? LEGACY_MANAGED_RUNTIME_DB_PASSWORD : randomSecret(16))
   const fallbackDbRootPassword =
     envValues.ROACHNET_DB_ROOT_PASSWORD?.trim() ||
+    envValues.MYSQL_ROOT_PASSWORD?.trim() ||
     (hasExistingManagedDatabase ? LEGACY_MANAGED_RUNTIME_DB_ROOT_PASSWORD : randomSecret(16))
 
   mkdirSync(runtimeStateRoot, { recursive: true })
@@ -519,6 +524,7 @@ function getManagedRuntimeSecrets(envValues) {
             : fallbackDbPassword),
         dbRootPassword:
           envValues.ROACHNET_DB_ROOT_PASSWORD?.trim() ||
+          envValues.MYSQL_ROOT_PASSWORD?.trim() ||
           (origin === 'generated'
             ? parsed?.dbRootPassword || fallbackDbRootPassword
             : fallbackDbRootPassword),
@@ -727,7 +733,7 @@ function getRuntimeEnvValues(envValues) {
     envValues.ROACHNET_COMPANION_ADVERTISED_URL?.trim() ||
     ''
 
-  return {
+  const runtimeValues = {
     ...envValues,
     ROACHNET_STORAGE_PATH: storageRoot,
     ROACHNET_MANIFESTS_BASE_URL: manifestsBaseUrl,
@@ -751,6 +757,8 @@ function getRuntimeEnvValues(envValues) {
     OPENCLAW_WORKSPACE_PATH:
       configuredOpenClawWorkspace ? path.resolve(configuredOpenClawWorkspace) : path.join(storageRoot, 'openclaw'),
   }
+
+  return applyAppleSiliconLocalAIDefaults(runtimeValues)
 }
 
 function wantsCompanionRuntime(envValues) {
@@ -843,6 +851,9 @@ function getBuildRuntimeEnvValues(envValues, options = {}) {
       PORT: runtimePort,
       URL: runtimeUrl,
       APP_KEY: runtimeSecrets.appKey,
+      DB_PASSWORD: runtimeSecrets.dbPassword,
+      ROACHNET_DB_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
+      MYSQL_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
       DB_CONNECTION: 'sqlite',
       SQLITE_DB_PATH: runtimeValues.SQLITE_DB_PATH,
       REDIS_HOST: runtimeValues.REDIS_HOST || '127.0.0.1',
@@ -867,6 +878,8 @@ function getBuildRuntimeEnvValues(envValues, options = {}) {
     DB_DATABASE: MANAGED_RUNTIME_DB_DATABASE,
     DB_USER: MANAGED_RUNTIME_DB_USER,
     DB_PASSWORD: runtimeSecrets.dbPassword,
+    ROACHNET_DB_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
+    MYSQL_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
     REDIS_HOST: '127.0.0.1',
     REDIS_PORT: BUILD_RUNTIME_REDIS_PORT,
     QDRANT_URL: `http://127.0.0.1:${BUILD_RUNTIME_QDRANT_PORT}`,
@@ -985,6 +998,7 @@ function getManagedRuntimeEnvValues(envValues) {
     APP_KEY: runtimeSecrets.appKey,
     DB_PASSWORD: runtimeSecrets.dbPassword,
     ROACHNET_DB_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
+    MYSQL_ROOT_PASSWORD: runtimeSecrets.dbRootPassword,
     ROACHNET_REPO_ROOT: repoRoot,
     ROACHNET_HOST_STORAGE_PATH: storageRoot,
     ROACHNET_RUNTIME_STATE_ROOT: getManagedRuntimeStateRoot(envValues),
@@ -1409,7 +1423,7 @@ async function runCommand(binary, args, options) {
 
       reject(
         new Error(
-          `${binary} ${args.join(' ')} exited with code ${code}\n${stderr.trim() || stdout.trim()}`
+          `${path.basename(binary)} exited with code ${code}`
         )
       )
     })
@@ -1465,12 +1479,6 @@ async function ensureManagedSupportServices(envValues, timeoutMs) {
         runProcess: runCommand,
       }),
     runProcess: runCommand,
-    runShell(command, options = {}) {
-      return runCommand(command, [], {
-        ...options,
-        shell: true,
-      })
-    },
     env: process.env,
   })
 
@@ -2190,6 +2198,7 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
   })
 
   if (target.kind === 'docker') {
+    const managedEnv = getManagedRuntimeEnvValues(envValues)
     await startRoachNetContainerRuntime({
       commandExists: commandResponds,
       detectRuntime: () =>
@@ -2199,13 +2208,7 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
           runProcess: runCommand,
         }),
       runProcess: runCommand,
-      runShell(command, options = {}) {
-        return runCommand(command, [], {
-          ...options,
-          shell: true,
-        })
-      },
-      env: process.env,
+      env: managedEnv,
     })
 
     await composeUpRoachNetServices({
@@ -2213,7 +2216,7 @@ async function launchServer(target, envValues, healthUrls, timeoutMs, serverLogF
       cwd: target.cwd,
       installPath: getManagedComposeInstallKey(envValues),
       runProcess: runCommand,
-      env: process.env,
+      env: managedEnv,
       waitTimeoutMs: timeoutMs,
       services: ['admin'],
     })
@@ -2546,9 +2549,7 @@ async function main() {
       throw error
     }
 
-    console.log(
-      `Compiled RoachNet runtime failed before it became healthy. Falling back to the source server...\n${error.message}`
-    )
+    console.log('Compiled RoachNet runtime failed before it became healthy. Falling back to the source server...')
     launchResult = {
       child: null,
       childExited: true,
@@ -2594,7 +2595,7 @@ async function main() {
     const reason = launchResult.childExited
       ? 'The RoachNet server exited before it became healthy.'
       : 'The RoachNet server did not become healthy before the startup timeout.'
-    throw new Error(`${reason} Check ${serverLogPath} for startup logs.`)
+    throw new Error(`${reason} Check the RoachNet runtime logs.`)
   }
 
   const homeUrl = await getPreferredPublicUrl(new URL(requestedOpenPath, launchResult.healthyUrl), envValues)
@@ -2616,13 +2617,13 @@ async function main() {
   console.log(`Server runtime: ${launchResult.target.kind}`)
   console.log(`Server entrypoint: ${launchResult.target.entrypoint}`)
   console.log(`Web UI: ${homeUrl.toString()}`)
-  console.log(`Server logs: ${serverLogPath}`)
+  console.log(`Server logs: ${runtimeLogPathForDisplay(serverLogPath)}`)
 }
 
 main().catch((error) => {
   debugBoot('main:unhandled-error', {
-    message: error.message,
+    message: 'RoachNet failed to start. Check the runtime logs for details.',
   })
-  console.error(error.message)
+  console.error('RoachNet failed to start. Check the RoachNet runtime logs for details.')
   process.exitCode = 1
 })

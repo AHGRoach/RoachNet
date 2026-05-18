@@ -4,20 +4,22 @@ This is the verified macOS local-dev path used to boot the imported upstream bas
 
 ## Runtime Choice
 
-Use Node 22 for this repo.
+Use Node 26 for this repo.
 
 - `@openzim/libzim` rejects Node 25 during install
-- cold `ace` startup is extremely slow even on Node 22, but it does complete
+- the native release lane uses Node 26
+- the legacy admin/WebUI lane still uses Node 24 because `@openzim/libzim` rejects current Node majors
+- cold `ace` startup is still slow, but it does complete
 - Node 25 caused enough friction during bootstrap that it should not be treated as the default local runtime
 
-The repo now includes a root `.nvmrc` with `22`.
+The repo now includes a root `.nvmrc` with `26`.
 
 ## Prerequisites
 
 Install the required local services with Homebrew:
 
 ```bash
-brew install node@22 mysql redis
+brew install node mysql redis
 brew services start mysql
 brew services start redis
 ```
@@ -79,14 +81,14 @@ mkdir -p admin/storage/logs admin/storage/kb_uploads admin/storage/zim admin/sto
 
 ## Install And Boot
 
-Use the Homebrew Node 22 toolchain explicitly unless your shell already resolves to it:
+Use the Homebrew Node 24 toolchain explicitly for the legacy admin/WebUI lane:
 
 ```bash
 cd /path/to/RoachNet/admin
-PATH="/opt/homebrew/opt/node@22/bin:$PATH" npm ci
-PATH="/opt/homebrew/opt/node@22/bin:$PATH" node ace migration:run
-PATH="/opt/homebrew/opt/node@22/bin:$PATH" node ace db:seed
-PATH="/opt/homebrew/opt/node@22/bin:$PATH" npm run dev
+PATH="/opt/homebrew/opt/node@24/bin:$PATH" npm ci
+PATH="/opt/homebrew/opt/node@24/bin:$PATH" node ace migration:run
+PATH="/opt/homebrew/opt/node@24/bin:$PATH" node ace db:seed
+PATH="/opt/homebrew/opt/node@24/bin:$PATH" npm run dev
 ```
 
 For the normal local RoachNet entry path from the repo root:
@@ -96,7 +98,7 @@ cd /path/to/RoachNet
 npm start
 ```
 
-The root launcher starts the local server, waits for `/api/health`, and then opens the web UI in the default browser at `http://localhost:8080/home` unless `ROACHNET_NO_BROWSER=1` is set.
+The root launcher starts the dependency-free native API bridge. It binds to loopback, waits for `/api/health`, and opens no browser when `ROACHNET_NO_BROWSER=1` is set.
 
 ## Verified Local Status
 

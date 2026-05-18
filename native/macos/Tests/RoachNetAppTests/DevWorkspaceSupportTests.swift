@@ -174,7 +174,27 @@ final class DevWorkspaceSupportTests: XCTestCase {
                 "/Users/example/RoachNet.regressioncheck/storage",
                 kind: .storageRoot
             ),
-            "storage"
+            "RoachNet storage"
+        )
+    }
+
+    func testRuntimeSurfacePathLabelSummarizesApplicationSupportStorage() {
+        XCTAssertEqual(
+            RuntimeSurfacePathLabel.displayValue(
+                "/Users/example/Library/Application Support/RoachNet/storage",
+                kind: .storageRoot
+            ),
+            "RoachNet storage"
+        )
+    }
+
+    func testRuntimeSurfacePathLabelKeepsNonRoachStorageParent() {
+        XCTAssertEqual(
+            RuntimeSurfacePathLabel.displayValue(
+                "/Volumes/Media/Library/storage",
+                kind: .storageRoot
+            ),
+            "Library/storage"
         )
     }
 

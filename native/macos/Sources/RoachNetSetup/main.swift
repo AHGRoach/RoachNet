@@ -39,7 +39,7 @@ enum SetupStage: Int, CaseIterable, Identifiable {
         case .welcome: return "RoachNet stages the app, runtime, and first content before it hands the Mac back to you."
         case .machine: return "Keep the app, storage, and runtime under one roof so backup, repair, and cleanup stay predictable."
         case .runtime: return "Bring the working stack up inside RoachNet instead of scattering it across the Mac."
-        case .roachClaw: return "Start with one reliable local model now. You can widen the lane later."
+        case .roachClaw: return "Start with one reliable local model. Hoard more later."
         case .finish: return "The stack is staged. Open RoachNet and get to work."
         }
     }
@@ -68,6 +68,7 @@ final class SetupController: ObservableObject {
     private var backendScriptURL: URL?
     private var primaryActionCooldownTask: Task<Void, Never>?
     private var installRequestSentAt: Date?
+    private var backendOutputTail: [String] = []
 
     var stageTitles: [String] { SetupStage.allCases.map(\.title) }
     var canGoBack: Bool { stage != .welcome && !isBusy }
@@ -348,7 +349,21 @@ final class SetupController: ObservableObject {
         config = state.config
 
         if state.activeTask?.status == "running" {
-            statusLine = state.activeTask?.phase ?? "Setup running."
+            let phase = state.activeTask?.phase ?? "Setup running."
+            let currentStep = state.activeTask?.currentStep?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let progress = state.activeTask?.progress {
+                if let currentStep, !currentStep.isEmpty {
+                    statusLine = "\(phase) (\(progress)%) - \(currentStep)"
+                } else {
+                    statusLine = "\(phase) (\(progress)%)"
+                }
+            } else {
+                if let currentStep, !currentStep.isEmpty {
+                    statusLine = "\(phase) - \(currentStep)"
+                } else {
+                    statusLine = phase
+                }
+            }
             isBusy = true
             errorLine = nil
         } else {
@@ -368,13 +383,22 @@ final class SetupController: ObservableObject {
         let installCompleted =
             state.lastCompletedTask?.status == "completed"
             || (state.nativeApp.installed && hasPreparedWorkspace)
+        let completedPersistedInstall =
+            !startedInstallInCurrentSession
+            && stage == .welcome
+            && installCompleted
+            && state.config.setupCompletedAt != nil
         let canAdvanceToFinishFromCurrentStage = stage.rawValue >= SetupStage.roachClaw.rawValue
 
-        if completedInstallInCurrentSession, allowAutomaticFinishAdvance, canAdvanceToFinishFromCurrentStage {
+        if (completedInstallInCurrentSession || completedPersistedInstall),
+           allowAutomaticFinishAdvance,
+           canAdvanceToFinishFromCurrentStage || completedPersistedInstall
+        {
             stage = .finish
             statusLine = "Install complete."
 
             if config.autoLaunch,
+               completedInstallInCurrentSession,
                state.nativeApp.installed {
                 scheduleAutomaticExitIfNeeded()
             }
@@ -454,16 +478,27 @@ final class SetupController: ObservableObject {
             return false
         }
 
-        let formatter = ISO8601DateFormatter()
         let recordedDates = [lastCompletedTask?.startedAt, lastCompletedTask?.finishedAt]
             .compactMap { $0 }
-            .compactMap(formatter.date(from:))
+            .compactMap(Self.parseSetupTaskDate)
 
         guard let newestRecordedDate = recordedDates.max() else {
             return false
         }
 
         return newestRecordedDate >= installRequestSentAt.addingTimeInterval(-1)
+    }
+
+    nonisolated static func parseSetupTaskDate(_ rawValue: String) -> Date? {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: rawValue) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: rawValue)
     }
 
     private func scheduleAutomaticExitIfNeeded() {
@@ -491,6 +526,16 @@ final class SetupController: ObservableObject {
 
         let setupWorkspaceRoot = preferredSetupWorkspaceRoot()
         setenv("ROACHNET_SETUP_WORK_ROOT", setupWorkspaceRoot, 1)
+
+        let bundledSourceDirectory = Bundle.main.resourceURL?
+            .appendingPathComponent("RoachNetSource", isDirectory: true)
+        if let bundledSourceDirectory,
+           FileManager.default.fileExists(atPath: bundledSourceDirectory.path)
+        {
+            statusLine = "Starting the local setup service."
+        } else {
+            statusLine = "Preparing bundled setup files. First launch can take a minute."
+        }
 
         let repoRoot = await Task.detached(priority: .userInitiated) {
             RoachNetRepositoryLocator.repositoryRoot()
@@ -541,6 +586,8 @@ final class SetupController: ObservableObject {
         self.process = process
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
+        attachBackendOutputDrain(stdoutPipe, label: "setup")
+        attachBackendOutputDrain(stderrPipe, label: "setup")
 
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
@@ -593,6 +640,8 @@ final class SetupController: ObservableObject {
             Self.terminateSetupBackends(scriptURL: backendScriptURL, excluding: childPid)
         }
 
+        stdoutPipe?.fileHandleForReading.readabilityHandler = nil
+        stderrPipe?.fileHandleForReading.readabilityHandler = nil
         process = nil
         stdoutPipe = nil
         stderrPipe = nil
@@ -812,6 +861,10 @@ final class SetupController: ObservableObject {
     }
 
     private func makeBackendBootFailureMessage(fallback: String, includePipeOutput: Bool) -> String {
+        if let summary = backendOutputSummary() {
+            return "\(fallback)\n\nRecent setup backend output:\n\(summary)"
+        }
+
         guard includePipeOutput else {
             return fallback
         }
@@ -824,6 +877,36 @@ final class SetupController: ObservableObject {
         .first(where: { !$0.isEmpty })
 
         return details.map { "\(fallback) \($0)" } ?? fallback
+    }
+
+    private func attachBackendOutputDrain(_ pipe: Pipe, label: String) {
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            let text = String(decoding: data, as: UTF8.self)
+            Task { @MainActor [weak self] in
+                self?.recordBackendOutput(label: label, text: text)
+            }
+        }
+    }
+
+    private func recordBackendOutput(label: String, text: String) {
+        let lines = text
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else { return }
+
+        backendOutputTail.append(contentsOf: lines.map { "[\(label)] \($0)" })
+        if backendOutputTail.count > 16 {
+            backendOutputTail.removeFirst(backendOutputTail.count - 16)
+        }
+    }
+
+    private func backendOutputSummary() -> String? {
+        guard !backendOutputTail.isEmpty else { return nil }
+        return backendOutputTail.joined(separator: "\n")
     }
 
     private static func readPipeOutput(from pipe: Pipe) -> String {
@@ -1049,6 +1132,7 @@ final class RoachNetSetupAppDelegate: NSObject, NSApplicationDelegate {
 
 private struct SetupRootView: View {
     @ObservedObject var controller: SetupController
+    @State private var appeared = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -1061,6 +1145,9 @@ private struct SetupRootView: View {
                 VStack(spacing: 18) {
                     chromeBar(width: proxy.size.width - (horizontalPadding * 2))
                     mainCard
+                        .opacity(appeared ? 1 : 0)
+                        .offset(y: appeared ? 0 : 18)
+                        .scaleEffect(appeared ? 1 : 0.985, anchor: .top)
                 }
                 .frame(maxWidth: 1120, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, horizontalPadding)
@@ -1069,6 +1156,13 @@ private struct SetupRootView: View {
             }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.88), value: controller.stage)
+        .animation(.spring(response: 0.54, dampingFraction: 0.86), value: appeared)
+        .onAppear {
+            guard !appeared else { return }
+            withAnimation(.spring(response: 0.54, dampingFraction: 0.86)) {
+                appeared = true
+            }
+        }
     }
 
     private func chromeBar(width: CGFloat) -> some View {
@@ -1095,34 +1189,205 @@ private struct SetupRootView: View {
 
     private var mainCard: some View {
         RoachPanel {
-            VStack(alignment: .leading, spacing: 0) {
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 24) {
-                        progressHeader
-                        stageHero
-                        stageContent
+            GeometryReader { proxy in
+                let useSplitInstaller = proxy.size.width >= 900 && proxy.size.height >= 620
 
-                        if showStatusSection {
-                            statusSection
-                        }
+                if useSplitInstaller {
+                    HStack(spacing: 0) {
+                        setupProgressRail
+                            .frame(width: 258, alignment: .topLeading)
+                            .padding(.trailing, 16)
+
+                        Rectangle()
+                            .fill(RoachPalette.border.opacity(0.72))
+                            .frame(width: 1)
+                            .padding(.vertical, 4)
+                            .allowsHitTesting(false)
+
+                        setupContentDeck
+                            .padding(.leading, 16)
                     }
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    setupContentDeck
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Rectangle()
-                    .fill(RoachPalette.border.opacity(0.72))
-                    .frame(height: 1)
-                    .padding(.top, 18)
-                    .padding(.bottom, 18)
-                    .allowsHitTesting(false)
-
-                footer
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var setupContentDeck: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    progressHeader
+                    setupSignalStrip
+                    stageHero
+                        .id("stage-hero-\(controller.stage.rawValue)")
+                        .transition(
+                            .asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity).combined(with: .scale(scale: 0.98, anchor: .topLeading)),
+                                removal: .move(edge: .leading).combined(with: .opacity).combined(with: .scale(scale: 0.99, anchor: .topLeading))
+                            )
+                        )
+                    stageContent
+                        .id("stage-content-\(controller.stage.rawValue)")
+                        .transition(
+                            .asymmetric(
+                                insertion: .move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.985, anchor: .top)),
+                                removal: .opacity.combined(with: .scale(scale: 0.99, anchor: .top))
+                            )
+                        )
+
+                    if showStatusSection {
+                        statusSection
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                }
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Rectangle()
+                .fill(RoachPalette.border.opacity(0.72))
+                .frame(height: 1)
+                .padding(.top, 14)
+                .padding(.bottom, 14)
+                .allowsHitTesting(false)
+
+            footer
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var setupProgressRail: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            RoachInsetPanel {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoachOrbitMark()
+                            .frame(width: 42, height: 42)
+                        Image(systemName: "apple.logo")
+                            .font(.system(size: 13, weight: .black))
+                            .foregroundStyle(RoachPalette.text)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Native Installer")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(RoachPalette.text)
+                        Text(controller.isBooting ? "Waking the lane." : "Local lane ready.")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(RoachPalette.muted)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Image(systemName: controller.isBooting ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(controller.isBooting ? RoachPalette.warning : RoachPalette.green)
+                }
+            }
+
+            RoachInsetPanel {
+                VStack(alignment: .leading, spacing: 12) {
+                    RoachKicker("Install Path")
+                    Text(installRootLabel(controller.config.installPath))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(RoachPalette.text)
+                        .lineLimit(2)
+                    Text(contentFolderLabel(
+                        controller.config.storagePath.isEmpty
+                            ? RoachNetRepositoryLocator.defaultStoragePath(installPath: controller.config.installPath)
+                            : controller.config.storagePath
+                    ))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(RoachPalette.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(SetupStage.allCases) { stage in
+                    setupRailStep(stage)
+                }
+            }
+
+            if let progress = controller.setupState?.activeTask?.progress {
+                RoachInsetPanel {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            RoachKicker("Active Task")
+                            Spacer()
+                            Text("\(progress)%")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(RoachPalette.green)
+                        }
+                        GeometryReader { proxy in
+                            Capsule(style: .continuous)
+                                .fill(RoachPalette.border.opacity(0.74))
+                                .overlay(alignment: .leading) {
+                                    Capsule(style: .continuous)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [RoachPalette.green, RoachPalette.magenta],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
+                                        .frame(width: max(10, proxy.size.width * CGFloat(progress) / 100))
+                                }
+                        }
+                        .frame(height: 7)
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func setupRailStep(_ stage: SetupStage) -> some View {
+        let isActive = stage == controller.stage
+        let isComplete = stage.rawValue < controller.stage.rawValue
+
+        return HStack(alignment: .center, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(isActive ? stageAccent.opacity(0.18) : RoachPalette.panelRaised.opacity(0.72))
+                    .frame(width: 28, height: 28)
+                Image(systemName: isComplete ? "checkmark" : stageIcon(for: stage))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(isComplete ? RoachPalette.green : (isActive ? stageAccent : RoachPalette.muted))
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(stage.title)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(isActive ? RoachPalette.text : RoachPalette.muted)
+                Text(isComplete ? "Done" : (isActive ? "Now" : "Waiting"))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isComplete ? RoachPalette.green : (isActive ? stageAccent : RoachPalette.muted.opacity(0.74)))
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isActive ? stageAccent.opacity(0.11) : RoachPalette.panel.opacity(0.28))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isActive ? stageAccent.opacity(0.26) : RoachPalette.border.opacity(0.70), lineWidth: 1)
+        )
+        .scaleEffect(isActive ? 1.018 : 1.0, anchor: .center)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: isActive)
     }
 
     private var setupTitleLockup: some View {
@@ -1176,6 +1441,54 @@ private struct SetupRootView: View {
                 RoachStageStrip(titles: controller.stageTitles, activeIndex: controller.stage.rawValue)
             }
         }
+    }
+
+    private var setupSignalStrip: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                setupSignalChip("Root", value: installRootLabel(controller.config.installPath), accent: RoachPalette.green)
+                setupSignalChip("Runtime", value: runtimeModeValue, accent: RoachPalette.magenta)
+                setupSignalChip("AI", value: controller.config.installRoachClaw ? controller.config.roachClawDefaultModel : "Skipped", accent: RoachPalette.cyan)
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 164), spacing: 10)], alignment: .leading, spacing: 10) {
+                setupSignalChip("Root", value: installRootLabel(controller.config.installPath), accent: RoachPalette.green)
+                setupSignalChip("Runtime", value: runtimeModeValue, accent: RoachPalette.magenta)
+                setupSignalChip("AI", value: controller.config.installRoachClaw ? controller.config.roachClawDefaultModel : "Skipped", accent: RoachPalette.cyan)
+            }
+        }
+    }
+
+    private func setupSignalChip(_ title: String, value: String, accent: Color) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(accent)
+                .frame(width: 6, height: 6)
+                .shadow(color: accent.opacity(0.55), radius: 8, y: 1)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title.uppercased())
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .tracking(0.7)
+                    .foregroundStyle(accent)
+                Text(value)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(RoachPalette.text)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(RoachPalette.panel.opacity(0.50))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(accent.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private var stageHero: some View {
@@ -1370,7 +1683,7 @@ private struct SetupRootView: View {
             if let errorLine = controller.errorLine {
                 RoachNotice(title: "Setup needs attention", detail: errorLine)
             } else if controller.isBooting {
-                RoachNotice(title: "Booting setup", detail: "Starting the local setup service.", accent: RoachPalette.green, systemName: "arrow.triangle.2.circlepath")
+                RoachNotice(title: "Booting setup", detail: controller.statusLine, accent: RoachPalette.green, systemName: "arrow.triangle.2.circlepath")
             } else {
                 RoachNotice(title: "Installer status", detail: controller.statusLine, accent: RoachPalette.green, systemName: "checkmark.circle.fill")
             }
@@ -1392,12 +1705,64 @@ private struct SetupRootView: View {
     }
 
     private var footer: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                footerStatus
+
+                Spacer(minLength: 12)
+
+                footerButtons
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                footerStatus
+                footerButtons
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(RoachPalette.backgroundRaised.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(RoachPalette.border.opacity(0.82), lineWidth: 1)
+        )
+    }
+
+    private var footerStatus: some View {
+        HStack(spacing: 9) {
+            ZStack {
+                Circle()
+                    .fill(footerAccent.opacity(0.16))
+                Image(systemName: footerIcon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(footerAccent)
+            }
+            .frame(width: 30, height: 30)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(footerTitle)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(RoachPalette.text)
+                    .lineLimit(1)
+                Text(footerDetail)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(RoachPalette.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var footerButtons: some View {
         HStack(spacing: 12) {
             SetupNativeButton(title: "Back", role: .secondary, isEnabled: controller.canGoBack) {
                 controller.back()
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 10)
 
             SetupNativeButton(
                 title: primaryTitle,
@@ -1410,7 +1775,51 @@ private struct SetupRootView: View {
                 Task { await controller.primaryAction() }
             }
             .id("primary-\(controller.stage.rawValue)")
+            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
         }
+    }
+
+    private var footerIcon: String {
+        if controller.errorLine != nil {
+            return "exclamationmark.triangle.fill"
+        }
+        if controller.isBooting || controller.isBusy {
+            return "arrow.triangle.2.circlepath"
+        }
+        return controller.stage == .finish ? "checkmark.circle.fill" : "arrow.right.circle.fill"
+    }
+
+    private var footerAccent: Color {
+        if controller.errorLine != nil {
+            return RoachPalette.warning
+        }
+        if controller.isBooting || controller.isBusy {
+            return RoachPalette.cyan
+        }
+        return controller.stage == .finish ? RoachPalette.green : stageAccent
+    }
+
+    private var footerTitle: String {
+        if controller.errorLine != nil {
+            return "Installer needs attention"
+        }
+        if controller.isBooting {
+            return "Starting local setup"
+        }
+        if controller.isBusy {
+            return "Working on it"
+        }
+        return controller.stage == .finish ? "Ready to launch" : "Next step is ready"
+    }
+
+    private var footerDetail: String {
+        if controller.errorLine != nil {
+            return "Nothing else was touched."
+        }
+        if controller.isBooting || controller.isBusy {
+            return controller.statusLine
+        }
+        return "No new account. Same Mac. Same files."
     }
 
     private func welcomeCard(title: String, detail: String) -> some View {
@@ -1547,12 +1956,12 @@ private struct SetupRootView: View {
         VStack(alignment: .leading, spacing: 12) {
             RoachKicker(controller.stage.title)
             Text(controller.stage.headline)
-                .font(.system(size: 34, weight: .bold))
+                .font(.system(size: 30, weight: .black, design: .rounded))
                 .foregroundStyle(RoachPalette.text)
                 .minimumScaleFactor(0.80)
                 .fixedSize(horizontal: false, vertical: true)
             Text(controller.stage.detail)
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(RoachPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1562,25 +1971,25 @@ private struct SetupRootView: View {
     private var stageHeroGlyph: some View {
         if controller.stage == .welcome || controller.stage == .finish {
             RoachOrbitMark()
-                .frame(width: 104, height: 104)
+                .frame(width: 86, height: 86)
         } else {
             Image(systemName: stageSystemImage)
-                .font(.system(size: 34, weight: .semibold))
+                .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(stageAccent)
-                .frame(width: 96, height: 96)
+                .frame(width: 78, height: 78)
                 .background(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .fill(stageAccent.opacity(0.12))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .stroke(stageAccent.opacity(0.18), lineWidth: 1)
                 )
         }
     }
 
-    private var stageSystemImage: String {
-        switch controller.stage {
+    private func stageIcon(for stage: SetupStage) -> String {
+        switch stage {
         case .welcome:
             return "sparkles"
         case .machine:
@@ -1592,6 +2001,10 @@ private struct SetupRootView: View {
         case .finish:
             return "checkmark.circle.fill"
         }
+    }
+
+    private var stageSystemImage: String {
+        stageIcon(for: controller.stage)
     }
 
     private var stageAccent: Color {

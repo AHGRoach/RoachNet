@@ -100,7 +100,6 @@ export async function startRoachNetContainerRuntime({
   commandExists,
   detectRuntime,
   runProcess,
-  runShell,
   log = () => {},
   env = process.env,
   timeoutMs = START_TIMEOUT_MS,
@@ -134,7 +133,7 @@ export async function startRoachNetContainerRuntime({
     })
   } else {
     log('Starting Docker service through systemctl...')
-    await runShell('sudo systemctl start docker', { env })
+    await runProcess('sudo', ['systemctl', 'start', 'docker'], { env })
   }
 
   const startedAt = Date.now()

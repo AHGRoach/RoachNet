@@ -12,7 +12,12 @@ export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production'
 
   return {
-    plugins: [inertia({ ssr: { enabled: false } }), react(), tailwindcss(), adonisjs({ entrypoints: ['inertia/app/app.tsx'], reload: ['resources/views/**/*.edge'] })],
+    plugins: [
+      inertia({ ssr: { enabled: false } }),
+      react(),
+      tailwindcss(),
+      adonisjs({ entrypoints: ['inertia/app/app.tsx'], reload: ['resources/views/**/*.edge'] }),
+    ],
     define: {
       'process.env.NODE_ENV': JSON.stringify(isProduction ? 'production' : mode),
     },
@@ -37,10 +42,6 @@ export default defineConfig(({ mode }) => {
 
             if (id.includes('pmtiles')) {
               return 'vendor-pmtiles'
-            }
-
-            if (id.includes('@tanstack/react-query-devtools')) {
-              return 'vendor-devtools'
             }
 
             if (id.includes('@uppy/')) {

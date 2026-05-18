@@ -1,5 +1,21 @@
 # Release Notes
 
+## Version 1.0.5 - May 13, 2026
+
+### Security
+- Closed the open Dependabot `ip-address` advisory in both the root and admin dependency locks.
+- Hardened local companion proxying, setup archive extraction, setup static file serving, and release-smoke HTTP checks against the open Code Scanning findings.
+- Kept CI on Blacksmith runners while tightening workflow permissions around release jobs.
+
+### Native App
+- Expanded RoachArcade ES-DE import so ROM libraries, gamelist metadata, cover art, system names, and notes land inside the native RoachArcade shelf.
+- Added more eBook/comic formats to Vault previews so `.azw`, `.azw3`, `.mobi`, `.cbz`, and `.cbr` are treated like reader material instead of loose files.
+- Gave Dev more room to behave like a real workspace, with a larger editor/shell layout and smaller RoachClaw prompt payloads for better local AI performance.
+
+### Installer
+- Reverified the setup app lane, Homebrew-style lane, command bar, desktop runtime health, companion fixtures, and iOS companion compatibility against the rebuilt macOS package.
+- Fixed the Homebrew release smoke so it no longer assumes port `8080` is free. The verifier now works even when another local service is already squatting there.
+
 ## Version 1.0.4 - May 4, 2026
 
 ### Native App
@@ -550,7 +566,7 @@
 ### 🚀 New Features
 
 - **Dev Studio**: Expanded the native Dev lane with richer project bootstraps, grouped secret templates, inline code suggestions, contextual shell commands, and a direct path to insert RoachClaw responses back into the active document.
-- **Command Bar**: Added a detached global launcher on `Shift-Command-R` so RoachNet can surface a compact command bar while the app is in the background instead of yanking the full shell to the front.
+- **Command Bar**: Added a detached global launcher on `Ctrl-Cmd-R` so RoachNet can surface a compact command bar while the app is in the background instead of yanking the full shell to the front.
 - **Apps Catalog**: Expanded the website-backed Apps shelf into per-region maps, per-course education downloads, Wikipedia bundles, and contained RoachClaw model packs backed by the same native install manifest lane.
 
 ### ✨ Improvements

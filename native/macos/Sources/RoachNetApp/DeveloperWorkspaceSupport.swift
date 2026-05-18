@@ -306,8 +306,8 @@ enum DeveloperInlineAssistSupport {
 }
 
 enum DeveloperRailSection: String, CaseIterable, Identifiable {
-    case assist = "Thread"
-    case memory = "RoachBrain"
+    case assist = "AI"
+    case memory = "Memory"
     case secrets = "Secrets"
 
     var id: String { rawValue }
@@ -315,11 +315,11 @@ enum DeveloperRailSection: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .assist:
-            return "Thread, context, and recent asks stay nearby."
+            return "Reply, route, diagnostics."
         case .memory:
-            return "Pinned recalls and local search stay close."
+            return "Pinned recalls and search."
         case .secrets:
-            return "Keychain-backed values stay off the file tree."
+            return "Keychain values."
         }
     }
 

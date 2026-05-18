@@ -174,6 +174,23 @@ struct RoachArchiveVaultRecord: Identifiable, Codable, Hashable {
     var metadataPath: String
     var importedAt: Date
     var status: String
+    var readingProgress: Double
+    var lastOpenedAt: Date?
+    var notes: String
+    var tags: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case result
+        case filePath
+        case metadataPath
+        case importedAt
+        case status
+        case readingProgress
+        case lastOpenedAt
+        case notes
+        case tags
+    }
 
     init(
         id: UUID = UUID(),
@@ -181,7 +198,11 @@ struct RoachArchiveVaultRecord: Identifiable, Codable, Hashable {
         filePath: String?,
         metadataPath: String,
         importedAt: Date = Date(),
-        status: String
+        status: String,
+        readingProgress: Double = 0,
+        lastOpenedAt: Date? = nil,
+        notes: String = "",
+        tags: [String] = []
     ) {
         self.id = id
         self.result = result
@@ -189,6 +210,24 @@ struct RoachArchiveVaultRecord: Identifiable, Codable, Hashable {
         self.metadataPath = metadataPath
         self.importedAt = importedAt
         self.status = status
+        self.readingProgress = min(max(readingProgress, 0), 1)
+        self.lastOpenedAt = lastOpenedAt
+        self.notes = notes
+        self.tags = tags
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        result = try container.decode(RoachArchiveSearchResult.self, forKey: .result)
+        filePath = try container.decodeIfPresent(String.self, forKey: .filePath)
+        metadataPath = try container.decode(String.self, forKey: .metadataPath)
+        importedAt = try container.decodeIfPresent(Date.self, forKey: .importedAt) ?? Date()
+        status = try container.decodeIfPresent(String.self, forKey: .status) ?? "Metadata added"
+        readingProgress = min(max(try container.decodeIfPresent(Double.self, forKey: .readingProgress) ?? 0, 0), 1)
+        lastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
     }
 }
 
@@ -210,14 +249,17 @@ final class RoachArchiveStore: ObservableObject {
     @Published var isImporting = false
     @Published var isRefreshingTorrents = false
 
-    private static let endpointKey = "roachnet.roacharchive.endpoint"
-    private static let metadataDirectoryKey = "roachnet.roacharchive.metadata-directory"
+    static let endpointKey = "roachnet.roacharchive.endpoint"
+    static let metadataDirectoryKey = "roachnet.roacharchive.metadata-directory"
     private let fileManager = FileManager.default
     private var storageRoot: URL?
 
     init() {
-        endpointURLString = UserDefaults.standard.string(forKey: Self.endpointKey) ?? "http://127.0.0.1:38221"
+        endpointURLString = Self.sanitizedEndpoint(UserDefaults.standard.string(forKey: Self.endpointKey) ?? "")
         metadataDirectoryPath = UserDefaults.standard.string(forKey: Self.metadataDirectoryKey) ?? ""
+        if endpointURLString.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.endpointKey)
+        }
     }
 
     var metadataTorrentCount: Int {
@@ -235,10 +277,13 @@ final class RoachArchiveStore: ObservableObject {
 
         storageRoot = root
         do {
-            try fileManager.createDirectory(at: root.appendingPathComponent("Books", isDirectory: true), withIntermediateDirectories: true)
-            try fileManager.createDirectory(at: root.appendingPathComponent("Metadata", isDirectory: true), withIntermediateDirectories: true)
-            if metadataDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                metadataDirectoryPath = root.appendingPathComponent("Metadata", isDirectory: true).path
+            let booksURL = root.appendingPathComponent("Books", isDirectory: true)
+            let metadataURL = root.appendingPathComponent("Metadata", isDirectory: true)
+            try fileManager.createDirectory(at: booksURL, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: metadataURL, withIntermediateDirectories: true)
+            let configuredMetadataPath = metadataDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if configuredMetadataPath.isEmpty || Self.isTransientScratchPath(configuredMetadataPath) {
+                metadataDirectoryPath = metadataURL.path
             }
             loadCachedTorrents()
             loadVaultRecords()
@@ -356,6 +401,69 @@ final class RoachArchiveStore: ObservableObject {
             errorLine = "Vault import failed: \(error.localizedDescription)"
             return nil
         }
+    }
+
+    func attachLocalBook(_ fileURL: URL, to recordID: UUID) -> URL? {
+        guard let booksRootURL else {
+            errorLine = "Storage is not configured."
+            return nil
+        }
+        guard let index = vaultRecords.firstIndex(where: { $0.id == recordID }) else { return nil }
+
+        do {
+            try fileManager.createDirectory(at: booksRootURL, withIntermediateDirectories: true)
+            let result = vaultRecords[index].result
+            let ext = fileURL.pathExtension.nilIfBlankForArchive ?? result.format?.nilIfBlankForArchive ?? "book"
+            let destination = booksRootURL.appendingPathComponent(result.fileName(using: ext))
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.copyItem(at: fileURL, to: destination)
+            vaultRecords[index].filePath = destination.path
+            vaultRecords[index].status = "Local copy attached"
+            vaultRecords[index].lastOpenedAt = Date()
+            saveVaultRecords()
+            statusLine = "Attached \(fileURL.lastPathComponent) to \(result.title)."
+            errorLine = nil
+            return destination
+        } catch {
+            errorLine = "Attach failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func markOpened(_ recordID: UUID) {
+        guard let index = vaultRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        vaultRecords[index].lastOpenedAt = Date()
+        saveVaultRecords()
+    }
+
+    func updateReadingProgress(_ progress: Double, for recordID: UUID) {
+        guard let index = vaultRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let clamped = min(max(progress, 0), 1)
+        vaultRecords[index].readingProgress = clamped
+        vaultRecords[index].status = clamped >= 1 ? "Read" : (clamped > 0 ? "Reading" : vaultRecords[index].status)
+        vaultRecords[index].lastOpenedAt = Date()
+        saveVaultRecords()
+        statusLine = clamped >= 1 ? "Marked \(vaultRecords[index].result.title) read." : "Updated reading progress."
+    }
+
+    func updateRecordNotes(_ notes: String, tagsText: String, for recordID: UUID) {
+        guard let index = vaultRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        vaultRecords[index].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        vaultRecords[index].tags = tagsText
+            .split { $0 == "," || $0 == "\n" }
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .uniquedForArchive()
+        saveVaultRecords()
+        statusLine = "Updated archive notes."
+    }
+
+    func removeRecord(_ recordID: UUID) {
+        vaultRecords.removeAll { $0.id == recordID }
+        saveVaultRecords()
+        statusLine = "Removed archive record."
     }
 
     private func searchAPI(endpointURL: URL, query: String) async throws -> [RoachArchiveSearchResult] {
@@ -542,7 +650,7 @@ final class RoachArchiveStore: ObservableObject {
     }
 
     private func normalizedEndpointURL(path: String) -> URL? {
-        let trimmed = endpointURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.sanitizedEndpoint(endpointURLString)
         guard !trimmed.isEmpty, var components = URLComponents(string: trimmed) else { return nil }
         if components.scheme == nil {
             components.scheme = "http"
@@ -555,6 +663,34 @@ final class RoachArchiveStore: ObservableObject {
             components.path = "/" + basePath + "/" + requestedPath
         }
         return components.url
+    }
+
+    private static func sanitizedEndpoint(_ rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = trimmed.lowercased()
+        let staleDevelopmentEndpoints: Set<String> = [
+            "http://127.0.0.1:38221",
+            "https://127.0.0.1:38221",
+            "127.0.0.1:38221",
+            "http://localhost:38221",
+            "https://localhost:38221",
+            "localhost:38221",
+        ]
+
+        return staleDevelopmentEndpoints.contains(lowercased) ? "" : trimmed
+    }
+
+    private static func isTransientScratchPath(_ rawPath: String) -> Bool {
+        let standardized = URL(fileURLWithPath: NSString(string: rawPath).expandingTildeInPath)
+            .standardizedFileURL
+            .path
+            .lowercased()
+
+        return standardized.contains("/.smoke-work/")
+            || standardized.contains("/roachnet-setup-smoke-")
+            || standardized.contains("/roachnet-ios-companion-smoke-")
+            || (standardized.contains("/var/folders/") && standardized.contains("roachnet"))
+            || (standardized.contains("/private/var/folders/") && standardized.contains("roachnet"))
     }
 }
 
@@ -574,7 +710,7 @@ private extension RoachArchiveSearchResult {
     }
 
     func fileName(using extensionValue: String) -> String {
-        let ext = extensionValue.trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespacesAndNewlines))
+        let ext = extensionValue.safeArchiveFileExtension ?? ""
         return ext.isEmpty ? safeBaseName : "\(safeBaseName).\(ext)"
     }
 
@@ -699,5 +835,25 @@ private extension String {
     var nilIfBlankForArchive: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var safeArchiveFileExtension: String? {
+        let rawExtension = trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespacesAndNewlines))
+            .lowercased()
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let sanitized = rawExtension.unicodeScalars
+            .prefix(24)
+            .map { allowed.contains($0) ? Character($0) : "-" }
+            .reduce("") { $0 + String($1) }
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+
+        return sanitized.isEmpty ? nil : sanitized
+    }
+}
+
+private extension Array where Element: Hashable {
+    func uniquedForArchive() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }

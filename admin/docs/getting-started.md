@@ -1,12 +1,12 @@
-# Getting Started with N.O.M.A.D.
+# Getting Started with RoachNet
 
-This guide will help you get the most out of your N.O.M.A.D. server.
+This guide will help you get the most out of your RoachNet server.
 
 ---
 
 ## Easy Setup Wizard
 
-If this is your first time using N.O.M.A.D., the Easy Setup wizard will help you get everything configured.
+If this is your first time using RoachNet, the Easy Setup wizard will help you get everything configured.
 
 **[Launch Easy Setup →](/easy-setup)**
 
@@ -66,7 +66,7 @@ The Education Platform provides complete educational courses that work offline.
 
 ![AI Chat interface](/docs/ai-chat.png)
 
-N.O.M.A.D. includes a built-in AI chat interface powered by Ollama. It runs entirely on your server — no internet needed, no data sent anywhere.
+RoachNet includes a built-in AI chat interface powered by Ollama. It runs entirely on your server — no internet needed, no data sent anywhere.
 
 **What can it do:**
 - Answer questions on any topic
@@ -224,7 +224,7 @@ Check storage usage in **Settings → System**.
 
 ## Next Steps
 
-You're ready to use N.O.M.A.D. Here are some things to try:
+You're ready to use RoachNet Here are some things to try:
 
 1. **Look something up** — Search for a topic in the Information Library
 2. **Learn something** — Start a Khan Academy course in the Education Platform

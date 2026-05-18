@@ -1,7 +1,7 @@
 import Foundation
 import WebKit
 
-enum RoachArcadeGameKind: String, CaseIterable, Codable, Identifiable {
+enum RoachArcadeGameKind: String, CaseIterable, Codable, Identifiable, Hashable {
     case rom
     case macOS
     case windows
@@ -21,7 +21,7 @@ enum RoachArcadeGameKind: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum RoachArcadeCompatibilityRunner: String, CaseIterable, Codable, Identifiable {
+enum RoachArcadeCompatibilityRunner: String, CaseIterable, Codable, Identifiable, Hashable {
     case native
     case gamePortingToolkit
     case crossover
@@ -41,7 +41,7 @@ enum RoachArcadeCompatibilityRunner: String, CaseIterable, Codable, Identifiable
     }
 }
 
-enum RoachArcadeGameStatus: String, Codable {
+enum RoachArcadeGameStatus: String, Codable, Hashable {
     case ready
     case missingFile
     case needsCore
@@ -55,6 +55,36 @@ enum RoachArcadeGameStatus: String, Codable {
         case .needsCore: return "Needs Core"
         case .needsRunner: return "Needs Runner"
         case .tracked: return "Tracked"
+        }
+    }
+}
+
+enum RoachArcadeLibraryFilter: String, CaseIterable, Identifiable, Hashable {
+    case all
+    case ready
+    case attention
+    case favorites
+    case roms
+    case native
+    case windows
+    case modded
+    case cheats
+    case recent
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .ready: return "Ready"
+        case .attention: return "Needs Work"
+        case .favorites: return "Favorites"
+        case .roms: return "ROMs"
+        case .native: return "Native"
+        case .windows: return "Windows"
+        case .modded: return "Modded"
+        case .cheats: return "Cheats"
+        case .recent: return "Recent"
         }
     }
 }
@@ -78,6 +108,7 @@ struct RoachArcadeGame: Identifiable, Codable, Hashable {
     var bottlePath: String?
     var notes: String
     var tags: [String]
+    var favorite: Bool
     var cheats: [RoachArcadeCheat]
     var playCount: Int
     var lastPlayedAt: Date?
@@ -103,6 +134,7 @@ struct RoachArcadeGame: Identifiable, Codable, Hashable {
         case bottlePath
         case notes
         case tags
+        case favorite
         case cheats
         case playCount
         case lastPlayedAt
@@ -127,7 +159,8 @@ struct RoachArcadeGame: Identifiable, Codable, Hashable {
         runnerPath: String? = nil,
         bottlePath: String? = nil,
         notes: String = "",
-        tags: [String] = []
+        tags: [String] = [],
+        favorite: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -147,6 +180,7 @@ struct RoachArcadeGame: Identifiable, Codable, Hashable {
         self.bottlePath = bottlePath
         self.notes = notes
         self.tags = tags
+        self.favorite = favorite
         self.cheats = []
         self.playCount = 0
         self.lastPlayedAt = nil
@@ -178,6 +212,7 @@ struct RoachArcadeGame: Identifiable, Codable, Hashable {
         bottlePath = try container.decodeIfPresent(String.self, forKey: .bottlePath)
         notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        favorite = try container.decodeIfPresent(Bool.self, forKey: .favorite) ?? false
         cheats = try container.decodeIfPresent([RoachArcadeCheat].self, forKey: .cheats) ?? []
         playCount = try container.decodeIfPresent(Int.self, forKey: .playCount) ?? 0
         lastPlayedAt = try container.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
@@ -411,12 +446,23 @@ enum RoachArcadeCoreResolver {
         if haystack.contains("nintendo 64") || ["n64", "z64", "v64"].contains(extensionValue) { return "n64" }
         if haystack.contains("nintendo ds") || extensionValue == "nds" { return "nds" }
         if haystack.contains("nes") || extensionValue == "nes" { return "nes" }
-        if haystack.contains("playstation portable") || haystack.contains("psp") { return "psp" }
+        if haystack.contains("virtual boy") || extensionValue == "vb" { return "vb" }
+        if haystack.contains("playstation portable") || haystack.contains("psp") || ["cso"].contains(extensionValue) { return "psp" }
+        if haystack.contains("saturn") { return "saturn" }
+        if haystack.contains("3do") { return "3do" }
         if haystack.contains("playstation") || ["cue", "chd", "iso", "bin"].contains(extensionValue) { return "psx" }
-        if haystack.contains("sega cd") { return "segaCD" }
-        if haystack.contains("genesis") || haystack.contains("mega drive") || ["md", "gen"].contains(extensionValue) { return "segaMD" }
+        if haystack.contains("sega cd") || haystack.contains("mega cd") { return "segaCD" }
+        if haystack.contains("32x") || extensionValue == "32x" { return "sega32x" }
+        if haystack.contains("genesis") || haystack.contains("mega drive") || ["md", "gen", "smd"].contains(extensionValue) { return "segaMD" }
         if haystack.contains("master system") || extensionValue == "sms" { return "segaMS" }
         if haystack.contains("game gear") || extensionValue == "gg" { return "segaGG" }
+        if haystack.contains("pc engine") || haystack.contains("turbografx") || ["pce", "sgx"].contains(extensionValue) { return "pce" }
+        if haystack.contains("neo geo pocket") || ["ngp", "ngc"].contains(extensionValue) { return "ngp" }
+        if haystack.contains("wonder") || ["ws", "wsc"].contains(extensionValue) { return "ws" }
+        if haystack.contains("atari 2600") || extensionValue == "a26" { return "atari2600" }
+        if haystack.contains("atari 7800") || extensionValue == "a78" { return "atari7800" }
+        if haystack.contains("lynx") || extensionValue == "lnx" { return "lynx" }
+        if haystack.contains("jaguar") || ["j64", "jag"].contains(extensionValue) { return "jaguar" }
         if haystack.contains("arcade") || haystack.contains("mame") { return "arcade" }
         return nil
     }
@@ -430,10 +476,20 @@ enum RoachArcadeCoreResolver {
         case "n64", "z64", "v64": return "Nintendo 64"
         case "nds": return "Nintendo DS"
         case "nes": return "NES"
-        case "md", "gen": return "Sega Genesis"
+        case "vb": return "Virtual Boy"
+        case "md", "gen", "smd": return "Sega Genesis"
+        case "32x": return "Sega 32X"
         case "sms": return "Sega Master System"
         case "gg": return "Sega Game Gear"
-        case "cue", "chd", "iso", "bin": return "PlayStation / Disc"
+        case "pce", "sgx": return "PC Engine"
+        case "ngp", "ngc": return "Neo Geo Pocket"
+        case "ws", "wsc": return "WonderSwan"
+        case "a26": return "Atari 2600"
+        case "a78": return "Atari 7800"
+        case "lnx": return "Atari Lynx"
+        case "j64", "jag": return "Atari Jaguar"
+        case "cue", "chd", "iso", "bin", "img", "ccd", "pbp", "cso", "m3u": return "Disc Image"
+        case "zip", "7z": return "Arcade / Compressed"
         default: return "Unknown System"
         }
     }
@@ -441,7 +497,9 @@ enum RoachArcadeCoreResolver {
     static var supportedROMExtensions: Set<String> {
         [
             "nes", "sfc", "smc", "gb", "gbc", "gba", "n64", "z64", "v64", "nds",
-            "iso", "cue", "chd", "bin", "md", "gen", "sms", "gg", "zip", "7z",
+            "iso", "cue", "chd", "bin", "img", "ccd", "sub", "toc", "pbp", "cso", "m3u",
+            "md", "gen", "smd", "sms", "gg", "32x", "pce", "sgx", "ngp", "ngc", "ws", "wsc",
+            "a26", "a78", "lnx", "j64", "jag", "vb", "zip", "7z",
         ]
     }
 }

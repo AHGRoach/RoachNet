@@ -39,21 +39,23 @@ private extension PresentedVaultAsset {
     var previewDetail: String {
         switch previewKind {
         case .markdown:
-            return "Edit markdown in place, keep the same file readable in Obsidian, and stop bouncing out to another notes app."
+            return "Edit the same markdown file RoachNet and Obsidian already share."
         case .text:
-            return "Open plain text, config, and source files inside the vault so the archive behaves like a working library instead of a dead stack of attachments."
+            return "Open plain text, config, and source files inside the vault."
         case .image:
-            return "Open the image in a built-in lightbox and keep the file anchored to the shelf it came from."
+            return "Inspect the image in a built-in lightbox."
         case .audio:
-            return "Play the track in RoachNet, keep the album art and file path in view, and stay inside the library."
+            return "Play the track without leaving the library."
         case .video:
-            return "Watch the clip in the built-in player instead of throwing the file out to another app."
+            return "Watch the clip in the built-in player."
         case .pdf, .book:
-            return "Read the file in the built-in reader so books and docs stay on the same shelf as the rest of the vault."
+            return "Read books and docs on the same shelf as the rest of Vault."
+        case .archive:
+            return "Inspect the package without dropping to Finder."
         case .folder:
-            return "Browse the folder contents in one expanded shelf view without dropping out of RoachNet."
+            return "Browse folder contents without dropping to Finder."
         case .generic:
-            return "Preview books, media, markdown, and other vault files without leaving the RoachNet shell."
+            return "Preview this vault file inside RoachNet."
         }
     }
 
@@ -138,6 +140,7 @@ private struct NativeMediaPreview: NSViewRepresentable {
         view.player = AVPlayer(url: url)
         view.controlsStyle = .floating
         view.videoGravity = .resizeAspect
+        view.showsFullScreenToggleButton = true
         return view
     }
 
@@ -156,14 +159,18 @@ private struct NativeMediaPreview: NSViewRepresentable {
 #if canImport(PDFKit)
 private struct NativePDFPreview: NSViewRepresentable {
     let url: URL
+    let scaleFactor: CGFloat
 
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView(frame: .zero)
         view.autoScales = true
+        view.minScaleFactor = 0.55
+        view.maxScaleFactor = 3.0
         view.displayMode = .singlePageContinuous
         view.displaysPageBreaks = false
         view.backgroundColor = .clear
         view.document = PDFDocument(url: url)
+        view.scaleFactor = scaleFactor
         return view
     }
 
@@ -171,6 +178,7 @@ private struct NativePDFPreview: NSViewRepresentable {
         if view.document?.documentURL != url {
             view.document = PDFDocument(url: url)
         }
+        view.scaleFactor = scaleFactor
     }
 }
 #endif
@@ -209,6 +217,7 @@ struct VaultPreviewSurfaceView: View {
     @State private var isSavingMarkdown = false
     @State private var folderChildren: [URL] = []
     @State private var folderQuery = ""
+    @State private var readerScale = 1.0
 
     private var hasUnsavedTextChanges: Bool {
         asset.supportsTextEditing && markdownDraft != originalMarkdown
@@ -234,6 +243,10 @@ struct VaultPreviewSurfaceView: View {
     private var markdownWikiLinks: [String] {
         guard asset.isMarkdown else { return [] }
         return VaultPreviewAssetSupport.wikiLinks(in: markdownDraft)
+    }
+
+    private var speechActionPlans: [RoachSpeechVaultActionPlan] {
+        RoachSpeechVaultActionPlan.plans(for: asset.previewKind, sourceURL: asset.url)
     }
 
     private var assetFacts: [(String, Color)] {
@@ -263,6 +276,8 @@ struct VaultPreviewSurfaceView: View {
             facts.append(("Built-in screening", RoachPalette.cyan))
         case .pdf, .book:
             facts.append(("Reader surface", RoachPalette.bronze))
+        case .archive:
+            facts.append(("Archive package", RoachPalette.cyan))
         case .generic:
             facts.append(("Quick preview", RoachPalette.cyan))
         }
@@ -340,6 +355,9 @@ struct VaultPreviewSurfaceView: View {
                 if asset.previewKind == .pdf || asset.previewKind == .book {
                     RoachTag("Reader", accent: RoachPalette.bronze)
                 }
+                if asset.previewKind == .archive {
+                    RoachTag("Archive", accent: RoachPalette.cyan)
+                }
                 if asset.isDirectory {
                     RoachTag("Expanded shelf", accent: RoachPalette.cyan)
                 }
@@ -365,26 +383,38 @@ struct VaultPreviewSurfaceView: View {
 
     private var headerActions: some View {
         HStack(spacing: 12) {
-            Button("Reveal in Finder") {
+            Button {
                 NSWorkspace.shared.activateFileViewerSelecting([asset.url])
+            } label: {
+                Label("Reveal", systemImage: "folder")
+                    .labelStyle(.titleAndIcon)
             }
             .buttonStyle(RoachSecondaryButtonStyle())
 
-            Button("Open Externally") {
+            Button {
                 NSWorkspace.shared.open(asset.url)
+            } label: {
+                Label("Open", systemImage: "arrow.up.forward.app")
+                    .labelStyle(.titleAndIcon)
             }
             .buttonStyle(RoachSecondaryButtonStyle())
 
             if asset.supportsTextEditing {
-                Button(isSavingMarkdown ? "Saving..." : (asset.isMarkdown ? "Save Note" : "Save File")) {
+                Button {
                     Task { await saveEditableText() }
+                } label: {
+                    Label(isSavingMarkdown ? "Saving" : "Save", systemImage: "checkmark.circle.fill")
+                        .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(RoachPrimaryButtonStyle())
                 .disabled(isSavingMarkdown || !hasUnsavedTextChanges)
             }
 
-            Button("Close") {
+            Button {
                 onClose()
+            } label: {
+                Label("Close", systemImage: "xmark")
+                    .labelStyle(.titleAndIcon)
             }
             .buttonStyle(RoachSecondaryButtonStyle())
         }
@@ -404,6 +434,8 @@ struct VaultPreviewSurfaceView: View {
         case .pdf:
             pdfWorkspace
         case .book:
+            bookWorkspace
+        case .archive:
             quickLookWorkspace
         case .folder:
             folderWorkspace
@@ -460,8 +492,8 @@ struct VaultPreviewSurfaceView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     RoachSectionHeader(
                         "Lightbox",
-                        title: "Open the visual without leaving Vault.",
-                        detail: "Artwork, scans, covers, and exported frames stay attached to the same library surface instead of bouncing out to Preview."
+                        title: "Visual preview.",
+                        detail: "Artwork, scans, covers, and frames stay attached."
                     )
 
                     NativeImagePreview(url: asset.url)
@@ -484,11 +516,13 @@ struct VaultPreviewSurfaceView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     RoachSectionHeader(
                         asset.previewKind == .audio ? "Player" : "Viewer",
-                        title: asset.previewKind == .audio ? "Built-in listening lane." : "Built-in screening lane.",
+                        title: asset.previewKind == .audio ? "Local player." : "Local screening room.",
                         detail: asset.previewKind == .audio
-                            ? "Play the file here and keep the rest of the vault shelf within reach."
-                            : "Watch the file here instead of jumping out to another player."
+                            ? "Play it from the vault. No tab, no login, no rented jukebox."
+                            : "Watch it from the vault. The browser can stay buried."
                     )
+
+                    mediaDock
 
                     NativeMediaPreview(url: asset.url)
                         .frame(minHeight: 460)
@@ -522,12 +556,14 @@ struct VaultPreviewSurfaceView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     RoachSectionHeader(
                         "Reader",
-                        title: "Read without leaving the shelf.",
-                        detail: "PDFs stay inside the vault reader instead of bouncing over to Preview."
+                        title: "Read inside Vault.",
+                        detail: "PDFs stay on the shelf with zoom, file facts, and no cloud reader."
                     )
 
+                    readerDock(kind: "PDF")
+
                     #if canImport(PDFKit)
-                    NativePDFPreview(url: asset.url)
+                    NativePDFPreview(url: asset.url, scaleFactor: CGFloat(readerScale))
                         .frame(minHeight: 560)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay(
@@ -546,16 +582,106 @@ struct VaultPreviewSurfaceView: View {
         }
     }
 
+    private var bookWorkspace: some View {
+        VStack(spacing: 16) {
+            RoachInsetPanel {
+                VStack(alignment: .leading, spacing: 12) {
+                    RoachSectionHeader(
+                        "Reader",
+                        title: "Book shelf.",
+                        detail: "EPUBs and reader-native formats open in a dedicated vault shell."
+                    )
+
+                    readerDock(kind: asset.url.pathExtension.uppercased().isEmpty ? "Book" : asset.url.pathExtension.uppercased())
+
+                    NativeQuickLookPreview(url: asset.url)
+                        .frame(minHeight: 560)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(RoachPalette.border, lineWidth: 1)
+                        )
+                }
+            }
+
+            assetInsightsPanel
+        }
+    }
+
+    private var mediaDock: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                RoachTag(asset.previewKind == .audio ? "Audio" : "Video", accent: asset.previewKind == .audio ? RoachPalette.green : RoachPalette.cyan)
+                RoachTag("Fullscreen control", accent: RoachPalette.magenta)
+                if let fileSize = VaultPreviewAssetSupport.fileSizeLabel(for: asset.url) {
+                    RoachTag(fileSize, accent: RoachPalette.bronze)
+                }
+                RoachTag(asset.url.pathExtension.uppercased(), accent: RoachPalette.cyan)
+            }
+        }
+    }
+
+    private func readerDock(kind: String) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                readerDockContent(kind: kind)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                readerDockContent(kind: kind)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(RoachPalette.panelRaised.opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(RoachPalette.border, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func readerDockContent(kind: String) -> some View {
+        RoachTag(kind, accent: RoachPalette.bronze)
+        RoachTag("\(Int((readerScale * 100).rounded()))%", accent: RoachPalette.cyan)
+
+        Button {
+            readerScale = max(0.65, readerScale - 0.10)
+        } label: {
+            Label("Smaller", systemImage: "minus.magnifyingglass")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+
+        Button {
+            readerScale = min(2.2, readerScale + 0.10)
+        } label: {
+            Label("Larger", systemImage: "plus.magnifyingglass")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+
+        Button {
+            readerScale = 1.0
+        } label: {
+            Label("Reset", systemImage: "arrow.counterclockwise")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(RoachSecondaryButtonStyle())
+    }
+
     private var folderWorkspace: some View {
         VStack(spacing: 16) {
             RoachInsetPanel {
                 VStack(alignment: .leading, spacing: 12) {
                     RoachSectionHeader(
                         "Expanded Shelf",
-                        title: "Browse the folder without leaving Vault.",
+                        title: "Browse this folder.",
                         detail: folderChildren.isEmpty
                             ? "This folder is empty."
-                            : "Open nested files and subfolders directly inside the vault so the archive behaves like a working library, not a dead Finder handoff."
+                            : "Open nested files without leaving Vault."
                     )
 
                     TextField("Filter this folder", text: $folderQuery)
@@ -574,9 +700,14 @@ struct VaultPreviewSurfaceView: View {
                         )
 
                     if filteredFolderChildren.isEmpty {
-                        Text(folderChildren.isEmpty ? "No files were found in this folder." : "No folder items matched that filter.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(RoachPalette.muted)
+                        RoachNotice(
+                            title: folderChildren.isEmpty ? "Folder is empty" : "No matches",
+                            detail: folderChildren.isEmpty
+                                ? "There is nothing to open in this shelf yet."
+                                : "Change the filter.",
+                            accent: RoachPalette.cyan,
+                            systemName: folderChildren.isEmpty ? "folder" : "magnifyingglass"
+                        )
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 10) {
@@ -642,8 +773,8 @@ struct VaultPreviewSurfaceView: View {
             VStack(alignment: .leading, spacing: 12) {
                 RoachSectionHeader(
                     "Markdown",
-                    title: "Write in the same file.",
-                    detail: "This note stays on disk where Obsidian expects it. RoachNet edits the markdown directly instead of keeping a second copy."
+                    title: "Edit markdown in place.",
+                    detail: "Same file Obsidian reads."
                 )
 
                 TextEditor(text: $markdownDraft)
@@ -670,7 +801,7 @@ struct VaultPreviewSurfaceView: View {
                 RoachSectionHeader(
                     "Text File",
                     title: "Edit the source in place.",
-                    detail: "Plain text, config, and code files stay on the same shelf and can be adjusted without bouncing out to another editor."
+                    detail: "Plain text, config, and code stay editable here."
                 )
 
                 TextEditor(text: $markdownDraft)
@@ -696,8 +827,8 @@ struct VaultPreviewSurfaceView: View {
             VStack(alignment: .leading, spacing: 12) {
                 RoachSectionHeader(
                     "Rendered",
-                    title: "See the note like a reader.",
-                    detail: "Quickly check headings, links, lists, and note flow without leaving the editor lane."
+                    title: "Reader view.",
+                    detail: "Headings, links, lists."
                 )
 
                 VaultRenderedMarkdownView(markdown: markdownDraft)
@@ -720,8 +851,8 @@ struct VaultPreviewSurfaceView: View {
             VStack(alignment: .leading, spacing: 12) {
                 RoachSectionHeader(
                     "Snapshot",
-                    title: "Read the file without leaving the lane.",
-                    detail: "Keep a plain-text reader next to the editor so config files, logs, and code snippets still feel like part of the same archive."
+                    title: "Plain-text reader.",
+                    detail: "Logs, configs, snippets."
                 )
 
                 ScrollView {
@@ -750,8 +881,8 @@ struct VaultPreviewSurfaceView: View {
             VStack(alignment: .leading, spacing: 14) {
                 RoachSectionHeader(
                     "Shelf Notes",
-                    title: "Keep the file context attached.",
-                    detail: "File stats, excerpts, and markdown cues stay inside the preview so Vault feels like an actual library lane instead of a stack of dead launchers."
+                    title: "File context.",
+                    detail: "Stats and excerpts for this file."
                 )
 
                 if !assetFacts.isEmpty {
@@ -790,6 +921,47 @@ struct VaultPreviewSurfaceView: View {
                                 ForEach(markdownWikiLinks.prefix(8), id: \.self) { link in
                                     RoachTag(link, accent: RoachPalette.magenta)
                                 }
+                            }
+                        }
+                    }
+                }
+
+                if !speechActionPlans.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("RoachSpeech")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .tracking(1.1)
+                            .foregroundStyle(RoachPalette.muted)
+
+                        let runtime = RoachSpeechNativeRuntime.status()
+                        let voiceProfile = RoachSpeechVoiceProfile.systemDefault
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 8)], alignment: .leading, spacing: 8) {
+                            ForEach(speechActionPlans, id: \.action) { plan in
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(plan.action.displayName)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(RoachPalette.text)
+                                    Text(plan.statusLabel(runtime: runtime, voiceProfile: voiceProfile))
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(RoachPalette.muted)
+                                        .lineLimit(2)
+                                    if let outputURL = plan.outputURL {
+                                        Text(outputURL.lastPathComponent)
+                                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(RoachPalette.cyan)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(RoachPalette.panelRaised.opacity(0.54))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(plan.isReady(runtime: runtime, voiceProfile: voiceProfile) ? RoachPalette.green.opacity(0.42) : RoachPalette.border, lineWidth: 1)
+                                )
                             }
                         }
                     }
@@ -875,6 +1047,8 @@ struct VaultPreviewSurfaceView: View {
             return RoachPalette.cyan
         case .pdf, .book:
             return RoachPalette.bronze
+        case .archive:
+            return RoachPalette.cyan
         case .folder:
             return RoachPalette.cyan
         case .generic:
@@ -902,6 +1076,8 @@ struct VaultPreviewSurfaceView: View {
             return "doc.richtext.fill"
         case .book:
             return "books.vertical.fill"
+        case .archive:
+            return "archivebox.fill"
         case .folder:
             return "folder.fill"
         case .generic:

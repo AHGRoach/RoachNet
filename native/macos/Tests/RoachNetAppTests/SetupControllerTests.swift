@@ -33,4 +33,10 @@ final class SetupControllerTests: XCTestCase {
             )
         )
     }
+
+    func testSetupTaskDateParserAcceptsFractionalCompletionDates() {
+        XCTAssertNotNil(SetupController.parseSetupTaskDate("2026-05-16T21:44:22.495Z"))
+        XCTAssertNotNil(SetupController.parseSetupTaskDate("2026-05-16T21:44:22Z"))
+        XCTAssertNil(SetupController.parseSetupTaskDate("not-a-date"))
+    }
 }
