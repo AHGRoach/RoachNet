@@ -92,7 +92,7 @@
     "@uppy/dashboard": "^5.1.0",
     "@uppy/react": "^5.1.1",
     "@vinejs/vine": "^4.4.0",
-    "@vitejs/plugin-react": "^5.1.1",
+    "@vitejs/plugin-react": "^6.0.2",
     "axios": "^1.15.0",
     "better-sqlite3": "^12.10.0",
     "bullmq": "^5.76.5",
