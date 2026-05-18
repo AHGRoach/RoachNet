@@ -33,7 +33,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: semantic-release
-        uses: cycjimmy/semantic-release-action@v3
+        uses: cycjimmy/semantic-release-action@v6
         id: semver
         env:
           GITHUB_TOKEN: ${{ secrets.ROACHNET_RELEASE_TOKEN || github.token }}
