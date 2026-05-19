@@ -35,7 +35,7 @@ const installerHelperPath = path.join(
 )
 const appVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version || '1.0.0'
 const bundledNodeVersion = 'v26.1.0'
-const bundledOpenClawPackage = process.env.ROACHNET_BUNDLED_OPENCLAW_PACKAGE?.trim() || 'openclaw@2026.5.12'
+const bundledOpenClawPackage = process.env.ROACHNET_BUNDLED_OPENCLAW_PACKAGE?.trim() || 'openclaw@2026.5.18'
 const codesignIdentity = process.env.ROACHNET_CODESIGN_IDENTITY?.trim() || ''
 const notaryProfile = process.env.ROACHNET_NOTARY_PROFILE?.trim() || ''
 const notaryKeychain = process.env.ROACHNET_NOTARY_KEYCHAIN?.trim() || ''

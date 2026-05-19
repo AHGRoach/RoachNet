@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -176,6 +177,58 @@ function startStaticFileServer(port, route, filePath) {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', () => resolve(server))
   })
+}
+
+function startStaticDirectoryServer(port, root) {
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url || '/', `http://127.0.0.1:${port}`)
+    const relativePath = requestUrl.pathname.replace(/^\/+/, '')
+    const filePath = path.resolve(root, relativePath)
+    if (filePath.startsWith(path.resolve(root)) && existsSync(filePath)) {
+      const body = readFileSync(filePath)
+      response.writeHead(200, {
+        'content-type': relativePath.endsWith('.json') ? 'application/json' : 'application/octet-stream',
+        'content-length': body.byteLength,
+      })
+      response.end(body)
+      return
+    }
+
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end('{"error":"not found"}')
+  })
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', () => resolve(server))
+  })
+}
+
+function sha256FileSync(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex')
+}
+
+function splitFileIntoParts(filePath, outputRoot, routePrefix, partSize) {
+  const buffer = readFileSync(filePath)
+  const parts = []
+  for (let offset = 0, index = 0; offset < buffer.length; offset += partSize, index += 1) {
+    const part = buffer.subarray(offset, Math.min(offset + partSize, buffer.length))
+    const filename = `part-${String(index + 1).padStart(3, '0')}.bin`
+    const sha256 = createHash('sha256').update(part).digest('hex')
+    const header = `ROACHNET-IA-CHUNK-v1 ${index} ${part.byteLength} ${sha256}\n`
+    writeFileSync(path.join(outputRoot, filename), Buffer.concat([Buffer.from(header, 'utf8'), part]))
+    parts.push({
+      index,
+      url: `${routePrefix}/${filename}`,
+      offset,
+      bytes: part.byteLength,
+      sha256,
+      encoding: 'roachnet-ia-chunk-v1',
+      header,
+      encodedBytes: Buffer.byteLength(header) + part.byteLength,
+    })
+  }
+  return parts
 }
 
 function startReleaseServer(port) {
@@ -410,6 +463,99 @@ test('native API exposes app catalogs and companion payloads without the legacy 
   }
 })
 
+test('companion App Store installs route descriptor downloads into the native app', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-native-api-appstore-install-test-'))
+  const storagePath = path.join(tempRoot, 'storage')
+  const runtimeStateRoot = path.join(tempRoot, 'state')
+  const publicRoot = path.join(tempRoot, 'public')
+  const artifactRoot = path.join(publicRoot, 'artifacts')
+  const descriptorRoot = path.join(publicRoot, 'downloads', 'maps', 'pmtiles')
+  mkdirSync(artifactRoot, { recursive: true })
+  mkdirSync(descriptorRoot, { recursive: true })
+  const payloadPath = path.join(artifactRoot, 'test-map.pmtiles')
+  writeFileSync(payloadPath, 'roachnet app store map payload\n')
+  const downloadPort = await resolveAvailablePort()
+  const descriptorPath = path.join(descriptorRoot, 'test-map.json')
+  writeFileSync(
+    descriptorPath,
+    JSON.stringify({
+      schema: 'org.roachnet.apps.download-descriptor.v1',
+      id: 'test-map',
+      filename: 'test-map.pmtiles',
+      sha256: sha256FileSync(payloadPath),
+      sources: [
+        {
+          type: 'test-source',
+          status: 'published',
+          url: `http://127.0.0.1:${downloadPort}/artifacts/test-map.pmtiles`,
+        },
+      ],
+    })
+  )
+  const staticServer = await startStaticDirectoryServer(downloadPort, publicRoot)
+  const port = await resolveAvailablePort()
+  const companionPort = await resolveAvailablePort()
+  const token = 'native-api-appstore-install-token'
+  const processInfoPath = path.join(storagePath, 'logs', 'roachnet-runtime-processes.json')
+  const env = {
+    ...process.env,
+    ROACHNET_STORAGE_PATH: storagePath,
+    ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
+    ROACHNET_COMPANION_ENABLED: '1',
+    ROACHNET_COMPANION_HOST: '127.0.0.1',
+    ROACHNET_COMPANION_PORT: String(companionPort),
+    ROACHNET_COMPANION_TOKEN: token,
+    HOST: '127.0.0.1',
+    PORT: String(port),
+  }
+  const child = spawn(process.execPath, [path.join(repoRoot, 'scripts', 'run-roachnet-native-api.mjs')], {
+    cwd: repoRoot,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForHealth(`http://127.0.0.1:${port}/api/health`, child)
+    await waitForPath(processInfoPath, child)
+    const processInfo = JSON.parse(readFileSync(processInfoPath, 'utf8'))
+
+    const descriptorUrl = `http://127.0.0.1:${downloadPort}/downloads/maps/pmtiles/test-map.json`
+    const queued = await requestJson(`${processInfo.companionUrl}/api/companion/install`, {
+      method: 'POST',
+      token,
+      body: {
+        action: 'direct-download',
+        id: 'test-map',
+        title: 'Test Map',
+        url: descriptorUrl,
+        filetype: 'map',
+      },
+    })
+    assert.equal(queued.success, true)
+    assert.equal(queued.action, 'direct-download')
+    assert.equal(queued.queued, 1)
+
+    let jobs = []
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      jobs = await requestJson(`http://127.0.0.1:${port}/api/downloads/jobs`)
+      if (jobs[0]?.status === 'completed' || jobs[0]?.status === 'failed') {
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+
+    assert.equal(jobs[0]?.status, 'completed')
+    assert.equal(jobs[0]?.descriptorUrl, descriptorUrl)
+    assert.equal(jobs[0]?.sha256, sha256FileSync(payloadPath))
+    assert.equal(existsSync(path.join(storagePath, 'maps', 'pmtiles', 'test-map.pmtiles')), true)
+    assert.equal(existsSync(path.join(storagePath, 'maps', 'pmtiles', 'test-map.pmtiles.part')), false)
+  } finally {
+    await stopNativeApi(child, env)
+    await rm(tempRoot, { recursive: true, force: true })
+    await new Promise((resolve) => staticServer.close(resolve))
+  }
+})
+
 test('native API downloads through temporary partial files with an explicit byte ceiling', () => {
   const source = readRepoFile('scripts/run-roachnet-native-api.mjs')
 
@@ -534,6 +680,162 @@ test('native API installs downloaded RoachSpeech packs into the active model she
     await stopNativeApi(child, env)
     await rm(tempRoot, { recursive: true, force: true })
     await new Promise((resolve) => packServer.close(resolve))
+  }
+})
+
+test('native API resolves Apps download descriptors before installing RoachSpeech packs', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-native-api-roachspeech-descriptor-test-'))
+  const packID = 'test-roachvoice-descriptor-pack'
+  const archivePath = await createTestRoachSpeechPackZip(tempRoot, packID)
+  const storagePath = path.join(tempRoot, 'storage')
+  const runtimeStateRoot = path.join(tempRoot, 'state')
+  const port = await resolveAvailablePort()
+  const downloadPort = await resolveAvailablePort()
+  const descriptorPort = await resolveAvailablePort()
+  const packServer = await startStaticFileServer(downloadPort, '/test-roachvoice-descriptor-pack.zip', archivePath)
+  const descriptorPath = path.join(tempRoot, 'descriptor.json')
+  writeFileSync(
+    descriptorPath,
+    JSON.stringify({
+      schema: 'org.roachnet.apps.download-descriptor.v1',
+      id: packID,
+      filename: 'test-roachvoice-descriptor-pack.zip',
+      sha256: sha256FileSync(archivePath),
+      sources: [
+        {
+          type: 'test-source',
+          url: `http://127.0.0.1:${downloadPort}/test-roachvoice-descriptor-pack.zip`,
+        },
+      ],
+    })
+  )
+  const descriptorServer = await startStaticFileServer(descriptorPort, '/downloads/model-packs/test-roachvoice-descriptor-pack.json', descriptorPath)
+  const env = {
+    ...process.env,
+    ROACHNET_STORAGE_PATH: storagePath,
+    ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
+    HOST: '127.0.0.1',
+    PORT: String(port),
+  }
+  const child = spawn(process.execPath, [path.join(repoRoot, 'scripts', 'run-roachnet-native-api.mjs')], {
+    cwd: repoRoot,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForHealth(`http://127.0.0.1:${port}/api/health`, child)
+    const queued = await requestJson(`http://127.0.0.1:${port}/api/roachspeech/model-packs/download`, {
+      method: 'POST',
+      body: {
+        url: `http://127.0.0.1:${descriptorPort}/downloads/model-packs/test-roachvoice-descriptor-pack.json`,
+        packID,
+        kind: 'roachVoice',
+      },
+    })
+    assert.equal(queued.success, true)
+    assert.equal(queued.packID, packID)
+
+    let jobs = []
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      jobs = await requestJson(`http://127.0.0.1:${port}/api/downloads/jobs`)
+      if (jobs[0]?.status === 'completed' || jobs[0]?.status === 'failed') {
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+    assert.equal(jobs[0]?.status, 'completed')
+    assert.equal(jobs[0]?.installStatus, 'installed')
+    assert.equal(jobs[0]?.descriptorUrl, `http://127.0.0.1:${descriptorPort}/downloads/model-packs/test-roachvoice-descriptor-pack.json`)
+    assert.equal(existsSync(path.join(storagePath, 'RoachSpeech', 'ModelPacks', packID, 'RoachSpeechPack.json')), true)
+  } finally {
+    await stopNativeApi(child, env)
+    await rm(tempRoot, { recursive: true, force: true })
+    await new Promise((resolve) => packServer.close(resolve))
+    await new Promise((resolve) => descriptorServer.close(resolve))
+  }
+})
+
+test('native API reassembles chunked Apps descriptors before installing RoachSpeech packs', async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'roachnet-native-api-roachspeech-chunked-test-'))
+  const packID = 'test-roachvoice-chunked-pack'
+  const archivePath = await createTestRoachSpeechPackZip(tempRoot, packID)
+  const storagePath = path.join(tempRoot, 'storage')
+  const runtimeStateRoot = path.join(tempRoot, 'state')
+  const port = await resolveAvailablePort()
+  const downloadPort = await resolveAvailablePort()
+  const publicRoot = path.join(tempRoot, 'public')
+  const partsRoot = path.join(publicRoot, 'parts')
+  mkdirSync(partsRoot, { recursive: true })
+  const parts = splitFileIntoParts(
+    archivePath,
+    partsRoot,
+    `http://127.0.0.1:${downloadPort}/parts`,
+    512
+  )
+  const descriptorPath = path.join(publicRoot, 'downloads', 'model-packs', 'test-roachvoice-chunked-pack.json')
+  mkdirSync(path.dirname(descriptorPath), { recursive: true })
+  writeFileSync(
+    descriptorPath,
+    JSON.stringify({
+      schema: 'org.roachnet.apps.download-descriptor.v1',
+      id: packID,
+      filename: 'test-roachvoice-chunked-pack.zip',
+      bytes: readFileSync(archivePath).byteLength,
+      sha256: sha256FileSync(archivePath),
+      parts,
+      sources: [
+        {
+          type: 'internet-archive-parts',
+          status: 'published-after-upload',
+          partCount: parts.length,
+        },
+      ],
+    })
+  )
+  const staticServer = await startStaticDirectoryServer(downloadPort, publicRoot)
+  const env = {
+    ...process.env,
+    ROACHNET_STORAGE_PATH: storagePath,
+    ROACHNET_RUNTIME_STATE_ROOT: runtimeStateRoot,
+    HOST: '127.0.0.1',
+    PORT: String(port),
+  }
+  const child = spawn(process.execPath, [path.join(repoRoot, 'scripts', 'run-roachnet-native-api.mjs')], {
+    cwd: repoRoot,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForHealth(`http://127.0.0.1:${port}/api/health`, child)
+    const queued = await requestJson(`http://127.0.0.1:${port}/api/roachspeech/model-packs/download`, {
+      method: 'POST',
+      body: {
+        url: `http://127.0.0.1:${downloadPort}/downloads/model-packs/test-roachvoice-chunked-pack.json`,
+        packID,
+        kind: 'roachVoice',
+      },
+    })
+    assert.equal(queued.success, true)
+    assert.equal(queued.packID, packID)
+
+    let jobs = []
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      jobs = await requestJson(`http://127.0.0.1:${port}/api/downloads/jobs`)
+      if (jobs[0]?.status === 'completed' || jobs[0]?.status === 'failed') {
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+    assert.equal(jobs[0]?.status, 'completed')
+    assert.equal(jobs[0]?.installStatus, 'installed')
+    assert.equal(jobs[0]?.sha256, sha256FileSync(archivePath))
+    assert.equal(existsSync(path.join(storagePath, 'RoachSpeech', 'ModelPacks', packID, 'RoachSpeechPack.json')), true)
+  } finally {
+    await stopNativeApi(child, env)
+    await rm(tempRoot, { recursive: true, force: true })
+    await new Promise((resolve) => staticServer.close(resolve))
   }
 })
 

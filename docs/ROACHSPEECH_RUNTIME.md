@@ -64,16 +64,25 @@ The public v1.0.5 desktop build uses the `baseline` RoachSpeech bundle profile. 
 
 The app searches that storage shelf plus bundled resources, so installing `roachvoice-chatterbox-coreml` restores the full cloning-capable RoachVoice lane without regressing the baseline app.
 
-Builds also produce release assets for every first-party pack:
+Builds also produce first-party pack archives. Public installs discover them through Apps.RoachNet.org same-origin descriptors, then fetch the binaries from public source rails listed in those descriptors. GitHub stays focused on code and installer artifacts, Netlify stays focused on the storefront, and no user machine becomes production storage:
 
 ```text
-native/macos/dist/RoachSpeechPacks/
-  roachvoice-chatterbox-coreml.zip
-  roachvoice-kokoro-82m-int8-coreml.zip
-  roachwhisper-openai-whisper-base-en-coreml.zip
+https://apps.roachnet.org/downloads/model-packs/roachvoice-chatterbox-coreml.json
+https://apps.roachnet.org/downloads/model-packs/roachvoice-kokoro-82m-int8-coreml.json
+https://apps.roachnet.org/downloads/model-packs/roachwhisper-openai-whisper-base-en-coreml.json
 ```
 
-The RoachNet App Store points at those archives through `roachspeech-pack` install intents. Downloads are staged through `.downloads`, unpacked with the macOS native archive tool, validated against `RoachSpeechPack.json`, and atomically swapped into the active model shelf. A bad archive does not erase a working pack.
+The RoachNet App Store points at those descriptors through `roachspeech-pack` install intents. Downloads are resolved from descriptor sources, staged through `.downloads`, unpacked with the macOS native archive tool, validated against `RoachSpeechPack.json`, and atomically swapped into the active model shelf. A bad archive does not erase a working pack.
+
+First-party Apps descriptors are chunk-aware for Internet Archive. Each archive part is published as a `ROACHNET-IA-CHUNK-v1` envelope instead of a raw ZIP slice, because IA rejects the first raw slice as a corrupt archive. The default payload part is `8 MiB`, large enough to avoid thousands of brittle PUT requests and small enough to retry without restarting the whole archive. The native API strips the envelope, verifies the part SHA-256, reassembles the payload into the original ZIP, verifies the full archive SHA-256, then installs it. The v1.0.5 public model lane publishes `229` wrapped parts across the three first-party RoachSpeech archives and all parts passed redirect-aware `HEAD` verification with exact encoded byte lengths against:
+
+```text
+https://archive.org/download/roachnet-apps-catalog-v1_0_5/
+```
+
+Chunk descriptors default to `upload-required` until the complete part set is mirrored. The native app only uses `internet-archive-parts` sources when the descriptor marks that lane live, so a half-published model pack fails closed instead of failing halfway through a user install.
+
+The same descriptor resolver is used for Apps map and ZIM downloads. Apps.RoachNet.org keeps descriptor JSON for the whole static catalog; Internet Archive is the managed mirror target, and original public sources remain active fallbacks until a mirror is populated.
 
 ## RoachWhisper STT Target
 

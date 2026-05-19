@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-05-17",
+  "checkedAt": "2026-05-19",
   "node": {
     "channel": "26",
     "bundledVersion": "v26.1.0",
@@ -13,9 +13,9 @@
   },
   "openclaw": {
     "mode": "deferred",
-    "bundledPackage": "openclaw@2026.5.12",
-    "latestVersion": "2026.5.12",
-    "latestBeta": "2026.5.16-beta.3",
+    "bundledPackage": "openclaw@2026.5.18",
+    "latestVersion": "2026.5.18",
+    "latestBeta": "2026.5.19-beta.1",
     "source": "npm:view openclaw version"
   },
   "roachClawAgent": {

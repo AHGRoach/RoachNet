@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync, rmSync, statSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { appendFile } from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
@@ -34,6 +34,9 @@ const githubReleasesApiUrl =
 const githubReleasesUrl =
   process.env.ROACHNET_RELEASES_URL?.trim() ||
   'https://github.com/RoachWares/RoachNet/releases'
+const appsDownloadsBaseUrl =
+  process.env.ROACHNET_APPS_DOWNLOADS_BASE_URL?.trim() ||
+  'https://apps.roachnet.org/downloads'
 const NATIVE_API_MAX_REQUEST_BODY_BYTES = positiveIntegerEnv('ROACHNET_NATIVE_API_MAX_BODY_BYTES', 1024 * 1024)
 const NATIVE_API_DOWNLOAD_TIMEOUT_MS = positiveIntegerEnv('ROACHNET_NATIVE_API_DOWNLOAD_TIMEOUT_MS', 10 * 60 * 1000)
 const NATIVE_API_MAX_DOWNLOAD_BYTES = positiveIntegerEnv('ROACHNET_NATIVE_API_MAX_DOWNLOAD_BYTES', 512 * 1024 ** 3)
@@ -267,6 +270,109 @@ function parseDownloadUrl(rawUrl) {
     return parsed.toString()
   } catch {
     return null
+  }
+}
+
+function isAppsDownloadDescriptorUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim())
+    return ['http:', 'https:'].includes(parsed.protocol) && parsed.pathname.endsWith('.json')
+  } catch {
+    return false
+  }
+}
+
+function pickDescriptorSource(descriptor) {
+  const sources = Array.isArray(descriptor?.sources) ? descriptor.sources : []
+  for (const source of sources) {
+    const status = String(source?.status || '')
+    if (source?.type === 'internet-archive-parts' || /(pending|required|blocked|failed)/i.test(status)) {
+      continue
+    }
+    const candidate = parseDownloadUrl(source?.url)
+    if (candidate) {
+      return candidate
+    }
+  }
+  return parseDownloadUrl(descriptor?.url || descriptor?.downloadUrl || descriptor?.archiveUrl)
+}
+
+function descriptorPartsAreUsable(descriptor) {
+  const sources = Array.isArray(descriptor?.sources) ? descriptor.sources : []
+  return sources.some((source) => {
+    if (source?.type !== 'internet-archive-parts') return false
+    const status = String(source?.status || '')
+    return status && !/(pending|required|blocked|failed)/i.test(status)
+  })
+}
+
+function descriptorParts(descriptor) {
+  if (!descriptorPartsAreUsable(descriptor)) {
+    return []
+  }
+  const parts = Array.isArray(descriptor?.parts) ? descriptor.parts : []
+  const normalized = []
+  for (const part of parts) {
+    const url = parseDownloadUrl(part?.url)
+    const bytes = Number(part?.bytes)
+    const offset = Number(part?.offset)
+    const sha256 = String(part?.sha256 || '').trim().toLowerCase()
+    if (!url || !Number.isSafeInteger(bytes) || bytes <= 0) {
+      return []
+    }
+    normalized.push({
+      index: Number.isSafeInteger(Number(part?.index)) ? Number(part.index) : normalized.length,
+      url,
+      bytes,
+      encodedBytes: Number.isSafeInteger(Number(part?.encodedBytes)) ? Number(part.encodedBytes) : null,
+      offset: Number.isSafeInteger(offset) && offset >= 0 ? offset : null,
+      sha256: /^[a-f0-9]{64}$/.test(sha256) ? sha256 : null,
+      encoding: part?.encoding || null,
+      header: typeof part?.header === 'string' ? part.header : null,
+    })
+  }
+  return normalized.sort((a, b) => a.index - b.index)
+}
+
+async function resolveDownloadDescriptor(rawUrl) {
+  const descriptorUrl = parseDownloadUrl(rawUrl)
+  if (!descriptorUrl || !isAppsDownloadDescriptorUrl(descriptorUrl)) {
+    return { url: descriptorUrl, descriptorUrl: null, sha256: null, parts: [] }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000)
+  try {
+    const response = await fetch(descriptorUrl, {
+      signal: controller.signal,
+      headers: {
+        accept: 'application/json',
+        'user-agent': `RoachNet/${packageJson.version} descriptor-resolver`,
+      },
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} while resolving ${descriptorUrl}`)
+    }
+    const descriptor = await response.json()
+    const resolvedUrl = pickDescriptorSource(descriptor)
+    if (!resolvedUrl) {
+      const parts = descriptorParts(descriptor)
+      if (parts.length === 0) {
+        throw new Error(`Download descriptor has no usable HTTP source: ${descriptorUrl}`)
+      }
+    }
+    const sha256 = String(descriptor.sha256 || '').trim().toLowerCase()
+    const parts = descriptorParts(descriptor)
+    return {
+      url: parts.length > 0 ? descriptorUrl : resolvedUrl,
+      descriptorUrl,
+      sha256: /^[a-f0-9]{64}$/.test(sha256) ? sha256 : null,
+      filename: descriptor.filename || null,
+      bytes: Number.isSafeInteger(Number(descriptor.bytes)) ? Number(descriptor.bytes) : null,
+      parts,
+    }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -793,6 +899,7 @@ function mapCollections() {
       size_mb: resource.size_mb ?? null,
       description: resource.description ?? null,
       url: resource.url ?? null,
+      descriptorUrl: resource.url ? descriptorUrlForSource(resource.url, 'maps/pmtiles') : null,
     }))
     const installedCount = resources.filter((resource) => {
       const filename = resource.url ? fileNameForUrl(resource.url, `${resource.id}.pmtiles`) : `${resource.id}.pmtiles`
@@ -833,6 +940,7 @@ function educationCategories() {
         size_mb: resource.size_mb ?? null,
         description: resource.description ?? null,
         url: resource.url ?? null,
+        descriptorUrl: resource.url ? descriptorUrlForSource(resource.url, 'content/zim') : null,
       })),
     })),
   }))
@@ -873,6 +981,7 @@ function wikipediaState() {
       description: option.description ?? null,
       size_mb: option.size_mb ?? null,
       url: option.url ?? null,
+      descriptorUrl: option.url ? descriptorUrlForSource(option.url, 'content/wikipedia') : null,
     })),
     currentSelection,
   }
@@ -911,11 +1020,23 @@ function fileNameForUrl(rawUrl, fallback) {
   }
 }
 
+function descriptorUrlForSource(rawUrl, prefix) {
+  try {
+    const parsed = new URL(rawUrl)
+    const basename = path.basename(parsed.pathname)
+    if (!basename) return rawUrl
+    const descriptorName = basename.replace(/\.[^/.]+$/i, '.json')
+    return `${appsDownloadsBaseUrl.replace(/\/+$/, '')}/${prefix}/${descriptorName}`
+  } catch {
+    return rawUrl
+  }
+}
+
 function queueDownload(rawUrl, destinationDirectory, filetype, options = {}) {
   const url = parseDownloadUrl(rawUrl)
   if (!url) return null
   mkdirSync(destinationDirectory, { recursive: true })
-  const filename = fileNameForUrl(url, `${randomUUID()}.${filetype || 'download'}`)
+  const filename = safeFileName(options.filename || fileNameForUrl(url, `${randomUUID()}.${filetype || 'download'}`), `${randomUUID()}.${filetype || 'download'}`)
   const filepath = path.join(destinationDirectory, filename)
   const activeJob = downloadJobs.find((job) =>
     job.url === url &&
@@ -936,6 +1057,9 @@ function queueDownload(rawUrl, destinationDirectory, filetype, options = {}) {
     filetype,
     status: 'queued',
     failedReason: null,
+    descriptorUrl: options.descriptorUrl || null,
+    expectedSha256: options.expectedSha256 || null,
+    parts: Array.isArray(options.parts) ? options.parts : [],
     totalBytes: null,
     bytesReceived: 0,
     createdAt: new Date().toISOString(),
@@ -953,6 +1077,18 @@ function queueDownload(rawUrl, destinationDirectory, filetype, options = {}) {
     log(`download failed ${job.jobId}: ${error.message}`)
   })
   return job
+}
+
+async function queueResolvedDownload(rawUrl, destinationDirectory, filetype, options = {}) {
+  const resolvedDownload = await resolveDownloadDescriptor(rawUrl)
+  if (!resolvedDownload.url) return null
+  return queueDownload(resolvedDownload.url, destinationDirectory, filetype, {
+    ...options,
+    descriptorUrl: resolvedDownload.descriptorUrl,
+    expectedSha256: resolvedDownload.sha256,
+    filename: resolvedDownload.filename,
+    parts: resolvedDownload.parts,
+  })
 }
 
 function mirrorDownloadJobToUpdateStatus(job, release) {
@@ -1008,6 +1144,16 @@ function upsertRoachSpeechPackRegistry(entry) {
     ...(Array.isArray(registry) ? registry.filter((item) => item.packID !== entry.packID) : []),
   ].slice(0, 50)
   writeRoachSpeechPackRegistry(nextRegistry)
+}
+
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = createReadStream(filePath)
+    stream.on('error', reject)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+  })
 }
 
 function runQuiet(command, args, options = {}) {
@@ -1171,6 +1317,78 @@ async function requestUpdateDownload(force = false) {
   }
 }
 
+async function writeDownloadChunk(file, chunk) {
+  if (!file.write(Buffer.from(chunk))) {
+    await once(file, 'drain')
+  }
+}
+
+function decodeChunkPayload(part, body) {
+  if (part.encoding !== 'roachnet-ia-chunk-v1') {
+    return body
+  }
+
+  const header = Buffer.from(part.header || '', 'utf8')
+  if (header.length === 0 || body.length < header.length || !body.subarray(0, header.length).equals(header)) {
+    throw new Error(`Chunk ${part.index + 1} did not contain the expected RoachNet IA envelope.`)
+  }
+  return body.subarray(header.length)
+}
+
+async function downloadChunkedFile(job, file, controller) {
+  const total = job.parts.reduce((sum, part) => sum + Number(part.bytes || 0), 0)
+  job.totalBytes = total > 0 ? total : null
+  if (total > NATIVE_API_MAX_DOWNLOAD_BYTES) {
+    throw new Error(`Download is larger than the configured ${NATIVE_API_MAX_DOWNLOAD_BYTES} byte limit.`)
+  }
+
+  let received = 0
+  for (const part of job.parts) {
+    const expectedTransferBytes = part.encodedBytes || part.bytes
+    const response = await fetch(part.url, {
+      signal: controller.signal,
+      headers: { 'user-agent': `RoachNet/${packageJson.version} native-downloader chunked` },
+    })
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status} while downloading ${part.url}`)
+    }
+
+    const partContentLength = Number(response.headers.get('content-length') || 0)
+    if (partContentLength > 0 && partContentLength !== expectedTransferBytes) {
+      throw new Error(`Chunk ${part.index + 1} reported ${partContentLength} bytes, expected ${expectedTransferBytes}.`)
+    }
+
+    const body = Buffer.from(await response.arrayBuffer())
+    if (body.length !== expectedTransferBytes) {
+      throw new Error(`Chunk ${part.index + 1} ended early after ${body.length} of ${expectedTransferBytes} bytes.`)
+    }
+
+    const payload = decodeChunkPayload(part, body)
+    if (payload.length !== part.bytes) {
+      throw new Error(`Chunk ${part.index + 1} decoded to ${payload.length} bytes, expected ${part.bytes}.`)
+    }
+
+    const actualPartSha256 = createHash('sha256').update(payload).digest('hex')
+    if (part.sha256 && actualPartSha256 !== part.sha256) {
+      throw new Error(`Chunk checksum mismatch for ${part.url}. Expected ${part.sha256}, found ${actualPartSha256}.`)
+    }
+    received += payload.length
+    job.bytesReceived = received
+    job.updatedAt = new Date().toISOString()
+    if (received > NATIVE_API_MAX_DOWNLOAD_BYTES) {
+      throw new Error(`Download exceeded the configured ${NATIVE_API_MAX_DOWNLOAD_BYTES} byte limit.`)
+    }
+    if (job.totalBytes) {
+      job.progress = Math.max(1, Math.min(99, Math.round((received / job.totalBytes) * 100)))
+    }
+    await writeDownloadChunk(file, payload)
+  }
+
+  if (job.totalBytes && received !== job.totalBytes) {
+    throw new Error(`Chunked download ended early after ${received} of ${job.totalBytes} bytes.`)
+  }
+}
+
 async function downloadFile(job) {
   job.status = 'downloading'
   const controller = new AbortController()
@@ -1181,46 +1399,56 @@ async function downloadFile(job) {
   try {
     rmSync(job.partialFilepath, { force: true })
     job.updatedAt = new Date().toISOString()
-    const response = await fetch(job.url, {
-      signal: controller.signal,
-      headers: { 'user-agent': `RoachNet/${packageJson.version} native-downloader` },
-    })
-    if (!response.ok || !response.body) {
-      throw new Error(`HTTP ${response.status} while downloading ${job.url}`)
-    }
-
-    const total = Number(response.headers.get('content-length') || 0)
-    job.totalBytes = total > 0 ? total : null
-    if (total > NATIVE_API_MAX_DOWNLOAD_BYTES) {
-      throw new Error(`Download is larger than the configured ${NATIVE_API_MAX_DOWNLOAD_BYTES} byte limit.`)
-    }
-
     file = createWriteStream(job.partialFilepath)
-    const reader = response.body.getReader()
-    let received = 0
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      received += value.byteLength
-      job.bytesReceived = received
-      job.updatedAt = new Date().toISOString()
-      if (received > NATIVE_API_MAX_DOWNLOAD_BYTES) {
-        throw new Error(`Download exceeded the configured ${NATIVE_API_MAX_DOWNLOAD_BYTES} byte limit.`)
+    if (Array.isArray(job.parts) && job.parts.length > 0) {
+      await downloadChunkedFile(job, file, controller)
+    } else {
+      const response = await fetch(job.url, {
+        signal: controller.signal,
+        headers: { 'user-agent': `RoachNet/${packageJson.version} native-downloader` },
+      })
+      if (!response.ok || !response.body) {
+        throw new Error(`HTTP ${response.status} while downloading ${job.url}`)
       }
-      if (total > 0) {
-        job.progress = Math.max(1, Math.min(99, Math.round((received / total) * 100)))
+
+      const total = Number(response.headers.get('content-length') || 0)
+      job.totalBytes = total > 0 ? total : null
+      if (total > NATIVE_API_MAX_DOWNLOAD_BYTES) {
+        throw new Error(`Download is larger than the configured ${NATIVE_API_MAX_DOWNLOAD_BYTES} byte limit.`)
       }
-      if (!file.write(Buffer.from(value))) {
-        await once(file, 'drain')
+
+      const reader = response.body.getReader()
+      let received = 0
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received += value.byteLength
+        job.bytesReceived = received
+        job.updatedAt = new Date().toISOString()
+        if (received > NATIVE_API_MAX_DOWNLOAD_BYTES) {
+          throw new Error(`Download exceeded the configured ${NATIVE_API_MAX_DOWNLOAD_BYTES} byte limit.`)
+        }
+        if (total > 0) {
+          job.progress = Math.max(1, Math.min(99, Math.round((received / total) * 100)))
+        }
+        await writeDownloadChunk(file, value)
       }
-    }
-    if (total > 0 && received !== total) {
-      throw new Error(`Download ended early after ${received} of ${total} bytes.`)
+      if (total > 0 && received !== total) {
+        throw new Error(`Download ended early after ${received} of ${total} bytes.`)
+      }
     }
     file.end()
     await once(file, 'finish')
     renameSync(job.partialFilepath, job.filepath)
+    if (job.expectedSha256) {
+      const actualSha256 = await sha256File(job.filepath)
+      if (actualSha256 !== job.expectedSha256) {
+        throw new Error(`Checksum mismatch for ${job.url}. Expected ${job.expectedSha256}, found ${actualSha256}.`)
+      }
+      job.sha256 = actualSha256
+    }
     if (typeof job.afterDownload === 'function') {
       job.status = 'installing'
       job.installStatus = 'installing'
@@ -1267,6 +1495,153 @@ function resourcesForEducationResource(categorySlug, resourceId) {
   return (category?.tiers || [])
     .flatMap((tier) => tier.resources || [])
     .filter((resource) => resource.id === resourceId)
+}
+
+async function queueRoachSpeechPackDownload(body) {
+  const packID = safeFileName(body.packID || body.pack || 'roachspeech-pack', 'roachspeech-pack')
+  const kind = safeFileName(body.kind || 'roachVoice', 'roachVoice')
+  const destination = path.join(storageRoot, 'RoachSpeech', 'ModelPacks', '.downloads', kind, packID)
+  const job = await queueResolvedDownload(body.url, destination, 'roachspeech-pack', {
+    afterDownload: (downloadJob) => installRoachSpeechPackArchive(downloadJob, packID, kind),
+  })
+  upsertRoachSpeechPackRegistry({
+    packID,
+    kind,
+    url: job?.url || body.url,
+    descriptorUrl: job?.descriptorUrl || null,
+    expectedSha256: job?.expectedSha256 || null,
+    status: job ? 'queued' : 'idle',
+    filepath: job?.filepath || null,
+    installPath: job?.installPath || null,
+  })
+  return { job, packID, kind }
+}
+
+function appStoreInstallResponse(action, jobs, message, extra = {}) {
+  const normalizedJobs = Array.isArray(jobs) ? jobs.filter(Boolean) : [jobs].filter(Boolean)
+  return {
+    success: normalizedJobs.length > 0 || extra.success === true,
+    ok: normalizedJobs.length > 0 || extra.success === true,
+    action,
+    message,
+    jobId: normalizedJobs[0]?.jobId || null,
+    jobIds: normalizedJobs.map((job) => job.jobId),
+    queued: normalizedJobs.length,
+    ...extra,
+  }
+}
+
+async function handleCompanionInstall(body) {
+  const action = String(body.action || body.type || '').trim()
+  if (!action) {
+    throw new NativeApiRequestError('App Store install action is missing.', 400)
+  }
+
+  switch (action) {
+  case 'base-map-assets':
+    mkdirSync(path.join(storageRoot, 'maps', 'pmtiles'), { recursive: true })
+    mkdirSync(path.join(storageRoot, 'maps', 'basemaps-assets'), { recursive: true })
+    return appStoreInstallResponse(action, [], 'Base atlas folders are ready.', { success: true })
+
+  case 'map-collection': {
+    const slug = String(body.slug || '').trim()
+    if (!slug) throw new NativeApiRequestError('Map collection slug is missing.', 400)
+    const jobs = (await Promise.all(resourcesForMapCollection(slug).map((resource) =>
+      queueResolvedDownload(resource.descriptorUrl || resource.url, path.join(storageRoot, 'maps', 'pmtiles'), 'pmtiles')
+    ))).filter(Boolean)
+    return appStoreInstallResponse(action, jobs, `${jobs.length} map download${jobs.length === 1 ? '' : 's'} queued.`, { slug })
+  }
+
+  case 'education-tier': {
+    const categorySlug = String(body.categorySlug || body.category || '').trim()
+    const tierSlug = String(body.tierSlug || body.tier || '').trim()
+    if (!categorySlug || !tierSlug) {
+      throw new NativeApiRequestError('Education tier install needs category and tier.', 400)
+    }
+    const jobs = (await Promise.all(resourcesForEducationTier(categorySlug, tierSlug).map((resource) =>
+      queueResolvedDownload(resource.descriptorUrl || resource.url, path.join(storageRoot, 'zim'), 'zim')
+    ))).filter(Boolean)
+    return appStoreInstallResponse(action, jobs, `${jobs.length} knowledge download${jobs.length === 1 ? '' : 's'} queued.`, {
+      categorySlug,
+      tierSlug,
+    })
+  }
+
+  case 'education-resource': {
+    const categorySlug = String(body.categorySlug || body.category || '').trim()
+    const resourceId = String(body.resourceId || body.resource || '').trim()
+    if (!categorySlug || !resourceId) {
+      throw new NativeApiRequestError('Education resource install needs category and resource.', 400)
+    }
+    const jobs = (await Promise.all(resourcesForEducationResource(categorySlug, resourceId).map((resource) =>
+      queueResolvedDownload(resource.descriptorUrl || resource.url, path.join(storageRoot, 'zim'), 'zim')
+    ))).filter(Boolean)
+    return appStoreInstallResponse(action, jobs, `${jobs.length} knowledge download${jobs.length === 1 ? '' : 's'} queued.`, {
+      categorySlug,
+      resourceId,
+    })
+  }
+
+  case 'direct-download': {
+    const rawUrl = body.url || body.mirrorUrl || body.sourceUrl
+    const filetype = String(body.filetype || body.resourceType || '').toLowerCase()
+    if (!rawUrl) throw new NativeApiRequestError('Direct App Store download URL is missing.', 400)
+    if (['map', 'pmtiles'].includes(filetype)) {
+      const job = await queueResolvedDownload(rawUrl, path.join(storageRoot, 'maps', 'pmtiles'), 'pmtiles')
+      return appStoreInstallResponse(action, job, job ? 'Map download queued.' : 'No map URL provided.', { filetype })
+    }
+    if (['zim', 'knowledge', 'education'].includes(filetype)) {
+      const job = await queueResolvedDownload(rawUrl, path.join(storageRoot, 'zim'), 'zim')
+      return appStoreInstallResponse(action, job, job ? 'Knowledge pack queued.' : 'No ZIM URL provided.', { filetype })
+    }
+    throw new NativeApiRequestError(`Unsupported direct App Store download type: ${filetype || 'unknown'}.`, 400)
+  }
+
+  case 'wikipedia-option': {
+    const optionId = String(body.optionId || body.option || '').trim()
+    const option = wikipediaOptions().find((item) => item.id === optionId)
+    mkdirSync(path.join(storageRoot, 'zim'), { recursive: true })
+    if (!option || option.id === 'none' || !option.url) {
+      writeFileSync(wikipediaSelectionPath(), JSON.stringify({ optionId: optionId || 'none', status: 'skipped', filename: null, url: null }, null, 2))
+      return appStoreInstallResponse(action, [], 'Wikipedia install skipped.', { success: true, optionId: optionId || 'none' })
+    }
+    const descriptorUrl = option.url ? descriptorUrlForSource(option.url, 'content/wikipedia') : null
+    const job = await queueResolvedDownload(descriptorUrl || option.url, path.join(storageRoot, 'zim'), 'zim')
+    const selection = {
+      optionId: option.id,
+      status: job ? 'queued' : 'idle',
+      filename: option.url ? fileNameForUrl(option.url, `${option.id}.zim`) : null,
+      url: option.url,
+      descriptorUrl,
+    }
+    writeFileSync(wikipediaSelectionPath(), JSON.stringify(selection, null, 2))
+    return appStoreInstallResponse(action, job, `${option.name} queued.`, { optionId: option.id })
+  }
+
+  case 'roachclaw-model': {
+    const model = String(body.model || '').trim()
+    if (!model) throw new NativeApiRequestError('RoachClaw model name is missing.', 400)
+    await pullModel(model)
+    return appStoreInstallResponse(action, [], `${model} model pull queued.`, { success: true, model })
+  }
+
+  case 'roachspeech-pack':
+  case 'roachvoice-pack': {
+    if (!body.url) throw new NativeApiRequestError('RoachSpeech pack URL is missing.', 400)
+    const { job, packID, kind } = await queueRoachSpeechPackDownload(body)
+    return appStoreInstallResponse(
+      action,
+      job,
+      job
+        ? `${packID} RoachSpeech pack queued. It will unpack into the local model shelf when the download finishes.`
+        : 'No RoachSpeech pack URL provided.',
+      { packID, kind }
+    )
+  }
+
+  default:
+    throw new NativeApiRequestError(`Unsupported App Store install action: ${action}.`, 400)
+  }
 }
 
 async function handleChat(body) {
@@ -1370,35 +1745,35 @@ async function route(request, response) {
   }
   if (method === 'POST' && pathname === '/api/maps/download-collection') {
     const body = await readRequestJson(request)
-    const jobs = resourcesForMapCollection(body.slug).map((resource) =>
-      queueDownload(resource.url, path.join(storageRoot, 'maps', 'pmtiles'), 'pmtiles')
-    ).filter(Boolean)
+    const jobs = (await Promise.all(resourcesForMapCollection(body.slug).map((resource) =>
+      queueResolvedDownload(resource.descriptorUrl || resource.url, path.join(storageRoot, 'maps', 'pmtiles'), 'pmtiles')
+    ))).filter(Boolean)
     return sendJson(response, 200, { success: true, ok: true, message: `${jobs.length} map download${jobs.length === 1 ? '' : 's'} queued.` })
   }
   if (method === 'POST' && pathname === '/api/maps/download-remote') {
     const body = await readRequestJson(request)
-    const job = queueDownload(body.url, path.join(storageRoot, 'maps', 'pmtiles'), 'pmtiles')
+    const job = await queueResolvedDownload(body.url, path.join(storageRoot, 'maps', 'pmtiles'), 'pmtiles')
     return sendJson(response, 200, { success: Boolean(job), ok: Boolean(job), message: job ? 'Remote map download queued.' : 'No map URL provided.' })
   }
   if (method === 'GET' && pathname === '/api/zim/curated-categories') return sendJson(response, 200, educationCategories())
   if (method === 'GET' && pathname === '/api/zim/wikipedia') return sendJson(response, 200, wikipediaState())
   if (method === 'POST' && pathname === '/api/zim/download-category-tier') {
     const body = await readRequestJson(request)
-    const jobs = resourcesForEducationTier(body.categorySlug, body.tierSlug).map((resource) =>
-      queueDownload(resource.url, path.join(storageRoot, 'zim'), 'zim')
-    ).filter(Boolean)
+    const jobs = (await Promise.all(resourcesForEducationTier(body.categorySlug, body.tierSlug).map((resource) =>
+      queueResolvedDownload(resource.descriptorUrl || resource.url, path.join(storageRoot, 'zim'), 'zim')
+    ))).filter(Boolean)
     return sendJson(response, 200, { success: true, ok: true, message: `${jobs.length} knowledge download${jobs.length === 1 ? '' : 's'} queued.` })
   }
   if (method === 'POST' && pathname === '/api/zim/download-category-resource') {
     const body = await readRequestJson(request)
-    const jobs = resourcesForEducationResource(body.categorySlug, body.resourceId).map((resource) =>
-      queueDownload(resource.url, path.join(storageRoot, 'zim'), 'zim')
-    ).filter(Boolean)
+    const jobs = (await Promise.all(resourcesForEducationResource(body.categorySlug, body.resourceId).map((resource) =>
+      queueResolvedDownload(resource.descriptorUrl || resource.url, path.join(storageRoot, 'zim'), 'zim')
+    ))).filter(Boolean)
     return sendJson(response, 200, { success: true, ok: true, message: `${jobs.length} knowledge download${jobs.length === 1 ? '' : 's'} queued.` })
   }
   if (method === 'POST' && pathname === '/api/zim/download-remote') {
     const body = await readRequestJson(request)
-    const job = queueDownload(body.url, path.join(storageRoot, 'zim'), 'zim')
+    const job = await queueResolvedDownload(body.url, path.join(storageRoot, 'zim'), 'zim')
     return sendJson(response, 200, { success: Boolean(job), ok: Boolean(job), message: job ? 'Remote knowledge pack queued.' : 'No ZIM URL provided.' })
   }
   if (method === 'POST' && pathname === '/api/zim/wikipedia/select') {
@@ -1409,32 +1784,21 @@ async function route(request, response) {
       writeFileSync(wikipediaSelectionPath(), JSON.stringify({ optionId: body.optionId || 'none', status: 'skipped', filename: null, url: null }, null, 2))
       return sendJson(response, 200, { success: true, ok: true, message: 'Wikipedia install skipped.' })
     }
-    const job = queueDownload(option.url, path.join(storageRoot, 'zim'), 'zim')
+    const descriptorUrl = option.url ? descriptorUrlForSource(option.url, 'content/wikipedia') : null
+    const job = await queueResolvedDownload(descriptorUrl || option.url, path.join(storageRoot, 'zim'), 'zim')
     const selection = {
       optionId: option.id,
       status: job ? 'queued' : 'idle',
       filename: option.url ? fileNameForUrl(option.url, `${option.id}.zim`) : null,
       url: option.url,
+      descriptorUrl,
     }
     writeFileSync(wikipediaSelectionPath(), JSON.stringify(selection, null, 2))
     return sendJson(response, 200, { success: true, ok: true, message: `${option.name} queued.` })
   }
   if (method === 'POST' && pathname === '/api/roachspeech/model-packs/download') {
     const body = await readRequestJson(request)
-    const packID = safeFileName(body.packID || body.pack || 'roachspeech-pack', 'roachspeech-pack')
-    const kind = safeFileName(body.kind || 'roachVoice', 'roachVoice')
-    const destination = path.join(storageRoot, 'RoachSpeech', 'ModelPacks', '.downloads', kind, packID)
-    const job = queueDownload(body.url, destination, 'roachspeech-pack', {
-      afterDownload: (downloadJob) => installRoachSpeechPackArchive(downloadJob, packID, kind),
-    })
-    upsertRoachSpeechPackRegistry({
-      packID,
-      kind,
-      url: body.url,
-      status: job ? 'queued' : 'idle',
-      filepath: job?.filepath || null,
-      installPath: job?.installPath || null,
-    })
+    const { job, packID, kind } = await queueRoachSpeechPackDownload(body)
     return sendJson(response, 200, {
       success: Boolean(job),
       ok: Boolean(job),
@@ -1478,6 +1842,9 @@ async function route(request, response) {
   if (method === 'GET' && pathname === '/api/companion/account') return sendJson(response, 200, accountState())
   if (method === 'GET' && pathname === '/api/companion/roachtail') return sendJson(response, 200, roachTailState())
   if (method === 'GET' && pathname === '/api/companion/roachsync') return sendJson(response, 200, roachSyncState())
+  if (method === 'POST' && pathname === '/api/companion/install') {
+    return sendJson(response, 200, await handleCompanionInstall(await readRequestJson(request)))
+  }
   if (method === 'POST' && pathname.startsWith('/api/companion/')) return sendJson(response, 200, { success: true, ok: true, message: 'Native companion action recorded.' })
   if (method === 'DELETE' && pathname.startsWith('/api/downloads/jobs/')) {
     const jobId = decodeURIComponent(pathname.split('/').at(-1) || '')
