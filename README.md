@@ -1,6 +1,6 @@
 # RoachNet
 
-Offline spine for the stuff that matters.
+Offline on purpose.
 
 RoachNet keeps AI, archive, media, games, notes, and dev tools on hardware you own instead of leaving them scattered across rented dashboards and dead logins.
 
@@ -70,51 +70,7 @@ GitHub does not host the support widgets used on the public site, so the repo ke
 - `Linux`
   Runtime and packaging work still moving toward a native desktop lane.
 
-## Repo Layout
-
-- [`native/macos/`](./native/macos)
-  SwiftUI/AppKit shell, setup app, and desktop runtime bridge.
-- [`scripts/`](./scripts)
-  Setup, runtime, packaging, companion, and release automation.
-- [`admin/`](./admin)
-  Legacy WebUI reference code kept for parity review while the public lane moves native.
-- [`docs/`](./docs)
-  Architecture, brand voice, upstream notes, and rewrite planning.
-
-The public site and Apps storefront live in [`RoachWares/roachnet-org`](https://github.com/RoachWares/roachnet-org) so this repo can stay focused on the desktop product and runtime.
-
-## Local Development
-
-Start the dependency-free native API bridge:
-
-```bash
-npm start
-```
-
-No-browser boot:
-
-```bash
-npm run start:no-browser
-```
-
-Build the native macOS packages:
-
-```bash
-node scripts/build-native-macos-apps.mjs
-```
-
-Run the setup backend:
-
-```bash
-npm run setup:no-browser
-```
-
-## Public Source Boundary
-
 RoachNet is now a native local-first desktop product. The old imported base is no longer a public source lane.
-
-- [`docs/NATIVE_REWRITE_PLAN.md`](./docs/NATIVE_REWRITE_PLAN.md)
-- [`CHANGELOG.md`](./CHANGELOG.md)
 
 ## License
 
