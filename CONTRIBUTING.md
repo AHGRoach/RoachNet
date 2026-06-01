@@ -13,8 +13,8 @@ RoachNet is being built into an offline-first command center with local AI, maps
 Changes are especially valuable when they improve one of these areas:
 
 - Apple Silicon performance and efficiency
-- Local runtime management for Ollama and OpenClaw
-- Guided onboarding and settings UX
+- Local runtime management, especially for Ollama and OpenClaw
+- Guided onboarding, video guides, and settings UX
 - Offline content workflows
 - Stability and clear diagnostics
 
@@ -116,10 +116,9 @@ If the change touches performance, call out the target hardware and whether Appl
 
 Please avoid changes that:
 
-- reintroduce upstream branding
 - assume Docker is the only valid runtime path
 - add unnecessary network dependencies to offline workflows
-- weaken local privacy guarantees without a strong reason
+- weaken local privacy guarantees
 
 ## Community
 
