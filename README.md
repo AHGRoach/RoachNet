@@ -74,4 +74,4 @@ RoachNet is now a native local-first desktop product. The old imported base is n
 
 ## License
 
-This repository still carries the upstream Apache 2.0 license. Review [`LICENSE`](./LICENSE) and [`docs/UPSTREAM.md`](./docs/UPSTREAM.md) before changing attribution or licensing details.
+RoachNet is licensed under the [Apache License 2.0](LICENSE).
