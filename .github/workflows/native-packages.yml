@@ -110,7 +110,7 @@ jobs:
         run: shasum -a 256 native/macos/dist/RoachNet-Setup-macOS.dmg > native/macos/dist/RoachNet-Setup-macOS.dmg.sha256
 
       - name: Upload native artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: roachnet-macos-native
           path: |
