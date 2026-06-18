@@ -84,7 +84,7 @@
     "@openzim/libzim": "^4.0.0",
     "@protomaps/basemaps": "^5.7.0",
     "@qdrant/js-client-rest": "^1.16.2",
-    "@tabler/icons-react": "^3.34.0",
+    "@tabler/icons-react": "^3.44.0",
     "@tailwindcss/vite": "^4.1.10",
     "@tanstack/react-query": "^5.81.5",
     "@tanstack/react-virtual": "^3.13.12",
