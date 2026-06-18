@@ -81,7 +81,7 @@
     "@headlessui/react": "^2.2.4",
     "@inertiajs/react": "^2.3.13",
     "@markdoc/markdoc": "^0.5.2",
-    "@openzim/libzim": "^4.0.0",
+    "@openzim/libzim": "^4.1.0",
     "@protomaps/basemaps": "^5.7.0",
     "@qdrant/js-client-rest": "^1.16.2",
     "@tabler/icons-react": "^3.34.0",
